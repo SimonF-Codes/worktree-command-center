@@ -8,6 +8,7 @@ import { removeWorktreeAndBranch, terminalSystemPrompt, type WorktreeInfo } from
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { FitThrottle } from './fit-throttle';
 import { ctrlClickActivator, openExternalUrl } from './links';
+import { registerOsc52Clipboard } from './clipboard-osc';
 import { promptForConfirm } from '../ui/prompt-dialog';
 import { stripAnsi } from './usage-parse';
 import type { StageTile } from './stage-tile';
@@ -115,6 +116,10 @@ export class TerminalTile implements StageTile {
 		this.term.open(body);
 		// Ctrl/Cmd+click a URL (e.g. http://localhost:5173) to open it in the real browser.
 		this.term.loadAddon(new WebLinksAddon(ctrlClickActivator(openExternalUrl)));
+		// Honor OSC 52 clipboard writes from the Claude TUI (mouse-select copy). Without this,
+		// xterm silently drops the sequence and the "N characters copied" message lies — paste
+		// keeps the previous clipboard value. Routes through the same Electron clipboard.
+		registerOsc52Clipboard(this.term, (t) => this.writeClipboard(t));
 		// Ctrl/Cmd+C copies the selection if there is one (otherwise ^C falls through as an
 		// interrupt to Claude); Ctrl/Cmd+V pastes from the clipboard (xterm would otherwise
 		// send a literal ^V); Shift+Page/Arrow/Home/End scroll the scrollback. Everything else

@@ -8,6 +8,7 @@ import { godSystemPrompt, type GodRepo } from './god';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { FitThrottle } from './fit-throttle';
 import { ctrlClickActivator, openExternalUrl } from './links';
+import { registerOsc52Clipboard } from './clipboard-osc';
 import { promptForConfirm } from '../ui/prompt-dialog';
 
 export interface GodConsoleOpts {
@@ -93,6 +94,10 @@ export class GodConsole {
 		this.term.open(this.bodyEl);
 		// Ctrl/Cmd+click a URL to open it in the real browser.
 		this.term.loadAddon(new WebLinksAddon(ctrlClickActivator(openExternalUrl)));
+		// Honor OSC 52 clipboard writes from the Claude TUI (mouse-select copy). Without this,
+		// xterm silently drops the sequence and the "N characters copied" message lies — paste
+		// keeps the previous clipboard value. Routes through the same Electron clipboard.
+		registerOsc52Clipboard(this.term, (t) => this.writeClipboard(t));
 		// Clipboard + scrollback keys, mirroring TerminalTile: Ctrl/Cmd+V pastes (xterm would
 		// otherwise send a literal ^V to Claude); Shift+Page/Arrow/Home/End scroll. Everything
 		// else passes through to Claude untouched.
