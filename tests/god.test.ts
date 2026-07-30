@@ -93,6 +93,27 @@ describe('godSystemPrompt', () => {
     expect(p).toMatch(/user drives/i);
     expect(p).toMatch(/never start work|do not start work|only when asked|only on request/i);
   });
+  it('makes spawning an implementer the DEFAULT for code changes, not editing files himself', () => {
+    expect(p).toMatch(/DELEGATION/);
+    expect(p).toMatch(/default is\s*\n?\s*to put a worker terminal on it|put a worker terminal on it/i);
+    expect(p).toMatch(/instead of editing the files yourself/i);
+    // The escape hatches must survive: explicit user request, and trivial one-line edits.
+    expect(p).toMatch(/explicitly/i);
+    expect(p).toMatch(/trivial/i);
+  });
+  it('routes read-only investigation to subagents and pre-authorizes them', () => {
+    expect(p).toMatch(/subagents \(the Agent tool\)/);
+    expect(p).toMatch(/user having requested\s+them/i); // the prompt is hard-wrapped, so allow the break
+    expect(p).toMatch(/CHANGES code/);
+  });
+  it('keeps him accountable for delegated work and bars reporting unseen results', () => {
+    expect(p).toMatch(/Delegation is not abdication/i);
+    expect(p).toMatch(/NEVER report/);
+    expect(p).toMatch(/results you have not actually seen/i);
+  });
+  it('does not spawn just to answer a question', () => {
+    expect(p).toMatch(/Answering a question is not implementing/i);
+  });
   it('tells GOD where to read the floor', () => {
     expect(p).toContain('/coord/floor/INDEX.md');
     expect(p).toContain('/coord/board.md');

@@ -5,6 +5,22 @@ landed on `main`.
 
 ## Unreleased
 
+**The overseer now delegates code work instead of doing it himself**
+- New DELEGATION section in the overseer's system prompt. Asked to write, change or fix code, he
+  now defaults to putting a worker terminal on it via `cos-coord spawn` — one implementer per repo
+  the task touches, briefed well enough to work unsupervised, then watched — rather than editing the
+  files himself. He still implements inline when you explicitly ask, or for genuinely trivial
+  one-line changes where spawning costs more than the edit.
+- Read-only investigation is routed the other way: searching, reading, reviewing and summarizing
+  code go to his own subagents, and the prompt pre-authorizes them so he doesn't stop to ask.
+  Spawned terminals are reserved for work that actually changes code.
+- Answering a question is explicitly not implementing — asking him what something does no longer
+  risks a spawned terminal.
+- Guardrails kept: this changes *how* he executes, not *whether* he acts. He still never starts work
+  unprompted, and the prompt now states that delegation isn't abdication — he must say what he handed
+  to whom and must never report a spawned terminal's or subagent's work as finished, or describe
+  results he hasn't seen.
+
 **The dev build is now labelled, so you can tell it apart from the installed app**
 - Running from source (`npm start`) now shows a loud orange **DEV** badge beside the brand, and
   the window/taskbar title reads "Worktree Command Center — DEV". On Windows the dev build also
