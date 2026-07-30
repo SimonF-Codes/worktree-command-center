@@ -11,7 +11,8 @@ import { AttentionWidget } from './ui/attention-widget';
 import { WorkspaceBar } from './ui/workspace-bar';
 import { SettingsPanel } from './ui/settings-panel';
 import { ChangelogPanel } from './ui/changelog-panel';
-import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, type Workspace } from './terminals/workspace-store';
+import { normalizeWorkspaces, addWorkspace, closeWorkspace, renameWorkspace, nextActiveAfter, type Workspace } from './terminals/workspace-store';
+import { archiveDirFor } from './terminals/worktree-archive';
 import * as path from 'path';
 import * as fs from 'fs';
 import { registerPrivateFeatures } from 'wcc-private';
@@ -103,6 +104,7 @@ async function main(): Promise<void> {
 			notifyScriptPath: path.join(sidecarDir, 'notify-ready.cjs'),
 			coordHookPath: path.join(sidecarDir, 'coord-hook.cjs'),
 			sessionsFile: path.join(userData, '.terminal-sessions.json'),
+			archiveDir: archiveDirFor(userData),
 			bypassPermissions: true,
 			sessionEnv: () => sessionEnvProvider({ workspaceId: id }),
 			overseerName: typeof cfg.overseerName === 'string' ? cfg.overseerName : undefined,
@@ -153,6 +155,7 @@ async function main(): Promise<void> {
 			onSwitch: (id) => void switchTo(id),
 			onAdd: () => void onAdd(),
 			onClose: (id) => onClose(id),
+			onRename: (id) => void onRename(id),
 		});
 		bar.render(appEl);
 
@@ -179,6 +182,21 @@ async function main(): Promise<void> {
 			persist();
 			bar.refresh();
 			await switchTo(r.id);
+		}
+
+		// Rename a tab. Only the LABEL changes — the workspace id stays put, so the running
+		// terminals, the coordination dir and the persisted sessions all keep working (see
+		// renameWorkspace). No switch, no remount: just persist and redraw the bar.
+		async function onRename(id: string): Promise<void> {
+			const current = workspaces.find((w) => w.id === id);
+			if (!current) return;
+			const name = await promptForTopic('Rename tab', 'workspace name', current.name, 'Rename');
+			if (name === null) return;
+			const next = renameWorkspace(workspaces, id, name);
+			if (!next) return; // blank or unchanged
+			workspaces = next;
+			persist();
+			bar.refresh();
 		}
 
 		function onClose(id: string): void {

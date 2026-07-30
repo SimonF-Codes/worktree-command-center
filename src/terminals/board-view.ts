@@ -37,6 +37,7 @@ export class BoardView {
 		private onShow: (tileId: number) => void = () => {},
 		private onClose: (tileId: number) => void = () => {},
 		private onFocusTile: (tileId: number) => void = () => {},
+		private onArchive: (branch: string) => void = () => {},
 	) {}
 
 	mount(parent: HTMLElement): void {
@@ -170,6 +171,11 @@ export class BoardView {
 					const btn = row.createEl('button', { text: 'Reopen', cls: 'cos-reopen-btn' });
 					btn.addEventListener('click', (e) => { e.stopPropagation(); this.onReopen(branch); });
 				}
+				// Archive is offered on EVERY worktree, in any state — archiving parks dirty work and
+				// keeps the branch, so there's nothing a given state makes unsafe. The grid re-checks
+				// that no terminal owns it and confirms before anything is deleted.
+				const arch = row.createEl('button', { text: '🗄', cls: 'cos-archive-btn', attr: { title: `Archive ${branch} — zip its files + conversation, then delete the folder` } });
+				arch.addEventListener('click', (e) => { e.stopPropagation(); this.onArchive(branch); });
 			}
 		}
 

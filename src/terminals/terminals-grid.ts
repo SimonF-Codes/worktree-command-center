@@ -4,9 +4,15 @@ import * as fsSync from 'fs';
 import * as path from 'path';
 import { listBranches, createWorktree, writeReadyHook, ensureClaudeSettingsIgnored, defaultBranch, parkWorktree, reopenWorktree, type WorktreeInfo } from './worktree-manager';
 import { nextWorktreeBranch, parseWorktreeList, parseStatusPorcelain, parseAheadBehind, isParkCommitSubject, formatRegistryMarkdown, type WorktreeEntry } from './worktree-registry';
+import {
+	archiveWorktree, reviveArchive, listArchives, readArchiveSummary, deleteArchive,
+	normalizeSweepPolicy, shouldAutoArchive, latestActivity, humanBytes,
+	type ArchiveManifest, type SweepPolicy,
+} from './worktree-archive';
 import { runCommand } from '../command-runner';
 import { TerminalTile } from './terminal-tile';
 import { BoardView } from './board-view';
+import { ArchivePanel } from '../ui/archive-panel';
 import { promptForConfirm, promptForChoice } from '../ui/prompt-dialog';
 import { openExternalUrl, revealInFileManager } from './links';
 import { EDITORS, FILE_BROWSER, CUSTOM_EDITOR, resolveEditorCommand, type EditorDef } from './editor-launch';
@@ -39,6 +45,8 @@ export interface GridDeps {
 	notifyScriptPath: string;
 	coordHookPath: string;
 	sessionsFile: string;
+	/** Where stale worktrees are zipped to (app-wide, shared by every workspace). */
+	archiveDir: string;
 	group: string;
 	bypassPermissions: boolean;
 	sessionEnv?: () => Record<string, string>;
@@ -66,6 +74,13 @@ const SPAWN_EFFORTS: { label: string; value: string }[] = [
 
 // How long a manual tile choice (click / Alt+F-key / resurfacing) suppresses auto-centering.
 const MANUAL_HOLD_MS = 30_000;
+
+// Auto-sweep cadence. The worktree scan runs every 30s, but zipping is far too expensive to do on
+// that beat — the sweep piggybacks on the scan and then sits out until this much time has passed.
+const SWEEP_EVERY_MS = 30 * 60_000;
+// Archives per pass. A first run against a long-neglected floor could otherwise sit there zipping
+// dozens of worktrees; the leftovers are picked up by the next pass.
+const SWEEP_MAX_PER_PASS = 10;
 
 // --- Kane personality mode (toggled by his /personality command) ---
 const kanePersonaOn = (name: string): string =>
@@ -101,6 +116,15 @@ export class TerminalsGrid {
 	private pendingNewBranch: string | null = null;
 	private lastEntries: WorktreeEntry[] = [];
 	private claudeSettingsIgnoredFor = new Set<string>(); // repo paths already patched into .git/info/exclude
+	private archivePanel: ArchivePanel | null = null;
+	// Seeded to construction time, NOT 0, so the first sweep is SWEEP_EVERY_MS after the app opens.
+	// Launching the app should never immediately start deleting folders.
+	private lastSweepAt = Date.now();
+	private sweeping = false;            // a pass is in flight — zipping is slow, never overlap passes
+	// Gate on restoreSessions() having finished. The first scanWorktrees() is fired un-awaited during
+	// mount, BEFORE sessions are restored — at that moment every worktree looks unowned, so a sweep
+	// running then could archive a worktree whose terminal was about to be restored onto it.
+	private sessionsRestored = false;
 	private centeredId: number | null = null;
 	private maximized = false;
 	private locked = false;
@@ -248,6 +272,9 @@ export class TerminalsGrid {
 		const journalBtn = controls.createEl('button', { text: '📓 Journal Entry', cls: 'cos-journal-btn', attr: { title: 'Open a new journal entry tile' } });
 		journalBtn.addEventListener('click', () => this.spawnJournal());
 
+		const archiveBtn = controls.createEl('button', { text: '🗄 Archive', attr: { title: 'Browse archived worktrees + their conversations, and revive one' } });
+		archiveBtn.addEventListener('click', () => void this.toggleArchivePanel());
+
 		if (!this.board) this.board = new BoardView(
 			this.coordDir,
 			(branch) => void this.reopenAndOpen(branch),
@@ -255,6 +282,7 @@ export class TerminalsGrid {
 			(tileId) => this.showTile(tileId),
 			(tileId) => void this.closeHiddenTile(tileId),
 			(tileId) => (tileId === 0 ? this.focusGod() : this.revealTile(tileId)),
+			(branch) => void this.archiveByBranch(branch),
 		);
 		this.board.mount(parent);
 
@@ -323,6 +351,9 @@ export class TerminalsGrid {
 		// second one. The stage wrap is detached-but-retained (tiles + sidecars stay alive).
 		this.controlsEl?.remove();
 		this.controlsEl = null;
+		// The archive panel is parented to the container we're leaving — close it rather than let it
+		// dangle into the next workspace's view. Reopening it costs one readdir.
+		this.archivePanel?.close();
 		// GOD survives a tab switch (like the tiles): detach with the stage wrap, keep the session.
 		this.stageWrapEl?.remove();
 	}
@@ -1345,6 +1376,7 @@ export class TerminalsGrid {
 			else this.tiles.push(tile);
 		}
 		await this.persist(); // prune records whose worktree no longer exists
+		this.sessionsRestored = true; // ownership is now accurate — the archive sweep may run
 		this.applyLayout();
 	}
 
@@ -1404,15 +1436,19 @@ export class TerminalsGrid {
 				const tile = ([...this.tiles, ...this.hidden].filter((t) => !t.isJournal) as TerminalTile[]).find((t) => path.resolve(t.worktreePath) === path.resolve(wt.path));
 				const baseRef = tile ? tile.baseBranch : this.baseOf(wt.branch);
 				const ab = await runCommand('git', ['rev-list', '--left-right', '--count', `${baseRef}...HEAD`], { cwd: wt.path, timeoutMs: 8000 });
-				const subj = await runCommand('git', ['log', '-1', '--pretty=%s'], { cwd: wt.path, timeoutMs: 8000 });
+				// One log call carries both the park probe and the commit timestamp — the archive
+				// sweep needs a real age, and this keeps the per-worktree git call count unchanged.
+				const log = await runCommand('git', ['log', '-1', '--pretty=%ct%x09%s'], { cwd: wt.path, timeoutMs: 8000 });
+				const [ctRaw, ...subjParts] = (log.code === 0 ? log.stdout.trim() : '').split('\t');
+				const subject = subjParts.join('\t');
 				const counts = parseAheadBehind(ab.code === 0 ? ab.stdout : '');
 				entries.push({
 					repo: repo.name, branch: wt.branch, path: wt.path,
 					terminal: tile ? tile.name : null,
 					dirtyFiles: status.code === 0 ? parseStatusPorcelain(status.stdout) : [],
 					ahead: counts.ahead, behind: counts.behind,
-					parked: subj.code === 0 ? isParkCommitSubject(subj.stdout.trim()) : false,
-					lastActivity: now,
+					parked: log.code === 0 ? isParkCommitSubject(subject) : false,
+					lastActivity: await this.activityOf(wt.path, ctRaw, now),
 				});
 			}
 		}
@@ -1421,6 +1457,168 @@ export class TerminalsGrid {
 			await fs.mkdir(this.coordDir, { recursive: true });
 			await fs.writeFile(this.registryPath(), formatRegistryMarkdown(entries, now), 'utf8');
 		} catch { /* best effort */ }
+		await this.maybeSweep(now);
+	}
+
+	/** When a worktree was last touched: the newer of its last commit and its folder mtime.
+	 *  Falls back to `now` when neither can be read — an unknown age must read as FRESH so the
+	 *  sweep never archives something it couldn't date. */
+	private async activityOf(worktreePath: string, commitEpochSecs: string | undefined, now: number): Promise<number> {
+		const commitMs = Number(commitEpochSecs) > 0 ? Number(commitEpochSecs) * 1000 : 0;
+		let dirMs = 0;
+		try { dirMs = (await fs.stat(worktreePath)).mtimeMs; } catch { /* folder gone or unreadable */ }
+		return latestActivity([commitMs, dirMs], now) || now;
+	}
+
+	/** The live tile (visible OR hidden) attached to a worktree path, if any. Authoritative
+	 *  ownership check — unlike the scanned ledger, this can't be stale. */
+	private tileForWorktree(worktreePath: string): TerminalTile | undefined {
+		return ([...this.tiles, ...this.hidden].filter((t) => !t.isJournal) as TerminalTile[])
+			.find((t) => path.resolve(t.worktreePath) === path.resolve(worktreePath));
+	}
+
+	/** The archive sweep policy, as configured in Settings. */
+	private async sweepPolicy(): Promise<SweepPolicy> {
+		try { return normalizeSweepPolicy((await window.wcc.getConfig()).worktreeSweep); }
+		catch { return normalizeSweepPolicy(undefined); }
+	}
+
+	/** Auto-archive pass: zip + remove every unowned worktree that's aged past the policy.
+	 *  Piggybacks on the 30s scan but rate-limits itself to SWEEP_EVERY_MS, and never runs
+	 *  concurrently with itself. Every failure is per-worktree — one bad zip doesn't stop the rest. */
+	private async maybeSweep(now: number): Promise<void> {
+		if (this.sweeping) return;
+		if (!this.sessionsRestored) return; // ownership isn't knowable yet — see sessionsRestored
+		if (now - this.lastSweepAt < SWEEP_EVERY_MS) return;
+		this.lastSweepAt = now; // stamped even when disabled, so a disabled sweep isn't re-checked every scan
+		const policy = await this.sweepPolicy();
+		if (!policy.enabled) return;
+
+		const due = this.lastEntries.filter((e) => shouldAutoArchive(
+			{ branch: e.branch, path: e.path, hasTerminal: e.terminal !== null, lastActivity: e.lastActivity }, now, policy,
+		)).slice(0, SWEEP_MAX_PER_PASS);
+		if (!due.length) return;
+
+		this.sweeping = true;
+		let archived = 0;
+		let saved = 0;
+		try {
+			for (const e of due) {
+				const res = await this.archiveEntry(e, 'sweep');
+				if (res?.ok && res.manifest) { archived++; saved += res.manifest.rawBytes; }
+			}
+		} finally {
+			this.sweeping = false;
+		}
+		if (archived > 0) {
+			this.deps.toast(`Archived ${archived} stale worktree(s) — ${humanBytes(saved)} of files zipped into 🗄 Archive`);
+			await this.scanWorktrees();
+			this.board?.refresh();
+			await this.archivePanel?.refresh();
+		}
+	}
+
+	/** Archive one scanned worktree. Resolves the repo, records it on the board, and reports the
+	 *  outcome — shared by the sweep and the Coordination panel's Archive button. */
+	private async archiveEntry(e: WorktreeEntry, reason: 'sweep' | 'manual'): Promise<{ ok: boolean; manifest?: ArchiveManifest } | null> {
+		const repo = this.repos.find((r) => r.name === e.repo);
+		if (!repo) return null;
+		// lastEntries is up to 30s stale and a confirm dialog can sit open for minutes, so re-check
+		// ownership against the LIVE tiles right before we delete anything. Removing a worktree out
+		// from under a running session would pull the rug on its cwd.
+		if (this.tileForWorktree(e.path)) return null;
+		const res = await archiveWorktree({
+			repoName: repo.name, repoPath: repo.path, branch: e.branch,
+			baseBranch: this.baseOf(e.branch), worktreePath: e.path,
+			terminalName: e.terminal ?? '',
+		}, this.deps.archiveDir, { reason });
+		const note = res.ok
+			? `archived ${e.branch} → ${res.manifest!.base}.zip (${humanBytes(res.manifest!.zipBytes)})`
+			: `archive of ${e.branch} FAILED: ${res.error ?? 'unknown error'}`;
+		try {
+			await fs.appendFile(path.join(this.coordDir, 'board.md'), `${Date.now()}\t${reason === 'sweep' ? 'sweep' : 'you'}\t-\tNOTE\t${note}\n`, 'utf8');
+		} catch { /* board note is best-effort */ }
+		if (!res.ok) this.deps.toast(`Couldn't archive ${e.branch}: ${res.error ?? 'unknown error'}`);
+		return { ok: res.ok, manifest: res.manifest };
+	}
+
+	/** Coordination panel → Archive on a worktree row. Confirms first: this removes the folder. */
+	private async archiveByBranch(branch: string): Promise<void> {
+		const entry = this.lastEntries.find((e) => e.branch === branch);
+		if (!entry) { this.deps.toast(`No scanned worktree for ${branch} — hit Refresh`); return; }
+		const owner = this.tileForWorktree(entry.path);
+		if (owner) {
+			this.deps.toast(`"${owner.name}" is still open on ${branch} — close it (×) first`);
+			return;
+		}
+		const dirty = entry.dirtyFiles.length;
+		const ok = await promptForConfirm(
+			`Archive ${branch}?`,
+			`Its files and Claude conversation are zipped into the archive, then the worktree folder is deleted to reclaim space. `
+			+ `The branch stays in ${entry.repo}, and ${dirty ? `the ${dirty} uncommitted file(s) are committed as a wip: park first. ` : 'nothing is uncommitted. '}`
+			+ 'You can revive it later from 🗄 Archive, conversation included.',
+			'Archive',
+		);
+		if (!ok) return;
+		const res = await this.archiveEntry(entry, 'manual');
+		if (!res) { this.deps.toast(`Didn't archive ${branch} — a terminal opened on it, or its repo is no longer added`); return; }
+		if (res.ok && res.manifest) {
+			this.deps.toast(`Archived ${branch} — ${humanBytes(res.manifest.zipBytes)} zip, ${humanBytes(res.manifest.rawBytes)} of files removed`);
+		}
+		await this.scanWorktrees();
+		this.board?.refresh();
+		await this.archivePanel?.refresh();
+	}
+
+	/** 🗄 Archive button → the browse/revive panel (created lazily, kept for the panel's life). */
+	private async toggleArchivePanel(): Promise<void> {
+		if (!this.archivePanel) {
+			this.archivePanel = new ArchivePanel({
+				archiveDir: this.deps.archiveDir,
+				list: () => listArchives(this.deps.archiveDir),
+				readSummary: (base) => readArchiveSummary(this.deps.archiveDir, base),
+				revive: (m) => this.reviveAndOpen(m),
+				remove: (base) => deleteArchive(this.deps.archiveDir, base),
+				reveal: (dir) => {
+					// mkdir first: "Open folder" on a floor that's never archived anything would
+					// otherwise silently do nothing.
+					void fs.mkdir(dir, { recursive: true }).catch(() => {}).then(() => {
+						if (!revealInFileManager(dir)) this.deps.toast(`Archives live in ${dir}`);
+					});
+				},
+				toast: this.deps.toast,
+			});
+		}
+		if (this.parentEl) await this.archivePanel.toggle(this.parentEl);
+	}
+
+	/** Revive an archive: recreate the worktree at its original path, restore its transcript, and
+	 *  open a tile on `claude --continue` so the conversation resumes rather than starting over. */
+	private async reviveAndOpen(m: ArchiveManifest): Promise<void> {
+		const repo = this.repos.find((r) => r.name === m.repo);
+		const res = await reviveArchive(m, this.deps.archiveDir, { repoPathOverride: repo?.path });
+		if (!res.ok || !res.restored) { this.deps.toast(`Couldn't revive ${m.branch}: ${res.error ?? 'unknown error'}`); return; }
+		const r = res.restored;
+		if (res.warning) this.deps.toast(`Revived ${m.branch} with a caveat — ${res.warning}`);
+
+		try { await writeReadyHook(r.worktreePath, this.notifyScriptPath, this.coordHookPath); } catch { /* best effort */ }
+		// resume = we actually put a transcript back. Without one, --continue would just error, so a
+		// conversation-less archive opens a fresh session in the restored worktree instead.
+		const tile = this.makeTile(
+			{ worktreePath: r.worktreePath, branch: r.branch },
+			r.repoName, r.repoPath, r.baseBranch, r.conversationRestored, r.terminalName || undefined,
+		);
+		if (this.stageEl) tile.render(this.stageEl);
+		this.tiles.push(tile);
+		this.centeredId = tile.tileId;
+		this.applyLayout();
+		await this.persist();
+		this.deps.toast(r.conversationRestored
+			? `Revived ${m.branch} — resuming its conversation`
+			: `Revived ${m.branch} — no transcript was archived, so this is a fresh session`);
+		await this.scanWorktrees();
+		this.board?.refresh();
+		await this.archivePanel?.refresh();
 	}
 
 	/** The base branch a wt/<base>-N was cut from, for ahead/behind. Falls back to 'HEAD~0'

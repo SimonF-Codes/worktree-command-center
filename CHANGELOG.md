@@ -5,6 +5,45 @@ landed on `main`.
 
 ## Unreleased
 
+**Rename tabs**
+- Workspace tabs can be renamed: double-click a tab, or click the ✎ that appears when you hover it.
+  Only the label changes — the workspace *id* stays fixed, because it names the coordination
+  directory and keys the persisted session list, so renaming never disturbs the running terminals,
+  the board, or the journals in that tab.
+
+**Worktrees are archived to zip instead of stacking up forever**
+- Worktrees no longer accumulate. Any worktree with no open terminal that's been idle past a
+  threshold (default 7 days) is automatically zipped and its folder deleted, and every worktree row
+  in the Coordination panel gets a 🗄 button to archive one on demand. The sweep piggybacks on the
+  existing 30s worktree scan but runs at most every 30 minutes, caps itself at 10 archives per pass,
+  and never archives a worktree that has a terminal open on it, at any age. Configure it under
+  ⚙ Settings → *Worktree archive*.
+- Only **git-visible** files go into the zip (`git ls-files --cached --others --exclude-standard`),
+  so `node_modules`, build output and `.git` are excluded — that's where the space saving comes
+  from. A real archive of a Node worktree is typically kilobytes, not hundreds of megabytes.
+- Nothing is thrown away to get there. Uncommitted work is committed as a `wip: auto-parked` commit
+  first, and the **branch is kept in the repo**, so commits never live only inside a zip. The
+  worktree folder is deleted only *after* the zip is safely written under its final name.
+
+**Browse and revive archived conversations**
+- A 🗄 **Archive** button in the toolbar opens a browser of everything archived: the conversation's
+  opening ask as the title, plus repo, branch, date, size and message counts, with a **Summary**
+  expander and **⟲ Revive**.
+- Each archive is three files sharing one distinct name — `<repo>__<branch>__<stamp>.zip` plus a
+  small `.json` manifest and a human-readable `.md` summary. Browsing and reading a summary touch
+  only the sidecars, so **listing archives never inflates a zip**. The same summary is also written
+  *inside* the zip as `ARCHIVE.md`, so an archive stays self-describing if you move it elsewhere.
+- **Revive** genuinely resumes the conversation rather than starting a blank session: the archive
+  also captures the Claude Code transcript directory for that worktree, so reviving recreates the
+  worktree at its *original* path (which is what `claude --continue` matches on), restores the
+  transcript, and opens a terminal that picks up where the session stopped. If the branch was
+  deleted in the meantime it's recreated from the base and you're warned that its commits are gone;
+  if no transcript was captured you get a fresh session in the restored worktree instead.
+- Reviving is non-destructive: it refuses rather than clobber an existing folder, and it never
+  deletes the archive — only the browser's ✕ does that.
+- The zip format is implemented in-house on node's `zlib` (no new dependency, no shelling out to
+  `Compress-Archive`/`zip`), and the output is verified to open in standard unzip tools.
+
 **The dev build is now labelled, so you can tell it apart from the installed app**
 - Running from source (`npm start`) now shows a loud orange **DEV** badge beside the brand, and
   the window/taskbar title reads "Worktree Command Center — DEV". On Windows the dev build also

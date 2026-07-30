@@ -21,6 +21,18 @@ export function addWorkspace(list: Workspace[], name: string): { list: Workspace
 	return { list: [...list, { id, name: trimmed }], id };
 }
 
+/** Rename a workspace's LABEL only — the id is deliberately left alone. The id names the
+ *  coordination directory and keys the persisted session list, so changing it on a rename would
+ *  orphan every running terminal and lose that workspace's board + journals. Returns null when
+ *  nothing would change (unknown id, blank name, same name) so callers can skip a persist+redraw. */
+export function renameWorkspace(list: Workspace[], id: string, name: string): Workspace[] | null {
+	const trimmed = String(name).trim();
+	if (!trimmed) return null;
+	const target = list.find((w) => w.id === id);
+	if (!target || target.name === trimmed) return null;
+	return list.map((w) => (w.id === id ? { ...w, name: trimmed } : w));
+}
+
 export function closeWorkspace(list: Workspace[], id: string): Workspace[] {
 	if (list.length <= 1) return list;
 	const next = list.filter((w) => w.id !== id);

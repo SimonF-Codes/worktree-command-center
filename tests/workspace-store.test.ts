@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { slugId, uniqueId, addWorkspace, closeWorkspace, nextActiveAfter, normalizeWorkspaces } from '../src/terminals/workspace-store';
+import { slugId, uniqueId, addWorkspace, closeWorkspace, renameWorkspace, nextActiveAfter, normalizeWorkspaces } from '../src/terminals/workspace-store';
 
 describe('slugId', () => {
   it('makes a filesystem-safe id', () => {
@@ -23,6 +23,39 @@ describe('addWorkspace', () => {
     expect(addWorkspace([], '   ')).toBeNull();
     const dup = addWorkspace([{ id: 'cardtzar', name: 'cardtzar' }], 'cardtzar');
     expect(dup!.id).toBe('cardtzar-2');
+  });
+});
+describe('renameWorkspace', () => {
+  const list = [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }];
+
+  it('renames only the target, and only its label', () => {
+    const next = renameWorkspace(list, 'b', 'Gamma')!;
+    expect(next).toEqual([{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Gamma' }]);
+  });
+
+  it('NEVER changes the id — it keys the coordination dir and the persisted sessions', () => {
+    const next = renameWorkspace([{ id: 'card-tzar', name: 'Card Tzar' }], 'card-tzar', 'Totally Different')!;
+    expect(next[0]!.id).toBe('card-tzar');
+    expect(next[0]!.name).toBe('Totally Different');
+  });
+
+  it('trims, and returns null when nothing would change', () => {
+    expect(renameWorkspace(list, 'a', '  Trimmed  ')![0]!.name).toBe('Trimmed');
+    expect(renameWorkspace(list, 'a', '   ')).toBeNull();     // blank
+    expect(renameWorkspace(list, 'a', 'Alpha')).toBeNull();   // same name
+    expect(renameWorkspace(list, 'nope', 'X')).toBeNull();    // unknown id
+  });
+
+  it('does not mutate the input list', () => {
+    const before = JSON.parse(JSON.stringify(list));
+    renameWorkspace(list, 'a', 'Changed');
+    expect(list).toEqual(before);
+  });
+
+  it('allows two tabs to share a display name (ids still differ)', () => {
+    const next = renameWorkspace(list, 'b', 'Alpha')!;
+    expect(next.map((w) => w.name)).toEqual(['Alpha', 'Alpha']);
+    expect(next.map((w) => w.id)).toEqual(['a', 'b']);
   });
 });
 describe('closeWorkspace', () => {

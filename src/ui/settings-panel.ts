@@ -1,6 +1,7 @@
 import type { ConvertDestination, TrackerDestination, VaultDestination } from '../terminals/convert-destinations';
 import { newDestinationId } from '../terminals/convert-destinations';
 import { promptForChoice, promptForTopic, promptForConfirm } from './prompt-dialog';
+import { normalizeSweepPolicy, DEFAULT_SWEEP_POLICY } from '../terminals/worktree-archive';
 
 export interface SettingsPanelDeps {
 	addFolder: () => Promise<string | null>;
@@ -71,6 +72,34 @@ export class SettingsPanel {
 				this.deps.toast(val ? `Overseer renamed to "${val}"` : 'Overseer name reset to Kane');
 			})();
 		});
+
+		// --- Worktree archive sweep ---
+		const sweep = normalizeSweepPolicy(cfg0.worktreeSweep);
+		const sweepSection = this.el.createDiv({ cls: 'wcc-settings-section' });
+		sweepSection.createDiv({ cls: 'wcc-settings-sub', text: 'Worktree archive — stale worktrees are zipped (files + Claude conversation) and their folders deleted, so they stop stacking up. The branch is kept, and 🗄 Archive can revive any of them.' });
+		const sweepRow = sweepSection.createDiv({ cls: 'wcc-settings-row' });
+		const sweepOn = sweepRow.createEl('input', { cls: 'wcc-settings-check', attr: { type: 'checkbox' } }) as HTMLInputElement;
+		sweepOn.checked = sweep.enabled;
+		sweepRow.createSpan({ cls: 'wcc-settings-row-label', text: 'Auto-archive worktrees with no open terminal after' });
+		const sweepDays = sweepRow.createEl('input', { cls: 'wcc-settings-num', attr: { type: 'number', min: '1', max: '365' } }) as HTMLInputElement;
+		sweepDays.value = String(sweep.maxAgeDays);
+		sweepRow.createSpan({ cls: 'wcc-settings-row-label', text: 'days idle' });
+		const saveSweep = sweepRow.createEl('button', { cls: 'wcc-settings-remove', text: 'Save' });
+		saveSweep.addEventListener('click', (e) => {
+			e.stopPropagation();
+			void (async () => {
+				const cfg = await this.deps.getConfig();
+				// Normalize before persisting so a typo'd 0/blank can never become an
+				// "archive everything now" policy — it falls back to the default instead.
+				const next = normalizeSweepPolicy({ enabled: sweepOn.checked, maxAgeDays: Number(sweepDays.value) });
+				await this.deps.setConfig({ ...cfg, worktreeSweep: next });
+				sweepDays.value = String(next.maxAgeDays);
+				this.deps.toast(next.enabled
+					? `Auto-archiving worktrees idle over ${next.maxAgeDays} day(s)`
+					: 'Auto-archive off — the 🗄 button on each worktree row still works');
+			})();
+		});
+		sweepSection.createDiv({ cls: 'wcc-settings-row-sub', text: `Default: on, ${DEFAULT_SWEEP_POLICY.maxAgeDays} days. Only git-visible files are zipped (no node_modules, no .git), and a worktree with an open terminal is never touched.` });
 
 		const section = this.el.createDiv({ cls: 'wcc-settings-section' });
 		section.createDiv({ cls: 'wcc-settings-sub', text: 'Convert destinations — where a journal note\'s "Convert to…" can send it' });

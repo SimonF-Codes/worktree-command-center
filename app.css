@@ -119,6 +119,11 @@ html, body {
 .cos-reopen-btn { margin-left: auto; padding: 2px 9px !important; font-size: 11px !important; }
 .cos-close-btn { padding: 2px 8px !important; font-size: 11px !important; color: var(--text-muted); opacity: 0.7; border-radius: 5px; }
 .cos-close-btn:hover { color: #fff; background: #d2453e; opacity: 1; }
+/* Archive 🗄 on a worktree row. It takes the margin-left:auto (pushing the button group right) when
+   it stands alone; when a Reopen precedes it, Reopen already claimed the auto and this just spaces. */
+.cos-archive-btn { margin-left: auto; padding: 2px 8px !important; font-size: 11px !important; color: var(--text-muted); opacity: 0.7; border-radius: 5px; }
+.cos-reopen-btn + .cos-archive-btn { margin-left: 0; }
+.cos-archive-btn:hover { opacity: 1; color: var(--text-normal); background: var(--background-modifier-hover); }
 .cos-term-refresh { background: none; border: none; cursor: pointer; font-size: 12px !important; line-height: 1; opacity: 0.6; color: var(--text-muted); }
 .cos-term-refresh:hover { opacity: 1; color: var(--text-normal); }
 .cos-coord-hidden { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
@@ -245,6 +250,10 @@ html, body {
 .wcc-tab.active { background: var(--background-primary); color: var(--text-normal); font-weight: 600; }
 .wcc-tab-close { background: transparent; border: none; color: var(--text-faint); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; }
 .wcc-tab-close:hover { color: var(--text-normal); }
+/* ✎ rename. Stays faint until the tab is hovered so the bar doesn't read as a row of icons. */
+.wcc-tab-rename { background: transparent; border: none; color: var(--text-faint); cursor: pointer; font-size: 11px; line-height: 1; padding: 0 1px; opacity: 0; transition: opacity .12s; }
+.wcc-tab:hover .wcc-tab-rename, .wcc-tab.active .wcc-tab-rename { opacity: 0.75; }
+.wcc-tab-rename:hover { opacity: 1; color: var(--text-normal); }
 .wcc-tab-add { background: transparent; border: 1px dashed var(--background-modifier-border); border-radius: 7px; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 5px 10px; }
 .wcc-tab-add:hover { color: var(--text-normal); border-color: var(--text-muted); }
 
@@ -267,6 +276,33 @@ html, body {
 .wcc-settings-row-sub { color: var(--text-muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 .wcc-settings-remove { flex: none; background: transparent; color: var(--text-muted); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 11.5px; }
 .wcc-settings-remove:hover { color: var(--color-red); border-color: var(--color-red); }
+.wcc-settings-check { flex: none; margin: 0; cursor: pointer; }
+.wcc-settings-num { flex: none; width: 56px; background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 5px; padding: 3px 6px; font-size: 12px; }
+/* The sweep row is a sentence, not a label/control pair — override the section default. */
+.wcc-settings-section .wcc-settings-row { flex-wrap: wrap; justify-content: flex-start; }
+.wcc-settings-section .wcc-settings-row .wcc-settings-row-label { font-weight: 400; color: var(--text-muted); }
+.wcc-settings-section .wcc-settings-row .wcc-settings-remove { margin-left: auto; }
+
+/* 🗄 Archive browser. */
+.wcc-archive-panel { position: absolute; left: 12px; right: 12px; top: 46px; z-index: 1300; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 10px; box-shadow: 0 12px 36px rgba(0,0,0,.55); padding: 12px 14px; max-width: 900px; margin: 0 auto; max-height: 78vh; overflow-y: auto; }
+.wcc-archive-head { display: flex; align-items: center; gap: 10px; font-weight: 600; margin-bottom: 4px; }
+.wcc-archive-reveal { margin-left: auto; background: transparent; color: var(--text-muted); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 3px 9px; cursor: pointer; font-size: 11.5px; }
+.wcc-archive-reveal:hover { color: var(--text-normal); border-color: var(--text-muted); }
+.wcc-archive-sub { color: var(--text-muted); font-size: 11.5px; margin-bottom: 10px; word-break: break-all; }
+.wcc-archive-empty { color: var(--text-muted); font-size: 12px; line-height: 1.5; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 10px 12px; }
+.wcc-archive-list { display: flex; flex-direction: column; gap: 6px; }
+.wcc-archive-row { display: flex; align-items: flex-start; gap: 10px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 8px 10px; }
+.wcc-archive-row-info { min-width: 0; flex: 1; }
+.wcc-archive-row-title { font-weight: 600; font-size: 12.5px; color: var(--text-normal); margin-bottom: 3px; }
+.wcc-archive-row-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-faint); font-size: 11px; }
+.wcc-archive-branch { font-family: var(--font-monospace); color: var(--text-muted); }
+.wcc-archive-tag { background: rgba(91,115,255,0.18); color: var(--cos-accent-hover); border-radius: 999px; padding: 1px 7px; }
+.wcc-archive-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+.wcc-archive-actions .cos-reopen-btn { margin-left: 0; }
+.wcc-archive-revive { color: var(--color-cyan); }
+.wcc-archive-summary { background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 8px 10px; max-height: 40vh; overflow: auto; }
+.wcc-archive-summary pre { margin: 0; font-family: var(--font-monospace); font-size: 11.5px; line-height: 1.5; color: var(--text-muted); white-space: pre-wrap; word-break: break-word; }
+.wcc-archive-close { margin-top: 10px; background: var(--background-secondary-alt); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
 .wcc-settings-add { display: block; width: 100%; background: var(--background-secondary-alt); color: var(--text-normal); border: 1px dashed var(--background-modifier-border); border-radius: 6px; padding: 7px 10px; cursor: pointer; margin-bottom: 8px; }
 .wcc-settings-input { flex: 1; min-width: 0; background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 6px 9px; font-size: 12.5px; }
 .wcc-settings-close { background: var(--background-secondary-alt); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
