@@ -5,6 +5,17 @@ landed on `main`.
 
 ## Unreleased
 
+**The dev build is now labelled, so you can tell it apart from the installed app**
+- Running from source (`npm start`) now shows a loud orange **DEV** badge beside the brand, and
+  the window/taskbar title reads "Worktree Command Center — DEV". On Windows the dev build also
+  gets its own AppUserModelID, so it's a separate taskbar entry instead of stacking with the
+  installed app. The app *name* is deliberately unchanged — that's what picks the userData
+  directory, so both builds keep sharing one profile (same repos, workspaces and sessions);
+  they're just distinguishable now. A `run-dev.bat` launcher sits in the repo root for
+  double-click starting.
+- Caveat worth knowing: the two builds share that one profile, so running them **at the same
+  time** makes them fight over the config file and port 7420. Run one at a time.
+
 **CI/CD pipeline (GitHub Actions)**
 - Dev/release tooling (not app behavior). `ci.yml` runs on every PR and push to `main`:
   typecheck, the full test suite, an esbuild bundle, a lockfile-drift check (via `npm ci`), a

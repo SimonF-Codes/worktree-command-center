@@ -20,7 +20,7 @@ import type { SessionEnvProvider } from './private-api';
 declare global {
 	interface Window {
 		wcc: {
-			paths(): Promise<{ sidecarDir: string; userData: string; appRoot: string; version: string }>;
+			paths(): Promise<{ sidecarDir: string; userData: string; appRoot: string; version: string; isDev: boolean }>;
 			checkClaude(): Promise<{ found: boolean; path: string | null }>;
 			getConfig(): Promise<any>;
 			setConfig(c: any): Promise<boolean>;
@@ -39,7 +39,7 @@ async function main(): Promise<void> {
 	try {
 		installDomShim();
 
-		const { sidecarDir, userData, appRoot, version } = await window.wcc.paths();
+		const { sidecarDir, userData, appRoot, version, isDev } = await window.wcc.paths();
 		const cfg = await window.wcc.getConfig();
 		repos = Array.isArray(cfg.repos) ? cfg.repos : [];
 
@@ -48,6 +48,9 @@ async function main(): Promise<void> {
 		// --- top bar (persistent above the tabs + grid; never wiped by grid.mount()) ---
 		const topBar = appEl.createDiv({ cls: 'wcc-topbar' });
 		topBar.createSpan({ cls: 'wcc-brand', text: '🌳 Worktree Command Center' });
+		// DEV badge: both builds share one profile (same repos/workspaces/sessions), so without a
+		// marker it's impossible to tell which one you're typing into. Dev only.
+		if (isDev) topBar.createSpan({ cls: 'wcc-devbadge', text: 'DEV', attr: { title: 'Running the dev build from source (npm start) — same profile as the installed app' } });
 		const addFolderBtn = topBar.createEl('button', { cls: 'wcc-add', text: '➕ Add folder' });
 		const newRepoBtn = topBar.createEl('button', { cls: 'wcc-add', text: '🆕 New repo' });
 		const statusSpan = topBar.createSpan({ cls: 'wcc-status', text: `${repos.length} repos` });

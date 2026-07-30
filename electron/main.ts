@@ -9,6 +9,13 @@ import { resolveOnPath } from '../src/resolve-on-path';
 const REMOTE_PORT = 7420;
 let win: BrowserWindow | null = null;
 
+// Dev (`npm start`) vs the installed app. Used only for LABELLING — deliberately NOT for
+// `app.setName()`, because the name decides the userData dir: renaming it would split the
+// dev build's repos/workspaces/sessions off from the installed app's. Both builds share one
+// profile on purpose; they just need to be tellable apart in the taskbar and on screen.
+const IS_DEV = !app.isPackaged;
+const TITLE = IS_DEV ? 'Worktree Command Center — DEV' : 'Worktree Command Center';
+
 function createWindow(): void {
 	const sidecarDir = app.isPackaged
 		? path.join(process.resourcesPath, 'pty-sidecar')
@@ -26,6 +33,7 @@ function createWindow(): void {
 		width: 1400,
 		height: 900,
 		icon: iconPath,
+		title: TITLE,
 		webPreferences: {
 			nodeIntegration: true,
 			contextIsolation: false,
@@ -36,6 +44,11 @@ function createWindow(): void {
 			preload: path.join(__dirname, 'preload.js'),
 		},
 	});
+
+	// index.html carries a <title>, and Electron lets the page overwrite the window title —
+	// which would wipe the " — DEV" suffix the moment the page loads. Pin our own title.
+	win.webContents.on('page-title-updated', (e) => { e.preventDefault(); });
+	win.setTitle(TITLE);
 
 	win.loadFile(path.join(__dirname, '..', 'index.html'));
 
@@ -50,8 +63,8 @@ function createWindow(): void {
 		if (isReloadCombo) event.preventDefault();
 	});
 
-	// IPC: return resolved paths
-	ipcMain.handle('paths', () => ({ sidecarDir, userData, appRoot, version: app.getVersion() }));
+	// IPC: return resolved paths (isDev drives the on-screen DEV badge)
+	ipcMain.handle('paths', () => ({ sidecarDir, userData, appRoot, version: app.getVersion(), isDev: IS_DEV }));
 
 	// IPC: is the `claude` CLI resolvable on PATH? Every worktree terminal and the usage
 	// probe spawn it via the sidecar; if it isn't installed/on PATH they all fail silently,
@@ -105,6 +118,14 @@ function createWindow(): void {
 		port: REMOTE_PORT,
 		urls: accessUrls(pickHosts(os.networkInterfaces(), os.hostname()), REMOTE_PORT, token),
 	}));
+}
+
+// Windows groups taskbar buttons by AppUserModelID, so giving dev its own ID keeps the two
+// builds as separate taskbar entries (and separate jump lists) instead of stacking them.
+if (process.platform === 'win32') {
+	app.setAppUserModelId(IS_DEV
+		? 'com.ronaldfridlyand.worktree-command-center.dev'
+		: 'com.ronaldfridlyand.worktree-command-center');
 }
 
 app.whenReady().then(createWindow);

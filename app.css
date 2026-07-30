@@ -60,6 +60,18 @@ html, body {
 }
 .wcc-topbar .wcc-brand { font-weight: 600; letter-spacing: 0.2px; color: var(--text-normal); }
 .wcc-topbar .wcc-status { color: var(--text-muted); font-size: 12px; }
+/* DEV badge beside the brand — dev build only (see app.ts). Loud on purpose: the dev and
+   installed builds share one profile, so you need to know which window you're in. */
+.wcc-topbar .wcc-devbadge {
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.8px;
+	padding: 2px 6px;
+	border-radius: 4px;
+	background: var(--color-orange, #e0770e);
+	color: #1a1a1a;
+	margin-left: -6px;
+}
 .wcc-topbar button,
 .wcc-grid-container button {
 	background: var(--background-secondary-alt);
