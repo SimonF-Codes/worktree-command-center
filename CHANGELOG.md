@@ -5,6 +5,8 @@ landed on `main`.
 
 ## Unreleased
 
+## 0.2.0 — 2026-08-05
+
 **The dev build is now labelled, so you can tell it apart from the installed app**
 - Running from source (`npm start`) now shows a loud orange **DEV** badge beside the brand, and
   the window/taskbar title reads "Worktree Command Center — DEV". On Windows the dev build also
