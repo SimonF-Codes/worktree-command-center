@@ -1,10 +1,13 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { activeTerminalPalette, activeTerminalFont, type TerminalPalette } from './theme-store';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SessionBridge, safeSessionEnv } from './session-bridge';
-import { godSystemPrompt, type GodRepo } from './god';
+import { readClipboardText, writeClipboardText } from './clipboard';
+import { godSystemPrompt, type GodRepo, type GodSelfImprove } from './god';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { FitThrottle } from './fit-throttle';
 import { ctrlClickActivator, openExternalUrl } from './links';
@@ -16,9 +19,11 @@ export interface GodConsoleOpts {
 	sidecarPath: string;
 	godHomeDir: string;   // a neutral cwd outside every repo
 	sessionEnv?: () => Record<string, string>;
+	selfImprove?: GodSelfImprove; // when set, Kane may improve his own source + build tools
 	onFocusChange?: (focused: boolean) => void;
 	instanceName?: string;   // head label + COS_TERMINAL_NAME (default 'Kane')
 	terminalId?: string;     // COS_TERMINAL_ID for cos-coord identity (default '0')
+	resume?: boolean;        // open with --continue (fresh fallback) — the main Kane sets this
 }
 
 /** GOD: a single privileged claude session in a docked side panel. Real terminal — the
@@ -83,7 +88,7 @@ export class GodConsole {
 		hide.addEventListener('click', (e) => { e.stopPropagation(); this.onHide(); });
 
 		this.bodyEl = this.el.createDiv({ cls: 'cos-god-body' });
-		this.term = new Terminal({ fontSize: 12, convertEol: false, cursorBlink: true, scrollback: 5000, theme: { background: '#0e0f17' },
+		this.term = new Terminal({ fontSize: 12, convertEol: false, cursorBlink: false, scrollback: 5000, theme: activeTerminalPalette(), ...activeTerminalFont(),
 			// OSC 8 hyperlinks from the new Claude TUI — open in the real browser on Ctrl/Cmd+click
 			// instead of xterm's built-in "navigate… could be dangerous" confirm (no linkHandler set).
 			linkHandler: { activate: (e, uri) => { if (e.ctrlKey || e.metaKey) openExternalUrl(uri); } },
@@ -91,6 +96,13 @@ export class GodConsole {
 		this.fit = new FitAddon();
 		this.term.loadAddon(this.fit);
 		this.term.open(this.bodyEl);
+		// GPU-accelerated rendering, mirroring TerminalTile: load after open(); on context
+		// loss dispose → xterm falls back to the DOM renderer for this console only.
+		try {
+			const gl = new WebglAddon();
+			gl.onContextLoss(() => gl.dispose());
+			this.term.loadAddon(gl);
+		} catch { /* no GPU/context available — DOM renderer remains */ }
 		// Ctrl/Cmd+click a URL to open it in the real browser.
 		this.term.loadAddon(new WebLinksAddon(ctrlClickActivator(openExternalUrl)));
 		// Clipboard + scrollback keys, mirroring TerminalTile: Ctrl/Cmd+V pastes (xterm would
@@ -151,7 +163,9 @@ export class GodConsole {
 		this.fitSoon();
 
 		this.term.onData((d) => this.bridge?.write(d));
-		this.startSession(false);
+		// resume → Kane picks his conversation back up across app restarts, exactly like the
+		// tiles (fresh fallback if no transcript). /clear inside the session starts a new one.
+		this.startSession(this.opts.resume ?? false, this.opts.resume ?? false);
 
 		this.resizeObs = new ResizeObserver(() => this.fitSoon());
 		this.resizeObs.observe(this.bodyEl);
@@ -195,6 +209,17 @@ export class GodConsole {
 		this.busy = true;
 		if (this.busyTimer !== null) window.clearTimeout(this.busyTimer);
 		this.busyTimer = window.setTimeout(() => { this.busy = false; this.busyTimer = null; }, 1500);
+	}
+
+	/** Re-tint the terminal well live (theme switch — see theme-store). Font weight and the
+	 *  contrast floor travel with the palette: light wells need both to read well. */
+	setTerminalPalette(p: TerminalPalette): void {
+		if (!this.term) return;
+		this.term.options.theme = p;
+		const f = activeTerminalFont();
+		this.term.options.fontWeight = f.fontWeight as never;
+		this.term.options.fontWeightBold = f.fontWeightBold as never;
+		this.term.options.minimumContrastRatio = f.minimumContrastRatio;
 	}
 
 	/** Refresh Kane: kill + relaunch with --continue in place, resuming his conversation.
@@ -251,7 +276,10 @@ export class GodConsole {
 	 *  them) — used to ping him when a watch fires. */
 	notify(text: string): void {
 		this.bridge?.write(text);
-		window.setTimeout(() => this.bridge?.write('\r'), 40);
+		// 250ms + a 900ms retry: match TerminalTile.sendLine — the new TUI's wider paste
+		// window eats a fast \r; the second Enter is a no-op on an already-submitted box.
+		window.setTimeout(() => this.bridge?.write('\r'), 250);
+		window.setTimeout(() => this.bridge?.write('\r'), 900);
 	}
 
 	/** Scroll this terminal's scrollback buffer per a keyboard scroll intent. */
@@ -276,31 +304,14 @@ export class GodConsole {
 		this.bridge?.write(seq);
 	}
 
-	/** Electron's clipboard (reliable & synchronous), or null outside Electron. */
-	private electronClipboard(): { readText?: () => string; writeText?: (t: string) => void } | null {
-		try {
-			const req = (window as unknown as { require?: (m: string) => unknown }).require;
-			if (!req) return null;
-			const mod = req('electron') as { clipboard?: { readText?: () => string; writeText?: (t: string) => void } };
-			return mod.clipboard ?? null;
-		} catch { return null; }
-	}
-
 	/** Paste clipboard text into the terminal (honors bracketed-paste via term.paste). */
 	private pasteFromClipboard(): void {
-		const t = this.term;
-		if (!t) return;
-		const sync = this.electronClipboard()?.readText?.();
-		if (typeof sync === 'string') { if (sync) t.paste(sync); return; }
-		// Fallback for non-Electron runtimes: the async Clipboard API.
-		navigator.clipboard?.readText?.().then((txt) => { if (txt) t.paste(txt); }).catch(() => { /* denied / empty */ });
+		void readClipboardText().then((txt) => { if (txt) this.term?.paste(txt); });
 	}
 
 	/** Copy text to the clipboard (used by right-click when there's a selection). */
 	private writeClipboard(text: string): void {
-		const clip = this.electronClipboard();
-		if (clip?.writeText) { clip.writeText(text); return; }
-		navigator.clipboard?.writeText?.(text).catch(() => { /* denied */ });
+		writeClipboardText(text);
 	}
 
 	/** Coalesce resize bursts into a single fit + pty-resize (see FitThrottle). */
@@ -335,8 +346,12 @@ export class GodConsole {
 			// board (feeds the Coordination panel's background-tasks list), same as worker terminals.
 			const coordHookAbsPath = path.join(path.dirname(this.opts.sidecarPath), 'coord-hook.cjs');
 			const task = (extra: string) => ({ matcher: 'Task', hooks: [{ type: 'command', command: `node "${coordHookAbsPath}" --task${extra}` }] });
+			// With self-improvement enabled, the overseer also gets prompt-free file edits +
+			// git/npm/node, or "builds it and lets you know" would stall on a permission prompt
+			// per edit.
+			const allow = ['Bash(cos-coord:*)', ...(this.opts.selfImprove ? ['Edit', 'Write', 'Bash(git:*)', 'Bash(npm:*)', 'Bash(node:*)'] : [])];
 			fs.writeFileSync(settingsFile, JSON.stringify({
-				permissions: { allow: ['Bash(cos-coord:*)'] },
+				permissions: { allow },
 				hooks: { PreToolUse: [task('')], PostToolUse: [task(' --release')] },
 			}, null, 2), 'utf8');
 		} catch { /* best effort — /personality still works, just with a permission prompt */ }
@@ -347,7 +362,7 @@ export class GodConsole {
 		try {
 			fs.mkdirSync(this.opts.godHomeDir, { recursive: true });
 			const file = path.join(this.opts.godHomeDir, 'god-system-prompt.md');
-			fs.writeFileSync(file, godSystemPrompt(this.opts.repos, this.opts.coordDir, this.opts.instanceName ?? 'Kane'), 'utf8');
+			fs.writeFileSync(file, godSystemPrompt(this.opts.repos, this.opts.coordDir, this.opts.instanceName ?? 'Kane', this.opts.selfImprove), 'utf8');
 			return file;
 		} catch { return null; }
 	}

@@ -1,19 +1,23 @@
 import { installDomShim } from './ui/dom-shim';
 import { toast } from './ui/toast';
-import { promptForTopic } from './ui/prompt-dialog';
+import { promptForTopic, promptForConfirm } from './ui/prompt-dialog';
 import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/terminals-grid';
+import { parseGodSelfImprove } from './terminals/god';
 import { discoverRepos, mergeRepos } from './workspace';
 import { createGitRepo } from './create-repo';
 import { UsageProbe } from './terminals/usage-probe';
 import { UsageWidget } from './ui/usage-widget';
 import { ClaudeWarning } from './ui/claude-warning';
+import { PerfMonitor } from './ui/perf-monitor';
 import { AttentionWidget } from './ui/attention-widget';
 import { WorkspaceBar } from './ui/workspace-bar';
 import { SettingsPanel } from './ui/settings-panel';
 import { ChangelogPanel } from './ui/changelog-panel';
 import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, type Workspace } from './terminals/workspace-store';
+import { THEMES, normalizeTheme, setActiveTheme, activeTerminalPalette } from './terminals/theme-store';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { registerPrivateFeatures } from 'wcc-private';
 import type { SessionEnvProvider } from './private-api';
 
@@ -22,6 +26,8 @@ declare global {
 		wcc: {
 			paths(): Promise<{ sidecarDir: string; userData: string; appRoot: string; version: string; isDev: boolean }>;
 			checkClaude(): Promise<{ found: boolean; path: string | null }>;
+			clipboardRead(): Promise<string>;
+			clipboardWrite(text: string): Promise<boolean>;
 			getConfig(): Promise<any>;
 			setConfig(c: any): Promise<boolean>;
 			addFolder(): Promise<string | null>;
@@ -29,6 +35,7 @@ declare global {
 			pushFloorState(s: unknown): void;
 			onRemoteAction(cb: (a: { type: string; id?: number; repo?: string; base?: string | null; task?: string }) => void): void;
 			remoteInfo(): Promise<{ token: string; port: number; urls: string[] }>;
+			onShellDigit(cb: (n: number) => void): void;
 		};
 	}
 }
@@ -41,12 +48,33 @@ async function main(): Promise<void> {
 
 		const { sidecarDir, userData, appRoot, version, isDev } = await window.wcc.paths();
 		const cfg = await window.wcc.getConfig();
+
+		// Renderer-aging telemetry (perf-log.jsonl in userData) — long-lived instances degrade;
+		// this gives the next investigation data instead of guesses.
+		const perfMon = new PerfMonitor(path.join(userData, 'perf-log.jsonl'));
+		perfMon.begin();
+		window.addEventListener('beforeunload', () => perfMon.dispose());
 		repos = Array.isArray(cfg.repos) ? cfg.repos : [];
+
+		// Shell theme (2026-07-24 themes spec): applied before any UI builds so the first
+		// paint is already themed. 'default' = the :root palette, no attribute needed either
+		// way but setting it keeps the switcher and DOM state in lockstep.
+		let themeId = normalizeTheme(cfg.theme);
+		document.documentElement.dataset.theme = themeId;
+		setActiveTheme(themeId); // terminals created from here on take the theme's well palette
 
 		const appEl = document.getElementById('app')!;
 
+		// --- shell slots: generic mount points for the private overlay's portal surfaces
+		// (PrivateApi.shellHosts) — `stripHost` above the whole terminal UI, `viewsHost`
+		// beneath it. The terminal surface lives in terminalRoot as one swappable unit;
+		// both slot divs stay empty unless an overlay populates them. ---
+		const stripHost = appEl.createDiv();
+		const terminalRoot = appEl.createDiv({ cls: 'wcc-terminal-root' });
+		const viewsHost = appEl.createDiv();
+
 		// --- top bar (persistent above the tabs + grid; never wiped by grid.mount()) ---
-		const topBar = appEl.createDiv({ cls: 'wcc-topbar' });
+		const topBar = terminalRoot.createDiv({ cls: 'wcc-topbar' });
 		topBar.createSpan({ cls: 'wcc-brand', text: '🌳 Worktree Command Center' });
 		// DEV badge: both builds share one profile (same repos/workspaces/sessions), so without a
 		// marker it's impossible to tell which one you're typing into. Dev only.
@@ -55,10 +83,26 @@ async function main(): Promise<void> {
 		const newRepoBtn = topBar.createEl('button', { cls: 'wcc-add', text: '🆕 New repo' });
 		const statusSpan = topBar.createSpan({ cls: 'wcc-status', text: `${repos.length} repos` });
 
+		// Theme switcher: applies instantly, persists via the merge below.
+		const themeSel = topBar.createEl('select', { cls: 'wcc-theme-sel', attr: { title: 'Shell theme' } });
+		for (const t of THEMES) themeSel.createEl('option', { text: t.label, value: t.id });
+		themeSel.value = themeId;
+		themeSel.addEventListener('change', () => {
+			themeId = normalizeTheme(themeSel.value);
+			document.documentElement.dataset.theme = themeId;
+			setActiveTheme(themeId);
+			// Re-tint every live terminal well in every workspace (new ones self-apply).
+			const palette = activeTerminalPalette();
+			for (const g of grids.values()) g.applyTerminalPalette(palette);
+			persist();
+		});
+
 		// Missing-`claude` banner: a full-width strip directly under the top bar. Every terminal
 		// and the usage battery spawn `claude` via the sidecar, so if it isn't on PATH the app
 		// silently does nothing useful — this makes the cause obvious and offers a recheck.
-		const claudeWarnHost = appEl.createDiv({ cls: 'wcc-claude-warn-host' });
+		// Lives in terminalRoot (beneath topBar, above the tabs) so the overlay shell's
+		// stripHost/viewsHost slots don't push it away from the bar it explains.
+		const claudeWarnHost = terminalRoot.createDiv({ cls: 'wcc-claude-warn-host' });
 		const claudeWarning = new ClaudeWarning(() => window.wcc.checkClaude());
 		claudeWarning.render(claudeWarnHost);
 		void claudeWarning.refresh();
@@ -95,6 +139,11 @@ async function main(): Promise<void> {
 		startUsageProbe();
 		window.addEventListener('beforeunload', () => { usageWidget?.dispose(); usageProbe?.dispose(); });
 
+		// Kane self-improvement (see docs/superpowers/specs/2026-07-15-kane-self-improvement-design.md):
+		// config names the app's own source repo; toolsDir defaults beside the user's home.
+		const siCfg = parseGodSelfImprove(cfg.god);
+		const godSelfImprove = siCfg ? { sourceRepo: siCfg.sourceRepo, toolsDir: siCfg.toolsDir ?? path.join(os.homedir(), 'kane-tools') } : undefined;
+
 		const depsFor = (id: string): GridDeps => ({
 			repos,
 			group: id,
@@ -104,6 +153,7 @@ async function main(): Promise<void> {
 			coordHookPath: path.join(sidecarDir, 'coord-hook.cjs'),
 			sessionsFile: path.join(userData, '.terminal-sessions.json'),
 			bypassPermissions: true,
+			godSelfImprove,
 			sessionEnv: () => sessionEnvProvider({ workspaceId: id }),
 			overseerName: typeof cfg.overseerName === 'string' ? cfg.overseerName : undefined,
 			toast,
@@ -119,7 +169,7 @@ async function main(): Promise<void> {
 
 		// Merge over a FRESH read: other writers (e.g. the private overlay via PrivateApi.config.set)
 		// must not have their keys clobbered by this startup-snapshot spread.
-		const persist = (): void => void window.wcc.getConfig().then((fresh) => window.wcc.setConfig({ ...fresh, repos, workspaces, activeWorkspace: activeId }));
+		const persist = (): void => void window.wcc.getConfig().then((fresh) => window.wcc.setConfig({ ...fresh, repos, workspaces, activeWorkspace: activeId, theme: themeId }));
 
 		// Attention queue reads whichever grid is ACTIVE (closures over the mutable activeGrid).
 		const attention = new AttentionWidget(() => activeGrid.attentionItems(), (tileId) => activeGrid.revealTile(tileId));
@@ -154,10 +204,10 @@ async function main(): Promise<void> {
 			onAdd: () => void onAdd(),
 			onClose: (id) => onClose(id),
 		});
-		bar.render(appEl);
+		bar.render(terminalRoot);
 
 		// Grid container: the active grid mounts its controls + board + stage into here.
-		const gridContainer = appEl.createDiv({ cls: 'wcc-grid-container' });
+		const gridContainer = terminalRoot.createDiv({ cls: 'wcc-grid-container' });
 
 		async function switchTo(id: string): Promise<void> {
 			if (id === activeId || !workspaces.some((w) => w.id === id)) return;
@@ -169,6 +219,23 @@ async function main(): Promise<void> {
 			persist();
 			for (const cb of wsSwitchCbs) { try { cb(id); } catch { /* overlay callback must not break switching */ } }
 		}
+
+		// Terminal-surface visibility, controlled by the overlay (PrivateApi.hideTerminal /
+		// showTerminal). Hiding rides the workspace-switch machinery: the grid unmounts, so
+		// every tile suspends its output parsing while something else owns the window.
+		let terminalShown = true;
+		const hideTerminal = (): void => {
+			if (!terminalShown) return;
+			terminalShown = false;
+			activeGrid.unmount();
+			terminalRoot.style.display = 'none';
+		};
+		const showTerminal = async (): Promise<void> => {
+			if (terminalShown) return;
+			terminalShown = true;
+			terminalRoot.style.display = '';
+			await activeGrid.mount(gridContainer); // resume tiles (the workspace-switch path)
+		};
 
 		async function onAdd(): Promise<void> {
 			const name = await promptForTopic('New workspace', 'workspace name', '', 'Create');
@@ -199,11 +266,16 @@ async function main(): Promise<void> {
 		try {
 			registerPrivateFeatures({
 				topBar,
+				shellHosts: { above: stripHost, terminalRoot, below: viewsHost },
+				hideTerminal,
+				showTerminal,
+				terminalVisible: () => terminalShown,
 				activeGrid: () => activeGrid,
 				config: { get: () => window.wcc.getConfig(), set: (c) => window.wcc.setConfig(c) },
 				initialConfig: cfg,
 				toast,
 				promptForTopic,
+				promptForConfirm,
 				userData,
 				sidecarDir,
 				setSessionEnv: (p) => { sessionEnvProvider = p; },
@@ -222,6 +294,7 @@ async function main(): Promise<void> {
 		// Alt+↑ / Alt+↓ cycle WORKSPACES (Alt+←/→ cycle terminals within the active workspace).
 		// Capture-phase so it beats the terminal; only acts when there's more than one workspace.
 		document.addEventListener('keydown', (e) => {
+			if (!terminalShown) return; // an overlay surface is up: the terminal UI is hidden
 			if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
 			if (workspaces.length < 2) return;
 			e.preventDefault();
@@ -244,6 +317,8 @@ async function main(): Promise<void> {
 			if (phonePanel) { phonePanel.remove(); phonePanel = null; return; }
 			void window.wcc.remoteInfo().then((info) => {
 				phonePanel = appEl.createDiv({ cls: 'wcc-phone-panel' });
+				const btnRect = phoneBtn.getBoundingClientRect();
+				phonePanel.style.top = `${Math.round(btnRect.bottom + 6)}px`;
 				phonePanel.createDiv({ cls: 'wcc-phone-h', text: '📱 Phone floor view' });
 				phonePanel.createDiv({ cls: 'wcc-phone-sub', text: 'Open one of these on your phone (same Tailscale network):' });
 				for (const u of info.urls) phonePanel.createEl('div', { cls: 'wcc-phone-url', text: u });

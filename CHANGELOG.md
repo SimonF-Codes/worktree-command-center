@@ -5,6 +5,102 @@ landed on `main`.
 
 ## Unreleased
 
+## 0.3.0 — 2026-08-06
+
+**Synced with the upstream project** — merged 11 commits from the original repo
+(RonaldF444/worktree-command-center), covering its 2026-07-08..07-30 development window. Both
+forks had moved on independently since the 0.1.0 sync; everything below is upstream work now
+available here, reconciled with ours.
+
+**The floor got substantially faster under load**
+- Hidden and workspace-detached tiles stop parsing PTY output in real time. Only the CENTERED
+  tile is live; visible satellites batch on a 300ms cadence and hidden ones on 2s, with a flood
+  drop + resize-nudge re-emit so a suspended tile still shows the truth when you come back to
+  it. Several sessions streaming at once used to starve the renderer's event loop in sub-250ms
+  increments — measured as continuous heartbeat stalls.
+- Terminals now render through WebGL, cursor blink is off, and short deterministic commands
+  (git and friends) run on a dedicated worker thread. `spawn()`'s CreateProcess call blocks
+  whichever thread issues it (~50–100ms each with antivirus in the way): on the renderer that
+  stuttered painting, on main it delayed every input event. The worker absorbs it.
+- Chromium's native window-occlusion detection is disabled — it misfires on virtual display
+  adapters and throttled the renderer to ~1Hz while it thought the window was hidden.
+- The coordination-dir scan is rate-limited, and the renderer samples its own heap/DOM plus a
+  longtask/gap stall detector into `perf-log.jsonl`.
+
+**Ready queue is now first-finished-first-served**
+- Terminals that finish take the center in FIFO order and HOLD it, instead of the newest
+  finisher barging in. A 4s hands-off grace stops a steal while you're still reading; clicking
+  away demotes the held tile; cycling to the overview clears the queue and holds it there. Idle
+  re-fires can no longer resurrect the queue or steal the center.
+
+**Shell themes: Olympus, Hades, Iris**
+- A theme picker in the top bar, applied instantly and persisted. Each theme carries its own
+  terminal palette — light wells get heavier faces and a 3:1 contrast floor — and every live
+  terminal in every workspace re-tints on the spot. Tile and panel surfaces match their wells.
+
+**Alt+J opens a journal entry, F11 goes fullscreen**
+- Alt+J spawns a new journal tile from anywhere (auto-repeat ignored, so holding the keys can't
+  mass-create tiles). F11 toggles native fullscreen no matter which tile has focus, and ignores
+  modifier combos so Alt+F11 still jumps to the 11th tile's badge. Ctrl+1..9 are forwarded to
+  the renderer as shell shortcuts. All three are intercepted in the main process, so a focused
+  terminal (or an embedded webview) can't swallow them.
+
+**Kane survives restarts, and can build what the floor proves it needs**
+- The overseer console now resumes its conversation across app restarts (`--continue`; `/clear`
+  starts fresh) instead of coming back blank.
+- New opt-in charter: when `config.json` names the app's own source repo under `god.sourceRepo`,
+  Kane's prompt gains one scoped exception to acting-only-on-request — he may build concrete,
+  recurring-need integrations in a worktree of that source (tests green, merged locally, never
+  pushed, never reinstalled) or standalone tools in `god.toolsDir`, announcing each via
+  `cos-coord note`. His scoped settings pre-allow Edit/Write/git/npm/node so the loop doesn't
+  stall on a permission prompt per edit. Unconfigured, nothing changes.
+
+**Copy/paste fixed in the packaged app**
+- Clipboard now goes through the main process over IPC. Renderer-side `electron.clipboard` is
+  deprecated (removal planned for Electron 40) and `navigator.clipboard` fails silently without
+  focus/permission — which is exactly what happened in the installed build. One shared utility
+  replaces the duplicated helpers in the terminal tile and the overseer console.
+
+**The spotlight no longer bounces around on its own**
+- Claude Code turns on focus reporting (DECSET 1004), so xterm answered every focus and blur —
+  including the ones the grid itself caused by centering a tile — on the same channel as typing.
+  That read as "someone is working here", dropped the tile from the idle set, and the 1Hz
+  auto-center walked the spotlight from tile to tile with nobody at the keyboard. Focus reports,
+  mouse reports and DSR/DA/OSC/DCS replies are now separated from real keystrokes. Arrows,
+  F-keys, a bare Escape, backspace and bracketed paste still count as input, and every byte is
+  still forwarded to the PTY — Claude keeps receiving the reports it asked for.
+
+**Session records are no longer silently wiped**
+- Two stacked bugs could erase a whole workspace's session history. Persists now flow through a
+  single serialized chain with the state snapshot taken at write time, so a fire-and-forget
+  write mid-restore can't rewrite the group from a stale empty snapshot. And a record whose
+  worktree path fails `fs.access` is RETAINED and retried next launch instead of being pruned —
+  one launch with a moved repo or an unmounted drive used to delete it permanently. Each record
+  also restores inside its own try/catch, so one bad record can't abort the loop.
+
+**Our session settings no longer live inside your worktrees**
+- The hooks/permissions file we generate for each terminal is now written once beside the
+  sidecar and passed to each session with `claude --settings`, instead of being written into
+  every worktree as `.claude/settings.local.json`. A repo may legitimately track its own copy of
+  that file; writing ours on top clobbered the repo's config, left every worktree permanently
+  dirty with that one file, and let auto-parking commit its deletion onto the branch. Worktrees
+  created by earlier builds still get their leftover copy hidden via `.git/info/exclude`.
+
+**Fork reconciliation notes** (where the two forks disagreed)
+- Our generalized journal "Convert to…" destination picker is kept; upstream's hardcoded
+  Linear-only converter is not reinstated.
+- Our narrower node-pty packaging filter is kept — it's what fixed the macOS codesign failure,
+  and it produces a working Windows payload.
+- Alt+K, Alt+L and the new Alt+J all match on the physical key (`e.code`) rather than `e.key`,
+  because Option composes accented characters on macOS.
+- The overseer prompt now takes both our configurable overseer name and upstream's
+  self-improvement block, and the name is used inside that block too.
+- Our Cmd/Ctrl+R reload block, `claude`-not-on-PATH banner, DEV badge, per-tab attention markers
+  and revive-a-dead-session-on-keypress all survive the merge; the keypress revival is now gated
+  on real user input so a focus report can't revive a session by itself.
+- Upstream's temporary loopback `remote-debugging-port` (opened for its 2026-07-22 lag hunt) is
+  deliberately NOT carried over — a packaged build shouldn't ship a live DevTools listener.
+
 ## 0.2.0 — 2026-08-05
 
 **The dev build is now labelled, so you can tell it apart from the installed app**
