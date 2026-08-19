@@ -5,6 +5,40 @@ landed on `main`.
 
 ## Unreleased
 
+## 0.4.0 — 2026-08-19
+
+**Folders that aren't git repos can now be floor targets**
+- "Add folder" on a directory with no `.git` (and no git subdirectories) used to add nothing at
+  all and report it as a success — the picker closed, the count didn't move, and there was no
+  hint why. Such a folder is now added as a **folder target** in its own right, so a notes vault
+  or an asset directory can sit on the floor beside the git repos and get work done in it.
+- Discovery order is unchanged: a folder that IS a repo still wins, and pointing the picker at a
+  dev root still yields the git repos inside it rather than the parent.
+- A folder target's terminal runs directly in the folder — no worktree, no branch. The branch
+  picker shows an inert `(no branch — folder)`, `--base` is ignored, and the session's system
+  prompt tells it the truth: no isolation, other terminals may be editing the same files, so take
+  a `cos-coord` lock for batch edits.
+- Closing a folder terminal leaves the folder alone. The `×` button deletes a worktree and its
+  branch, and teardown auto-commits dirty worktrees — both would have targeted whatever repo
+  happened to contain the folder, so both now skip folder targets.
+
+**Toasts tell you what actually happened**
+- Only 1 of 36 toast call sites passed a variant, so "Couldn't create repo" and "Saved" rendered
+  as the same grey box. Every call site now carries a severity — success, error, warn or info —
+  with a coloured rail, and errors additionally get a faint red wash so a failure reads as one at
+  a glance.
+- Toasts were all positioned at the same fixed corner, so two fired close together rendered
+  exactly on top of each other and only the last was readable. They now stack: at most three are
+  shown, the rest wait behind a "+N more" pill, and a queued error is promoted ahead of queued
+  chatter rather than waiting its turn.
+- Repeated identical messages collapse into one toast with a ×N counter instead of filling all
+  three slots.
+- Lifetime scales with severity (info 3s → error 8s). Toasts are semi-transparent over a backdrop
+  blur so they never fully hide the terminal beneath; hovering makes one opaque and holds its
+  countdown, and clicking dismisses it.
+- Vague messages were reworded, not just recoloured: `Worktree failed: <msg>` now names the repo,
+  `Folder unreachable` says what to check, and `Format failed` says the journal is unchanged.
+
 ## 0.3.0 — 2026-08-06
 
 **Synced with the upstream project** — merged 11 commits from the original repo
