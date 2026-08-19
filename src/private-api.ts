@@ -1,4 +1,5 @@
 import type { TerminalsGrid } from './terminals/terminals-grid';
+import type { ToastVariant } from './ui/toast-queue';
 
 /** Extra env for spawned claude sessions, resolved per workspace at spawn time. */
 export type SessionEnvProvider = (ctx: { workspaceId: string }) => Record<string, string>;
@@ -22,7 +23,7 @@ export interface PrivateApi {
 	/** Startup config snapshot — lets the hook read config SYNCHRONOUSLY (the hook runs
 	 *  before the first mount; an async config read would race session restore). */
 	initialConfig: any;
-	toast: (msg: string) => void;
+	toast: (msg: string, variant?: ToastVariant) => void;
 	promptForTopic: (title: string, placeholder: string, initial?: string, okLabel?: string) => Promise<string | null>;
 	promptForConfirm: (title: string, body: string, okLabel?: string) => Promise<boolean>;
 	userData: string;

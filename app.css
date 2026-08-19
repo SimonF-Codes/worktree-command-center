@@ -541,3 +541,101 @@ html, body {
 	border: 1px solid #6d3fd1;
 	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6), 0 0 18px rgba(255, 79, 216, 0.25);
 }
+
+/* ── Toasts ───────────────────────────────────────────────────────────────────────
+   Bottom-right stack, newest at the bottom. At most three are rendered (toast-queue
+   enforces that); the rest wait behind a "+N more" pill.
+
+   Deliberately semi-transparent so a toast never fully hides the terminal underneath
+   it — the blur behind it is what keeps the text readable at that opacity. Hovering
+   makes a toast fully opaque AND holds its countdown, so anything you want to read
+   properly you can, without racing the timer. */
+.wcc-toast-host {
+	position: fixed;
+	right: 16px;
+	bottom: 16px;
+	z-index: 9999;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 8px;
+	max-width: min(380px, 40vw);
+	pointer-events: none; /* the gaps between toasts must not eat clicks meant for the app */
+}
+
+.wcc-toast {
+	pointer-events: auto;
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 8px 12px;
+	border-radius: 6px;
+	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--text-faint);
+	background: color-mix(in srgb, var(--background-secondary) 88%, transparent);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+	color: var(--text-normal);
+	font: 13px system-ui, -apple-system, 'Segoe UI', sans-serif;
+	line-height: 1.35;
+	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+	opacity: 0.82;
+	transition: opacity 120ms ease, transform 120ms ease;
+	animation: wcc-toast-in 140ms ease-out;
+	cursor: pointer;
+	overflow-wrap: anywhere; /* long paths in error toasts must wrap, not overflow */
+}
+
+.wcc-toast:hover {
+	opacity: 1;
+	transform: translateX(-2px);
+}
+
+.wcc-toast-msg { flex: 1 1 auto; }
+
+/* The ×N dedupe counter — present only when the same message arrived more than once. */
+.wcc-toast-count {
+	flex: 0 0 auto;
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	color: var(--text-faint);
+	background: var(--background-modifier-hover);
+	border-radius: 999px;
+	padding: 1px 6px;
+}
+
+.wcc-toast-success { border-left-color: var(--color-green); }
+.wcc-toast-error   { border-left-color: var(--color-red); }
+.wcc-toast-warn    { border-left-color: var(--color-yellow); }
+.wcc-toast-info    { border-left-color: var(--color-cyan); }
+
+/* Errors carry a faint wash of their colour as well as the rail: a failure should be
+   distinguishable from a success at a glance, not only by a 3px edge. */
+.wcc-toast-error {
+	background: color-mix(in srgb, var(--background-modifier-error) 42%, var(--background-secondary) 46%);
+	border-color: color-mix(in srgb, var(--color-red) 35%, var(--background-modifier-border));
+	opacity: 0.9; /* slightly more solid than the rest — it matters more */
+}
+
+.wcc-toast-more {
+	pointer-events: auto;
+	font: 11px system-ui, -apple-system, 'Segoe UI', sans-serif;
+	color: var(--text-muted);
+	background: color-mix(in srgb, var(--background-secondary) 80%, transparent);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	padding: 2px 10px;
+	opacity: 0.75;
+}
+
+@keyframes wcc-toast-in {
+	from { opacity: 0; transform: translateY(6px); }
+	to   { opacity: 0.82; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.wcc-toast { animation: none; transition: none; }
+	.wcc-toast:hover { transform: none; }
+}

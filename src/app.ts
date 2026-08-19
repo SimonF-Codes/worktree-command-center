@@ -286,7 +286,7 @@ async function main(): Promise<void> {
 				restartSessions: (ids) => { for (const id of ids) grids.get(id)?.restartSessions(); },
 			});
 		} catch (e) {
-			toast('Private features failed to load: ' + e);
+			toast(`Private features failed to load — the app still works without them: ${e}`, 'error');
 		}
 
 		await activeGrid.mount(gridContainer);
@@ -338,9 +338,9 @@ async function main(): Promise<void> {
 				grids.forEach((g) => g.setRepos(repos)); // every workspace shares the repo list
 				persist();
 				statusSpan.textContent = `${repos.length} targets · ${added} just added`;
-				if (added === 0) toast('Already added — nothing new');
-				else if (found.every((r) => r.folder)) toast(`Added folder "${found[0]!.name}" (no git — terminals run in it directly)`);
-				else toast(`Added ${added} repo(s)`);
+				if (added === 0) toast(`"${path.basename(folder)}" is already on the floor — nothing to add`, 'warn');
+				else if (found.every((r) => r.folder)) toast(`Added folder "${found[0]!.name}" — no git here, so its terminals run in the folder itself`, 'success');
+				else toast(`Added ${added} repo(s): ${found.slice(0, 3).map((r) => r.name).join(', ')}${added > 3 ? `, +${added - 3} more` : ''}`, 'success');
 			})();
 		});
 
@@ -353,14 +353,13 @@ async function main(): Promise<void> {
 				const name = await promptForTopic('New git repository', 'Name for the new repo', '', 'Create');
 				if (!name || !name.trim()) return;
 				const res = await createGitRepo(parent, name);
-				if (!res.ok) { toast(`Couldn't create repo: ${res.error}`); return; }
+				if (!res.ok) { toast(`Couldn't create repo "${name.trim()}": ${res.error}`, 'error'); return; }
 				repos = mergeRepos(repos, discoverRepos(res.path!));
 				grids.forEach((g) => g.setRepos(repos));
 				persist();
 				statusSpan.textContent = `${repos.length} repos · created ${name.trim()}`;
-				toast(res.committed
-					? `Created "${name.trim()}"`
-					: `Created "${name.trim()}" — set your git user.name/email and make a commit to use worktrees`);
+				if (res.committed) toast(`Created "${name.trim()}" — ready for worktrees`, 'success');
+				else toast(`Created "${name.trim()}", but it has no commit yet — set your git user.name/email and commit before using worktrees`, 'warn');
 			})();
 		});
 	} catch (e) {

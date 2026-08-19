@@ -224,7 +224,7 @@ export class TerminalsGrid {
 		const newBranchBtn = controls.createEl('button', { text: '+ New branch' });
 		newBranchBtn.addEventListener('click', () => {
 			void this.deps.promptForTopic('New branch', 'branch name (based on the selected branch)', '', 'Create').then((name) => {
-				if (name && name.trim()) { this.pendingNewBranch = name.trim(); this.deps.toast(`Next Play creates branch "${name.trim()}"`); }
+				if (name && name.trim()) { this.pendingNewBranch = name.trim(); this.deps.toast(`Next Play creates branch "${name.trim()}"`, 'info'); }
 			});
 		});
 
@@ -480,7 +480,7 @@ export class TerminalsGrid {
 		const repo = this.selectedRepo();
 		if (repo?.folder) { await this.spawnFolder(repo, {}); return; } // no branch to require
 		const base = this.branchSel?.value;
-		if (!repo || !base) { this.deps.toast('Pick a repo and branch first'); return; }
+		if (!repo || !base) { this.deps.toast('Pick a repo and branch first', 'warn'); return; }
 		await this.spawnWorktree(repo, base, {});
 	}
 
@@ -491,7 +491,7 @@ export class TerminalsGrid {
 		try {
 			await fs.access(repo.path); // a moved/unmounted folder should say so, not spawn into nothing
 		} catch {
-			this.deps.toast(`Folder unreachable: ${repo.path}`);
+			this.deps.toast(`Folder unreachable — ${repo.path} is missing or on a disconnected drive`, 'error');
 			return null;
 		}
 		const model = opts.model ?? (this.modelSel?.value || undefined);
@@ -524,7 +524,7 @@ export class TerminalsGrid {
 			this.applyLayout();
 			return tile;
 		} catch (e) {
-			this.deps.toast(`Worktree failed: ${(e as Error).message}`);
+			this.deps.toast(`Couldn't create a worktree in ${repo.name}: ${(e as Error).message}`, 'error');
 			return null;
 		}
 	}
@@ -603,20 +603,20 @@ export class TerminalsGrid {
 	 *  to open its download page rather than silently failing again. */
 	private async openInEditor(): Promise<void> {
 		const repo = this.selectedRepo();
-		if (!repo) { this.deps.toast('Pick a repo first'); return; }
+		if (!repo) { this.deps.toast('Pick a repo first', 'warn'); return; }
 
 		const cfg = await window.wcc.getConfig();
 		const savedId = typeof cfg.preferredEditorId === 'string' ? cfg.preferredEditorId : null;
 		const savedCustomCmd = typeof cfg.preferredEditorCustomCmd === 'string' ? cfg.preferredEditorCustomCmd : null;
 
-		if (savedId === 'file-browser') { revealInFileManager(repo.path); this.deps.toast(`Revealed ${repo.name}`); return; }
+		if (savedId === 'file-browser') { revealInFileManager(repo.path); this.deps.toast(`Revealed ${repo.name} in the file manager`, 'success'); return; }
 		if (savedId === 'custom' && savedCustomCmd) {
-			if (await this.trySpawnEditor(savedCustomCmd, [repo.path])) { this.deps.toast(`Opening ${repo.name}…`); return; }
+			if (await this.trySpawnEditor(savedCustomCmd, [repo.path])) { this.deps.toast(`Opening ${repo.name}…`, 'info'); return; }
 		} else if (savedId) {
 			const editor = EDITORS.find((e) => e.id === savedId);
 			const launch = editor ? resolveEditorCommand(editor, repo.path, process.platform) : null;
 			if (editor && launch && await this.trySpawnEditor(launch.cmd, launch.args)) {
-				this.deps.toast(`Opening ${repo.name} in ${editor.label}…`);
+				this.deps.toast(`Opening ${repo.name} in ${editor.label}…`, 'info');
 				return;
 			}
 		} else {
@@ -625,7 +625,7 @@ export class TerminalsGrid {
 			const vscode = EDITORS[0]!;
 			const launch = resolveEditorCommand(vscode, repo.path, process.platform);
 			if (launch && await this.trySpawnEditor(launch.cmd, launch.args)) {
-				this.deps.toast(`Opening ${repo.name} in ${vscode.label}…`);
+				this.deps.toast(`Opening ${repo.name} in ${vscode.label}…`, 'info');
 				await window.wcc.setConfig({ ...(await window.wcc.getConfig()), preferredEditorId: vscode.id });
 				return;
 			}
@@ -652,7 +652,7 @@ export class TerminalsGrid {
 		if (choice === FILE_BROWSER.id) {
 			revealInFileManager(repoPath);
 			await window.wcc.setConfig({ ...(await window.wcc.getConfig()), preferredEditorId: choice });
-			this.deps.toast(`Revealed ${repoName}`);
+			this.deps.toast(`Revealed ${repoName} in the file manager`, 'success');
 			return;
 		}
 
@@ -661,9 +661,9 @@ export class TerminalsGrid {
 			if (!cmd) return;
 			if (await this.trySpawnEditor(cmd, [repoPath])) {
 				await window.wcc.setConfig({ ...(await window.wcc.getConfig()), preferredEditorId: choice, preferredEditorCustomCmd: cmd });
-				this.deps.toast(`Opening ${repoName}…`);
+				this.deps.toast(`Opening ${repoName}…`, 'info');
 			} else {
-				this.deps.toast(`Couldn't run "${cmd}" — check the command and try again`);
+				this.deps.toast(`Couldn't run "${cmd}" — check the command in Settings and try again`, 'error');
 			}
 			return;
 		}
@@ -672,7 +672,7 @@ export class TerminalsGrid {
 		const launch = resolveEditorCommand(editor, repoPath, process.platform);
 		if (launch && await this.trySpawnEditor(launch.cmd, launch.args)) {
 			await window.wcc.setConfig({ ...(await window.wcc.getConfig()), preferredEditorId: choice });
-			this.deps.toast(`Opening ${repoName} in ${editor.label}…`);
+			this.deps.toast(`Opening ${repoName} in ${editor.label}…`, 'info');
 			return;
 		}
 
@@ -684,7 +684,7 @@ export class TerminalsGrid {
 			);
 			if (install) {
 				openExternalUrl(editor.downloadUrl);
-				this.deps.toast(`Opened the ${editor.label} download page — click View Code again once it's installed`);
+				this.deps.toast(`Opened the ${editor.label} download page — click View Code again once it's installed`, 'warn');
 			}
 		}
 	}
@@ -721,7 +721,7 @@ export class TerminalsGrid {
 	/** Open a chat tile in the stage over the selected terminals. */
 	private openChat(): void {
 		const selected = this.tiles.filter((t) => t.isSelected);
-		if (selected.length < 2) { this.deps.toast('Select at least 2 terminals first'); return; }
+		if (selected.length < 2) { this.deps.toast('Select at least 2 terminals first', 'warn'); return; }
 		const members = (selected as TerminalTile[]).map((t) => ({
 			name: t.name,
 			sendLine: (s: string) => t.sendLine(s),
@@ -1588,7 +1588,7 @@ export class TerminalsGrid {
 	/** Un-park a parked worktree (soft-reset / recreate folder) and attach a new tile for it. */
 	private async reopenAndOpen(branch: string): Promise<void> {
 		const entry = this.lastEntries.find((e) => e.branch === branch);
-		if (!entry) { this.deps.toast(`No scanned worktree for ${branch} — hit Refresh`); return; }
+		if (!entry) { this.deps.toast(`No scanned worktree for ${branch} — hit Refresh`, 'warn'); return; }
 		const repo = this.repos.find((r) => r.name === entry.repo);
 		if (!repo) return;
 		// Skip if a tile is already attached to this worktree.
