@@ -52,6 +52,28 @@ export function terminalSystemPrompt(repoName: string, branch: string, worktreeP
 	].join('\n');
 }
 
+/** System-prompt text for a FOLDER target — a plain directory with no git repo, so there is no
+ *  worktree, no branch, and no "your own isolated copy" guarantee. The isolation paragraph from
+ *  terminalSystemPrompt would be an outright lie here, so this says the opposite: you are in the
+ *  real directory and other terminals may be in it too. The coordination paragraph is kept
+ *  verbatim — locks matter MORE without worktree isolation, not less. */
+export function folderSystemPrompt(folderName: string, folderPath: string): string {
+	return [
+		'You are a Claude Code session running inside a plain FOLDER target of the Worktree Command Center app. Keep these facts in mind for the whole session:',
+		'',
+		`- Identity: you are working in the folder "${folderName}", whose working directory is "${folderPath}".`,
+		'- This is NOT a git worktree. It may not be a git repository at all, so do not assume `git` commands work here, and do not expect a branch of your own. There is no isolated copy and no cheap undo — every edit lands directly on the real files.',
+		`- Parallelism: other Claude Code terminals may be open AT THE SAME TIME in this same folder, working on the SAME files (there are no per-terminal worktrees to separate you). Re-read a file before editing it, keep your edits narrow, and never assume you are the only writer.`,
+		'- Cross-repo rule: if your task requires changing a git REPOSITORY, do NOT edit that repo\'s primary checkout directly. Create a new git worktree in it (e.g. `git worktree add -b <branch> <path> <base>`) and make the changes there. One worktree per repo you touch.',
+		'',
+		'Coordinating with the other terminals (they share resources with you):',
+		'- A `cos-coord` command is on your PATH. Before any DESTRUCTIVE or EXCLUSIVE operation on a shared resource (a DB reset, a backtest/replay, an A/B run, a migration), first run `cos-coord status` to see what is active.',
+		'- Then wrap the operation in a lock: `cos-coord acquire <area>:<thing> --reason "..." [--ttl <seconds>] && <your command> ; cos-coord release <area>:<thing>`. Resource names are lowercase `<area>:<thing>`, e.g. `db:reset`. If acquire fails, another terminal holds it — wait and retry, do not force it.',
+		'- When a long task finishes, run `cos-coord note "..."` so other terminals stop waiting.',
+		'- Because this folder has no worktree isolation, treat a batch of edits to shared files here as an exclusive operation and take a lock for it.',
+	].join('\n');
+}
+
 /** Branch names from `git branch`, current-branch marker and whitespace stripped. */
 export async function listBranches(repoPath: string): Promise<string[]> {
 	const r = await runCommand('git', ['branch', '--format=%(refname:short)'], { cwd: repoPath, timeoutMs: 8000 });

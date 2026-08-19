@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
-import { pickRepos, mergeRepos, type DirEntry } from '../src/workspace';
+import { pickRepos, mergeRepos, repoOptionLabel, type DirEntry } from '../src/workspace';
 
 describe('pickRepos', () => {
   it('returns a single entry named after the basename when the folder is itself a repo', () => {
@@ -33,20 +33,35 @@ describe('pickRepos', () => {
     expect(result[1]).toEqual({ name: 'repo-b', path: path.join(folder, 'repo-b') });
   });
 
-  it('returns empty array when folder is not a repo and no subdirs have .git', () => {
-    const folder = path.join('C:', 'Dev');
+  it('returns the folder itself as a folder target when neither it nor any subdir has .git', () => {
+    const folder = path.join('C:', 'Notes', 'inbox');
     const subdirs: DirEntry[] = [
       { name: 'folder-1', hasGit: false },
       { name: 'folder-2', hasGit: false },
     ];
     const result = pickRepos(folder, false, subdirs);
-    expect(result).toEqual([]);
+    expect(result).toEqual([{ name: 'inbox', path: folder, folder: true }]);
   });
 
-  it('returns empty array when folder is not a repo and subdirs list is empty', () => {
-    const folder = path.join('C:', 'Dev');
+  it('returns the folder itself as a folder target when it has no subdirs at all', () => {
+    const folder = path.join('C:', 'Notes', 'inbox');
     const result = pickRepos(folder, false, []);
-    expect(result).toEqual([]);
+    expect(result).toEqual([{ name: 'inbox', path: folder, folder: true }]);
+  });
+
+  it('prefers git subdirs over adding the parent as a folder target', () => {
+    const folder = path.join('C:', 'Dev');
+    const subdirs: DirEntry[] = [
+      { name: 'repo-a', hasGit: true },
+      { name: 'plain', hasGit: false },
+    ];
+    const result = pickRepos(folder, false, subdirs);
+    expect(result).toEqual([{ name: 'repo-a', path: path.join(folder, 'repo-a') }]);
+  });
+
+  it('does not mark a git repo as a folder target', () => {
+    const folder = path.join('C:', 'Dev', 'my-project');
+    expect(pickRepos(folder, true, [])[0]!.folder).toBeUndefined();
   });
 });
 
@@ -94,5 +109,15 @@ describe('mergeRepos', () => {
     const result = mergeRepos(existing, add);
     expect(result).toHaveLength(1);
     expect(result[0]!.name).toBe('repo-a');
+  });
+});
+
+describe('repoOptionLabel', () => {
+  it('marks folder targets so the empty branch picker is expected, not confusing', () => {
+    expect(repoOptionLabel({ name: 'notes', path: 'C:/notes', folder: true })).toBe('📁 notes');
+  });
+
+  it('leaves git repos unmarked', () => {
+    expect(repoOptionLabel({ name: 'my-app', path: 'C:/dev/my-app' })).toBe('my-app');
   });
 });

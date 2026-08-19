@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { SessionBridge, safeSessionEnv } from './session-bridge';
 import { readClipboardText, writeClipboardText } from './clipboard';
-import { removeWorktreeAndBranch, terminalSystemPrompt, worktreeSettingsPath, type WorktreeInfo } from './worktree-manager';
+import { removeWorktreeAndBranch, terminalSystemPrompt, folderSystemPrompt, worktreeSettingsPath, type WorktreeInfo } from './worktree-manager';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { FitThrottle } from './fit-throttle';
 import { HiddenOutputBuffer } from './hidden-buffer';
@@ -24,6 +24,10 @@ export interface TerminalTileOpts {
 	repoPath: string;
 	baseBranch: string;
 	worktree: WorktreeInfo;
+	/** FOLDER target: `worktree.worktreePath` is the user's real folder, not a worktree we made,
+	 *  and `worktree.branch` is ''. Everything that would DELETE or COMMIT on our behalf is
+	 *  skipped for these — see close() and the grid's parkAll/scanWorktrees. */
+	folder?: boolean;
 	sidecarPath: string;
 	coordDir: string;
 	sessionEnv?: () => Record<string, string>;
@@ -77,7 +81,8 @@ export class TerminalTile implements StageTile {
 	readonly isJournal = false;
 
 	constructor(private opts: TerminalTileOpts) {
-		this.displayName = opts.name ?? `${opts.repoName} · ${opts.worktree.branch}`;
+		// Folder targets have no branch, so "name · " with nothing after it would be the label.
+		this.displayName = opts.name ?? (opts.folder ? opts.repoName : `${opts.repoName} · ${opts.worktree.branch}`);
 	}
 
 	get tileId(): number { return this.opts.tileId; }
@@ -100,7 +105,9 @@ export class TerminalTile implements StageTile {
 		this.lockBtnEl.addEventListener('click', (e) => { e.stopPropagation(); this.opts.onLock?.(this); });
 		const hide = btns.createEl('button', { text: '–', cls: 'cos-term-hide', attr: { title: 'Hide — keeps the session running; resurface from Coordination' } });
 		hide.addEventListener('click', (e) => { e.stopPropagation(); this.opts.onHide?.(this); });
-		const close = btns.createEl('button', { text: '×', attr: { title: 'Close — deletes this worktree + its branch' } });
+		const close = btns.createEl('button', { text: '×', attr: { title: this.opts.folder
+			? 'Close — ends this session. The folder and its files are left alone.'
+			: 'Close — deletes this worktree + its branch' } });
 		close.addEventListener('click', (e) => { e.stopPropagation(); void this.close(); });
 		// Click anywhere in the tile (header or terminal body, except the × button) centers it.
 		this.el.addEventListener('click', () => this.opts.onCenter?.(this));
@@ -444,6 +451,8 @@ export class TerminalTile implements StageTile {
 
 	get worktreePath(): string { return this.opts.worktree.worktreePath; }
 	get branch(): string { return this.opts.worktree.branch; }
+	/** True for a plain-folder target — the grid uses this to skip git-only bookkeeping. */
+	get isFolder(): boolean { return this.opts.folder === true; }
 	get baseBranch(): string { return this.opts.baseBranch; }
 	get repoName(): string { return this.opts.repoName; }
 
@@ -510,7 +519,10 @@ export class TerminalTile implements StageTile {
 			const dir = path.join(path.dirname(this.opts.sidecarPath), 'contexts');
 			fs.mkdirSync(dir, { recursive: true });
 			const file = path.join(dir, `tile-${this.opts.tileId}.md`);
-			fs.writeFileSync(file, terminalSystemPrompt(this.opts.repoName, this.opts.worktree.branch, this.opts.worktree.worktreePath), 'utf8');
+			const prompt = this.opts.folder
+				? folderSystemPrompt(this.opts.repoName, this.opts.worktree.worktreePath)
+				: terminalSystemPrompt(this.opts.repoName, this.opts.worktree.branch, this.opts.worktree.worktreePath);
+			fs.writeFileSync(file, prompt, 'utf8');
 			return file;
 		} catch {
 			return null;
@@ -525,7 +537,7 @@ export class TerminalTile implements StageTile {
 	}
 
 	/** Serializable record for persistence. */
-	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; model?: string; effort?: string } {
+	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; folder?: boolean; model?: string; effort?: string } {
 		return {
 			worktreePath: this.opts.worktree.worktreePath,
 			branch: this.opts.worktree.branch,
@@ -533,6 +545,7 @@ export class TerminalTile implements StageTile {
 			repoPath: this.opts.repoPath,
 			baseBranch: this.opts.baseBranch,
 			name: this.displayName,
+			...(this.opts.folder ? { folder: true } : {}),
 			...(this.opts.model ? { model: this.opts.model } : {}),
 			...(this.opts.effort ? { effort: this.opts.effort } : {}),
 		};
@@ -559,12 +572,18 @@ export class TerminalTile implements StageTile {
 
 	/** Close from the × button: tear down AND delete the worktree + its branch IMMEDIATELY —
 	 *  no confirmation, dirty or not. × means "throw this away"; use Minimize (hide) to keep a
-	 *  session you care about. The branch dies with it. */
+	 *  session you care about. The branch dies with it.
+	 *
+	 *  FOLDER targets are the exception: that directory is the user's own, not a scratch copy we
+	 *  created, so × only ends the session. Deleting it (or a branch of whatever repo happens to
+	 *  contain it) would destroy real work. */
 	async close(): Promise<void> {
 		this.kill();
-		try {
-			await removeWorktreeAndBranch(this.opts.repoPath, this.opts.worktree.worktreePath, this.opts.worktree.branch);
-		} catch { /* best effort */ }
+		if (!this.opts.folder) {
+			try {
+				await removeWorktreeAndBranch(this.opts.repoPath, this.opts.worktree.worktreePath, this.opts.worktree.branch);
+			} catch { /* best effort */ }
+		}
 		this.opts.onClosed(this);
 	}
 

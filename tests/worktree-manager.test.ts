@@ -42,7 +42,7 @@ describe('shouldRemoveWorktree', () => {
 import * as fs from 'fs';
 import * as os from 'os';
 import * as nodePath from 'path';
-import { worktreeSettingsJson, worktreeSettingsPath, writeWorktreeSettings, terminalSystemPrompt } from '../src/terminals/worktree-manager';
+import { worktreeSettingsJson, worktreeSettingsPath, writeWorktreeSettings, terminalSystemPrompt, folderSystemPrompt } from '../src/terminals/worktree-manager';
 
 describe('terminalSystemPrompt', () => {
 	it('states identity, parallelism, and the cross-repo worktree rule', () => {
@@ -129,4 +129,29 @@ describe('writeWorktreeSettings', () => {
 		const second = fs.readFileSync(writeWorktreeSettings(sidecarDir, 'C:/p/n.cjs', 'C:/p/c.cjs'), 'utf8');
 		expect(second).toBe(first);
 	});
+});
+
+describe('folderSystemPrompt', () => {
+  it('states the folder name and working directory', () => {
+    const p = folderSystemPrompt('notes', 'C:/Users/me/notes');
+    expect(p).toContain('"notes"');
+    expect(p).toContain('C:/Users/me/notes');
+  });
+
+  it('does not claim a worktree or a branch the session does not have', () => {
+    const p = folderSystemPrompt('notes', 'C:/Users/me/notes');
+    expect(p).toContain('NOT a git worktree');
+    expect(p).not.toMatch(/on branch/i);
+  });
+
+  it('warns that other terminals may be editing the SAME files (no isolation)', () => {
+    const p = folderSystemPrompt('notes', 'C:/Users/me/notes');
+    expect(p).toContain('SAME files');
+  });
+
+  it('still carries the cos-coord locking protocol', () => {
+    const p = folderSystemPrompt('notes', 'C:/Users/me/notes');
+    expect(p).toContain('cos-coord status');
+    expect(p).toContain('cos-coord acquire');
+  });
 });

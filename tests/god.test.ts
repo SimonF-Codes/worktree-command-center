@@ -158,3 +158,15 @@ describe('remapWatchers', () => {
     expect(remapWatchers(ws, 'Z', 'C')).toEqual(ws);
   });
 });
+
+describe('godSystemPrompt folder targets', () => {
+  it('marks plain-folder targets in the roster so Kane does not offer them a --base', () => {
+    const p = godSystemPrompt([
+      { name: 'app', path: '/repos/app' },
+      { name: 'notes', path: '/notes', folder: true },
+    ], '/coord');
+    expect(p).toContain('- notes → /notes   [plain folder — no git]');
+    expect(p).toContain('- app → /repos/app\n'); // git repos stay unmarked
+    expect(p).toContain('--base is ignored');
+  });
+});

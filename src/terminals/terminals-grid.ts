@@ -4,6 +4,7 @@ import * as fsSync from 'fs';
 import * as path from 'path';
 import { listBranches, createWorktree, writeWorktreeSettings, ensureClaudeSettingsIgnored, defaultBranch, parkWorktree, reopenWorktree, type WorktreeInfo } from './worktree-manager';
 import { nextWorktreeBranch, parseWorktreeList, parseStatusPorcelain, parseAheadBehind, isParkCommitSubject, formatRegistryMarkdown, type WorktreeEntry } from './worktree-registry';
+import { repoOptionLabel } from '../workspace';
 import { runCommand } from '../command-runner';
 import type { TerminalPalette } from './theme-store';
 import { TerminalTile } from './terminal-tile';
@@ -30,7 +31,12 @@ import { ConvertProbe } from './convert-probe';
 import { vaultNoteFilename, vaultNoteContent, type ConvertDestination, type VaultDestination } from './convert-destinations';
 import type { StageTile } from './stage-tile';
 
-export interface RepoConfig { name: string; path: string; remote?: string; group?: string; }
+/** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
+ *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
+ *  worktree-backed default — so configs written before folder targets existed keep behaving
+ *  exactly as they did. */
+export interface RepoConfig { name: string; path: string; remote?: string; group?: string; folder?: boolean; }
+
 export interface RemoteTerminal { id: number; name: string; repo: string; branch: string; state: string; output: string; remoteOn: boolean; }
 
 export interface GridDeps {
@@ -49,7 +55,7 @@ export interface GridDeps {
 	promptForTopic: (title: string, placeholder: string, initial?: string, okLabel?: string) => Promise<string | null>;
 	openSettings: () => void;
 }
-interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; model?: string; effort?: string; }
+interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; folder?: boolean; model?: string; effort?: string; }
 
 // Model options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
 const SPAWN_MODELS: { label: string; value: string }[] = [
@@ -202,7 +208,7 @@ export class TerminalsGrid {
 		this.parentEl = parent;
 
 		this.repoSel = controls.createEl('select');
-		for (const r of this.repos) this.repoSel.createEl('option', { text: r.name, value: r.name });
+		for (const r of this.repos) this.repoSel.createEl('option', { text: repoOptionLabel(r), value: r.name });
 		this.repoSel.addEventListener('change', () => void this.refreshBranches());
 
 		this.branchSel = controls.createEl('select');
@@ -432,7 +438,7 @@ export class TerminalsGrid {
 		if (!this.repoSel) return;
 		const cur = this.repoSel.value;
 		this.repoSel.empty();
-		for (const r of this.repos) this.repoSel.createEl('option', { text: r.name, value: r.name });
+		for (const r of this.repos) this.repoSel.createEl('option', { text: repoOptionLabel(r), value: r.name });
 		if (this.repos.some((r) => r.name === cur)) this.repoSel.value = cur;
 		void this.refreshBranches();
 	}
@@ -456,6 +462,14 @@ export class TerminalsGrid {
 		this.branchSel.empty();
 		const repo = this.selectedRepo();
 		if (!repo) return;
+		if (repo.folder) {
+			// No git, so no branches to offer. Keep one inert placeholder rather than an empty
+			// select, so the toolbar doesn't look broken while a folder target is picked.
+			this.branchSel.createEl('option', { text: '(no branch — folder)', value: '' });
+			this.branchSel.disabled = true;
+			return;
+		}
+		this.branchSel.disabled = false;
 		const branches = await listBranches(repo.path);
 		for (const b of branches) this.branchSel.createEl('option', { text: b, value: b });
 		const def = defaultBranch(branches); // default to main / master, not git's first-listed
@@ -464,9 +478,31 @@ export class TerminalsGrid {
 
 	private async play(): Promise<void> {
 		const repo = this.selectedRepo();
+		if (repo?.folder) { await this.spawnFolder(repo, {}); return; } // no branch to require
 		const base = this.branchSel?.value;
 		if (!repo || !base) { this.deps.toast('Pick a repo and branch first'); return; }
 		await this.spawnWorktree(repo, base, {});
+	}
+
+	/** Spawn core for a FOLDER target: no `git worktree add`, no branch — the tile's working
+	 *  directory IS the folder. Mirrors spawnWorktree's tile/persist/layout tail so both kinds of
+	 *  terminal behave identically once they exist. */
+	private async spawnFolder(repo: RepoConfig, opts: { task?: string; model?: string; effort?: string; name?: string }): Promise<TerminalTile | null> {
+		try {
+			await fs.access(repo.path); // a moved/unmounted folder should say so, not spawn into nothing
+		} catch {
+			this.deps.toast(`Folder unreachable: ${repo.path}`);
+			return null;
+		}
+		const model = opts.model ?? (this.modelSel?.value || undefined);
+		const effort = opts.effort ?? (this.effortSel?.value || undefined);
+		const tile = this.makeTile({ worktreePath: repo.path, branch: '' }, repo.name, repo.path, '', false, opts.name, model, effort, true);
+		if (opts.task) this.pendingTask.set(tile.tileId, opts.task);
+		if (this.stageEl) tile.render(this.stageEl);
+		this.tiles.push(tile);
+		void this.persist();
+		this.applyLayout();
+		return tile;
 	}
 
 	/** Shared spawn core: create a worktree + tile, render, persist, layout. Optionally queue an
@@ -782,6 +818,7 @@ export class TerminalsGrid {
 		const repo = this.repos.find((r) => r.name === repoName)
 			?? this.repos.find((r) => r.name.toLowerCase() === repoName.toLowerCase());
 		if (!repo) return null;
+		if (repo.folder) return this.spawnFolder(repo, { task, model, effort, name }); // --base is meaningless here
 		const baseBranch = base ?? (defaultBranch(await listBranches(repo.path)) ?? 'main');
 		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name });
 	}
@@ -799,7 +836,7 @@ export class TerminalsGrid {
 		if (!this.godConsole) {
 			const godHomeDir = path.join(this.coordDir, '..', '.god', this.deps.group);
 			const kane: GodConsole = new GodConsole(
-				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, resume: true, onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
+				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, resume: true, onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
 				() => this.hideGod(),
 			);
 			this.godConsole = kane;
@@ -830,7 +867,7 @@ export class TerminalsGrid {
 		const godHomeDir = path.join(this.coordDir, '..', '.god', `${this.deps.group}-${n}`);
 		const kane = new GodConsole(
 			{
-				repos: this.repos.map((r) => ({ name: r.name, path: r.path })),
+				repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })),
 				coordDir: this.coordDir,
 				sidecarPath: this.sidecarPath,
 				godHomeDir,
@@ -1302,9 +1339,14 @@ export class TerminalsGrid {
 	private async closeHiddenTile(tileId: number): Promise<void> {
 		const tile = this.hidden.find((t) => t.tileId === tileId);
 		if (!tile) return;
+		// A folder target has no worktree/branch to remove, so promising to delete one would be
+		// both wrong and alarming — say what actually happens instead.
+		const isFolder = !tile.isJournal && (tile as TerminalTile).isFolder;
 		const ok = await promptForConfirm(
 			`Close "${tile.name}"?`,
-			`This kills the session and removes its worktree + branch (${tile.branch}). It can't be undone.`,
+			isFolder
+				? 'This kills the session. The folder and its files are left alone.'
+				: `This kills the session and removes its worktree + branch (${tile.branch}). It can't be undone.`,
 			'Close',
 		);
 		if (!ok) return;
@@ -1317,11 +1359,12 @@ export class TerminalsGrid {
 		this.board?.refresh();
 	}
 
-	/** Build a tile with all the grid callbacks wired. `resume` → claude --continue. */
-	private makeTile(worktree: WorktreeInfo, repoName: string, repoPath: string, baseBranch: string, resume: boolean, name?: string, model?: string, effort?: string): TerminalTile {
+	/** Build a tile with all the grid callbacks wired. `resume` → claude --continue.
+	 *  `folder` → a plain-folder target (no worktree, no branch). */
+	private makeTile(worktree: WorktreeInfo, repoName: string, repoPath: string, baseBranch: string, resume: boolean, name?: string, model?: string, effort?: string, folder?: boolean): TerminalTile {
 		return new TerminalTile({
 			tileId: this.nextTileId++,
-			repoName, repoPath, baseBranch, worktree,
+			repoName, repoPath, baseBranch, worktree, folder,
 			sidecarPath: this.sidecarPath,
 			coordDir: this.coordDir,
 			sessionEnv: this.deps.sessionEnv,
@@ -1448,7 +1491,7 @@ export class TerminalsGrid {
 			let exists = false;
 			try { await fs.access(rec.worktreePath); exists = true; } catch { exists = false; }
 			if (!exists) { this.unrestored.push(rec); return; } // retained — retried next launch
-			const tile = this.makeTile({ worktreePath: rec.worktreePath, branch: rec.branch }, rec.repoName, rec.repoPath, rec.baseBranch, true, rec.name, rec.model, rec.effort);
+			const tile = this.makeTile({ worktreePath: rec.worktreePath, branch: rec.branch }, rec.repoName, rec.repoPath, rec.baseBranch, true, rec.name, rec.model, rec.effort, rec.folder);
 			if (this.stageEl) tile.render(this.stageEl);
 			if (rec.hidden) { tile.setHidden(true); this.hidden.push(tile); }
 			else this.tiles.push(tile);
@@ -1481,6 +1524,9 @@ export class TerminalsGrid {
 		for (const t of [...this.tiles, ...this.hidden]) {
 			if (t.isJournal) continue; // journals have no worktree to park
 			const tt = t as TerminalTile;
+			// A folder target has no branch of its own. If it happens to sit inside somebody's
+			// repo, parking would `git add -A` + commit THEIR working tree — never do that.
+			if (tt.isFolder) continue;
 			try {
 				const action = await parkWorktree(tt.worktreePath, iso);
 				if (action === 'parked') {
@@ -1500,6 +1546,7 @@ export class TerminalsGrid {
 		const entries: WorktreeEntry[] = [];
 		const now = Date.now();
 		for (const repo of this.repos) {
+			if (repo.folder) continue; // no git → no worktrees to list, and nothing to exclude
 			if (!this.claudeSettingsIgnoredFor.has(repo.path)) {
 				this.claudeSettingsIgnoredFor.add(repo.path);
 				await ensureClaudeSettingsIgnored(repo.path); // before git status below, so this scan already reflects it

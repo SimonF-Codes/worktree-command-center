@@ -332,11 +332,15 @@ async function main(): Promise<void> {
 				const folder = await window.wcc.addFolder();
 				if (!folder) return;
 				const found = discoverRepos(folder);
+				const before = repos.length;
 				repos = mergeRepos(repos, found);
+				const added = repos.length - before; // `found` counts duplicates mergeRepos drops
 				grids.forEach((g) => g.setRepos(repos)); // every workspace shares the repo list
 				persist();
-				statusSpan.textContent = `${repos.length} repos · ${found.length} just added`;
-				toast(`Added ${found.length} repo(s)`);
+				statusSpan.textContent = `${repos.length} targets · ${added} just added`;
+				if (added === 0) toast('Already added — nothing new');
+				else if (found.every((r) => r.folder)) toast(`Added folder "${found[0]!.name}" (no git — terminals run in it directly)`);
+				else toast(`Added ${added} repo(s)`);
 			})();
 		});
 

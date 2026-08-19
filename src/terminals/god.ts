@@ -94,7 +94,7 @@ export function formatFloorIndex(tiles: FloorTile[]): string {
 	return lines.join('\n') + '\n';
 }
 
-export interface GodRepo { name: string; path: string; }
+export interface GodRepo { name: string; path: string; folder?: boolean; }
 
 /** Where Kane may improve himself: the app's own source repo + a dir for standalone tools. */
 export interface GodSelfImprove { sourceRepo: string; toolsDir: string; }
@@ -112,8 +112,8 @@ export function parseGodSelfImprove(v: unknown): { sourceRepo: string; toolsDir:
 /** GOD's appended system prompt — the entire control surface for "overseer, not boss". */
 export function godSystemPrompt(repos: GodRepo[], coordDir: string, overseerName = 'Kane', selfImprove?: GodSelfImprove): string {
 	const repoLines = repos.length
-		? repos.map((r) => `  - ${r.name} → ${r.path}`).join('\n')
-		: '  (no repos added yet)';
+		? repos.map((r) => `  - ${r.name} → ${r.path}${r.folder ? '   [plain folder — no git]' : ''}`).join('\n')
+		: '  (no targets added yet)';
 	const selfImproveLines = selfImprove ? [
 		'',
 		'SELF-IMPROVEMENT (the one standing exception to acting-only-on-request):',
@@ -159,14 +159,16 @@ export function godSystemPrompt(repos: GodRepo[], coordDir: string, overseerName
 		'  - To open a NEW worktree terminal and start it on a task, run:',
 		'    cos-coord spawn "<repo>" --base "<branch>" --task "<first instruction>" [--model <alias-or-id>] [--effort low|medium|high|xhigh|max|ultracode] [--name "<terminal name>"]',
 		'    --base is optional (defaults to the repo\'s main). --model takes an alias (opus, sonnet, haiku,',
-		'    fable) or a full model id. Flags you omit inherit the user\'s toolbar dropdowns. Repo names +',
+		'    fable) or a full model id. Flags you omit inherit the user\'s toolbar dropdowns. Target names +',
 		'    paths are listed below.',
+		'    A target marked [plain folder — no git] is NOT a repo: its terminal runs directly in that',
+		'    folder with no worktree and no branch, so --base is ignored and edits there are not isolated.',
 		'  - To rename a worker terminal, run:  cos-coord rename "<exact terminal name>" --to "<new name>"',
 		'  - To change code in a repo, cd into its path below. Do NOT edit a repo\'s primary checkout',
 		'    directly — create a git worktree for your change, the same rule the worker terminals follow.',
 		'  - Destructive actions will prompt you for permission right here in this console; that is expected.',
 		'',
-		'REPOS ON THE FLOOR (name → path):',
+		'TARGETS ON THE FLOOR (name → path):',
 		repoLines,
 		...selfImproveLines,
 	].join('\n');
