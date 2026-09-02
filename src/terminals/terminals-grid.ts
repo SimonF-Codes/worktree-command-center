@@ -978,10 +978,18 @@ export class TerminalsGrid {
 		} catch { /* best effort */ }
 	}
 
-	/** The repo name a session belongs to (matches the scan/registry mapping). */
+	/** The repo name a session belongs to (matches the scan/registry mapping).
+	 *
+	 *  The tile CARRIES the target it was spawned from, and persists it, so trust that first.
+	 *  Resolving only through the worktree scan reported '?' for any tile newer than the last
+	 *  sweep (it runs every 30s) — and permanently for folder targets, which scanWorktrees skips
+	 *  entirely because they have no worktrees to list. The scan stays as the fallback for a
+	 *  record restored without a repo name. */
 	private repoNameFor(t: StageTile): string {
 		if (t.isJournal) return 'journal';
-		const e = this.lastEntries.find((x) => path.resolve(x.path) === path.resolve((t as TerminalTile).worktreePath));
+		const tt = t as TerminalTile;
+		if (tt.repoName) return tt.repoName;
+		const e = this.lastEntries.find((x) => path.resolve(x.path) === path.resolve(tt.worktreePath));
 		return e ? e.repo : '?';
 	}
 
