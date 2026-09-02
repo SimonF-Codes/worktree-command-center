@@ -5,6 +5,40 @@ landed on `main`.
 
 ## Unreleased
 
+## 0.5.0 — 2026-09-02
+
+**Your tab settings stay put**
+- The repo/branch/model/effort dropdowns were rebuilt from scratch every time a workspace
+  mounted, so leaving a tab and coming back silently re-pointed ▶ Play at the first repo in the
+  list and main/master — and an app restart did the same. Each tab now remembers its own
+  selection in `config.json` and restores it on mount. A remembered branch that has since been
+  deleted falls back to main/master rather than sticking.
+- A repo can now belong to one workspace. `RepoConfig.group` had been in the type since the
+  beginning with nothing reading it, so every tab offered every target; it is honoured now. A
+  repo with no `group` still appears in every tab — which is every existing config — so nothing
+  changes until you deliberately assign one (by hand in `config.json`; there is no UI yet).
+- Closing a workspace now forgets its sessions bucket and its toolbar state instead of leaving
+  them in the files forever.
+
+**Settings stop losing each other**
+- Config writes were fire-and-forget read-then-write pairs, so two overlapping saves — a theme
+  change and a tab add, say — both read the old config and the slower one wrote its stale copy
+  last, silently reverting the other. Writes are serialized now. This is the same race that had
+  already been fixed for the sessions file after it cost a workspace every terminal record; the
+  config file never got the same treatment.
+
+**A blank restored terminal now tells you why**
+- When a restored tile's `claude --continue` finds no conversation, it clears itself and starts
+  a fresh session in place. It did that silently, so a terminal whose transcript was gone looked
+  exactly like one that had started broken — right name, right branch, empty prompt, no
+  explanation. It now says so on the first line. The behaviour is unchanged; it just stopped
+  being invisible.
+
+**The overseer sees the right repo**
+- Terminals newer than the last worktree sweep (it runs every 30s) were reported to the overseer
+  as repo `?`. Folder targets would have been `?` permanently, since the sweep skips them
+  entirely. The floor roster now uses the target the tile actually carries.
+
 ## 0.4.0 — 2026-08-19
 
 **Folders that aren't git repos can now be floor targets**
