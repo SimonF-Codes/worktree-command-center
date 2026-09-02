@@ -10,7 +10,7 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs",
     "start": "npm run build && electron .",
     "test": "vitest run",
-    "dist": "node scripts/check-no-private.mjs && npm run build && electron-builder --win",
+    "dist": "node scripts/check-no-private.mjs && npm run build && electron-builder --win --publish never",
     "dist:mac": "node scripts/check-no-private.mjs && npm run build && electron-builder --mac",
     "install-local": "node scripts/install-local.mjs"
   },

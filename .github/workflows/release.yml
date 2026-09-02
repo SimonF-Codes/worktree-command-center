@@ -61,6 +61,10 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # `npm run dist` passes --publish never. electron-builder's default publish policy is
+      # onTagOrDraft, so on a tag build it tried to create the GitHub Release itself and died
+      # with "GitHub Personal Access Token is not set" — which is what failed every release
+      # from v0.2.0 on. Publishing is the next step's job, not electron-builder's.
       - name: Package (electron-builder --win)
         run: npm run dist
       - name: Publish GitHub Release with installer
