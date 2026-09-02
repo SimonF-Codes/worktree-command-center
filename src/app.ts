@@ -4,6 +4,7 @@ import { promptForTopic, promptForConfirm } from './ui/prompt-dialog';
 import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/terminals-grid';
 import { parseGodSelfImprove } from './terminals/god';
 import { discoverRepos, mergeRepos } from './workspace';
+import { SerialWriter } from './serial-writer';
 import { createGitRepo } from './create-repo';
 import { UsageProbe } from './terminals/usage-probe';
 import { UsageWidget } from './ui/usage-widget';
@@ -169,7 +170,18 @@ async function main(): Promise<void> {
 
 		// Merge over a FRESH read: other writers (e.g. the private overlay via PrivateApi.config.set)
 		// must not have their keys clobbered by this startup-snapshot spread.
-		const persist = (): void => void window.wcc.getConfig().then((fresh) => window.wcc.setConfig({ ...fresh, repos, workspaces, activeWorkspace: activeId, theme: themeId }));
+		//
+		// SERIALIZED (see SerialWriter): this used to be a bare fire-and-forget read-then-write, so
+		// two overlapping persists — a theme change and a tab add, say — both read the old config
+		// and the slower one wrote its stale snapshot last, silently reverting the other. That is
+		// the same race TerminalsGrid.persistChain was added to fix for the sessions file after it
+		// cost CARDTSAR every terminal record; config.json never got the same treatment. Snapshot
+		// the mutable state INSIDE the job so the last queued write is the newest one.
+		const configWriter = new SerialWriter();
+		const persist = (): void => void configWriter.push(async () => {
+			const fresh = await window.wcc.getConfig();
+			await window.wcc.setConfig({ ...fresh, repos, workspaces, activeWorkspace: activeId, theme: themeId });
+		});
 
 		// Attention queue reads whichever grid is ACTIVE (closures over the mutable activeGrid).
 		const attention = new AttentionWidget(() => activeGrid.attentionItems(), (tileId) => activeGrid.revealTile(tileId));
