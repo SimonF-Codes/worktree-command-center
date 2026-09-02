@@ -5,6 +5,15 @@ landed on `main`.
 
 ## Unreleased
 
+**A restored terminal that lost its conversation now actually tells you**
+- 0.5.0 made the tile print a line when `--continue` found nothing to resume and it fell back to
+  a fresh session. That line never survived: the replacement `claude` starts immediately after
+  and repaints the whole screen over it, so the notice was gone before it could be read — the
+  floor snapshot caught it mid-collision with the new banner. The symptom it was meant to
+  explain (a blank welcome screen that looks exactly like a broken start) was unchanged.
+- The notice now goes to a toast instead, which nothing in the session can repaint. Anything
+  written into a tile belongs to the TUI running in it; this belongs outside.
+
 ## 0.6.0 — 2026-09-02
 
 **The model picker is current, and stays current**

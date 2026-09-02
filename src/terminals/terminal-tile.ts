@@ -39,6 +39,9 @@ export interface TerminalTileOpts {
 	onEnter?: (tile: TerminalTile) => void;
 	onFocusChange?: (tile: TerminalTile, focused: boolean) => void;
 	onReady?: (tile: TerminalTile) => void;
+	/** Fired when a resume found no conversation and the tile fell back to a fresh session.
+	 *  Reported OUTSIDE the terminal — see startSession's fallback branch for why. */
+	onFreshFallback?: (tile: TerminalTile) => void;
 	resume?: boolean;
 	bypassPermissions?: boolean;
 	model?: string;
@@ -622,10 +625,13 @@ export class TerminalTile implements StageTile {
 			if (fallbackFresh && /no\s*conversation\s*found\s*to\s*continue/i.test(stripAnsi(probe))) {
 				this.hiddenBuf.clear();      // stale pre-reset output must not replay after the reset
 				this.term?.reset();          // --continue had nothing to resume → start fresh in place
-				// ...and SAY so. Swapping in a blank session silently made a restored tile whose
-				// transcript was gone look identical to one that had started broken: right name,
-				// right branch, empty prompt, no explanation anywhere. State it instead.
-				this.writeOut('\r\n[no saved conversation found for this worktree — started a fresh session]\r\n');
+				// ...and SAY so, but NOT into the terminal. Writing the notice here looked right and
+				// did nothing: the fresh `claude` starting immediately below repaints the whole
+				// screen over it, so the line was gone before anyone could read it (the floor
+				// snapshot caught it mid-collision). Anything written into a tile is the running
+				// TUI's to overwrite. Report it on a surface the session cannot repaint — the grid
+				// raises a toast — and leave the terminal to claude.
+				this.opts.onFreshFallback?.(this);
 				this.startSession(false);
 				return;
 			}

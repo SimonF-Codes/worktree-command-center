@@ -1420,6 +1420,9 @@ export class TerminalsGrid {
 			onLock: (t) => this.toggleLockById(t.tileId),
 			onCenter: (t) => this.handleClick(t.tileId),
 			onReady: (t) => this.handleReady(t),
+			// A restored tile whose transcript is gone comes back as a blank welcome screen that
+			// looks exactly like a broken start. Say so where the new session can't paint over it.
+			onFreshFallback: (t) => this.deps.toast(`${t.name} — no saved conversation to resume, so it started fresh`, 'warn'),
 			onInput: (t, data) => { this.idleTiles.delete(t.tileId); this.lastActivityAt = Date.now(); this.q.composingLen = applyKeystroke(this.q.composingLen, data); },
 			onEnter: (t) => this.handleSubmit(t),
 			// Reset the typing-hold on ANY focus change: gaining focus starts a fresh box,
