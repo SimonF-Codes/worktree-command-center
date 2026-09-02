@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
-import { pickRepos, mergeRepos, repoOptionLabel, type DirEntry } from '../src/workspace';
+import { pickRepos, mergeRepos, repoOptionLabel, reposForWorkspace, type DirEntry } from '../src/workspace';
+import type { RepoConfig } from '../src/terminals/terminals-grid';
 
 describe('pickRepos', () => {
   it('returns a single entry named after the basename when the folder is itself a repo', () => {
@@ -119,5 +120,28 @@ describe('repoOptionLabel', () => {
 
   it('leaves git repos unmarked', () => {
     expect(repoOptionLabel({ name: 'my-app', path: 'C:/dev/my-app' })).toBe('my-app');
+  });
+});
+
+describe('reposForWorkspace', () => {
+  const repos: RepoConfig[] = [
+    { name: 'Shared', path: '/s' },
+    { name: 'OnlyA', path: '/a', group: 'a' },
+    { name: 'OnlyB', path: '/b', group: 'b' },
+  ];
+
+  it('shows ungrouped repos in every workspace', () => {
+    expect(reposForWorkspace(repos, 'a').map((r) => r.name)).toContain('Shared');
+    expect(reposForWorkspace(repos, 'b').map((r) => r.name)).toContain('Shared');
+  });
+
+  it('shows a grouped repo only in its own workspace', () => {
+    expect(reposForWorkspace(repos, 'a').map((r) => r.name)).toEqual(['Shared', 'OnlyA']);
+    expect(reposForWorkspace(repos, 'b').map((r) => r.name)).toEqual(['Shared', 'OnlyB']);
+  });
+
+  it('is a no-op for configs where nothing is grouped (every existing config)', () => {
+    const plain: RepoConfig[] = [{ name: 'X', path: '/x' }, { name: 'Y', path: '/y' }];
+    expect(reposForWorkspace(plain, 'anything')).toEqual(plain);
   });
 });

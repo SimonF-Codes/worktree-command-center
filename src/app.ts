@@ -3,8 +3,9 @@ import { toast } from './ui/toast';
 import { promptForTopic, promptForConfirm } from './ui/prompt-dialog';
 import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/terminals-grid';
 import { parseGodSelfImprove } from './terminals/god';
-import { discoverRepos, mergeRepos } from './workspace';
+import { discoverRepos, mergeRepos, reposForWorkspace } from './workspace';
 import { SerialWriter } from './serial-writer';
+import { normalizeToolbars, setToolbarState, pruneToolbars, type WorkspaceToolbars } from './terminals/toolbar-state';
 import { createGitRepo } from './create-repo';
 import { UsageProbe } from './terminals/usage-probe';
 import { UsageWidget } from './ui/usage-widget';
@@ -110,6 +111,9 @@ async function main(): Promise<void> {
 
 		// --- workspaces ---
 		let workspaces: Workspace[] = normalizeWorkspaces(cfg.workspaces);
+		// Per-tab spawn-toolbar selection (toolbar-state.ts). Pruned to live workspaces on load so
+		// a config that accumulated entries for deleted tabs cleans itself up.
+		let workspaceToolbars: WorkspaceToolbars = pruneToolbars(normalizeToolbars(cfg.workspaceToolbars), workspaces.map((w) => w.id));
 		let activeId = workspaces.some((w) => w.id === cfg.activeWorkspace) ? (cfg.activeWorkspace as string) : workspaces[0]!.id;
 		const grids = new Map<string, TerminalsGrid>();
 
@@ -146,8 +150,12 @@ async function main(): Promise<void> {
 		const godSelfImprove = siCfg ? { sourceRepo: siCfg.sourceRepo, toolsDir: siCfg.toolsDir ?? path.join(os.homedir(), 'kane-tools') } : undefined;
 
 		const depsFor = (id: string): GridDeps => ({
-			repos,
+			// Scoped, not the whole list: a repo tagged with a `group` belongs to that workspace
+			// alone. Untagged repos (every existing config) still appear everywhere.
+			repos: reposForWorkspace(repos, id),
 			group: id,
+			initialToolbar: workspaceToolbars[id],
+			onToolbarChange: (state) => { workspaceToolbars = setToolbarState(workspaceToolbars, id, state); persist(); },
 			coordDir: path.join(userData, '.coordination', id),
 			sidecarPath: path.join(sidecarDir, 'sidecar.cjs'),
 			notifyScriptPath: path.join(sidecarDir, 'notify-ready.cjs'),
@@ -180,7 +188,7 @@ async function main(): Promise<void> {
 		const configWriter = new SerialWriter();
 		const persist = (): void => void configWriter.push(async () => {
 			const fresh = await window.wcc.getConfig();
-			await window.wcc.setConfig({ ...fresh, repos, workspaces, activeWorkspace: activeId, theme: themeId });
+			await window.wcc.setConfig({ ...fresh, repos, workspaces, activeWorkspace: activeId, theme: themeId, workspaceToolbars });
 		});
 
 		// Attention queue reads whichever grid is ACTIVE (closures over the mutable activeGrid).
@@ -270,6 +278,11 @@ async function main(): Promise<void> {
 			g?.dispose();
 			grids.delete(id);
 			workspaces = closeWorkspace(workspaces, id);
+			// Closing a tab used to leave its sessions bucket and its toolbar state behind for
+			// good — the live sessions file still carries a `test-2` bucket for a tab deleted
+			// weeks ago. Clean up both now that the workspace is really gone.
+			void TerminalsGrid.forgetGroup(path.join(userData, '.terminal-sessions.json'), id);
+			workspaceToolbars = pruneToolbars(workspaceToolbars, workspaces.map((w) => w.id));
 			if (id === activeId) { void switchTo(target); } else { persist(); bar.refresh(); }
 		}
 
@@ -347,7 +360,8 @@ async function main(): Promise<void> {
 				const before = repos.length;
 				repos = mergeRepos(repos, found);
 				const added = repos.length - before; // `found` counts duplicates mergeRepos drops
-				grids.forEach((g) => g.setRepos(repos)); // every workspace shares the repo list
+				// Each grid gets its OWN scoped view of the list (untagged repos go everywhere).
+				grids.forEach((g, id) => g.setRepos(reposForWorkspace(repos, id)));
 				persist();
 				statusSpan.textContent = `${repos.length} targets · ${added} just added`;
 				if (added === 0) toast(`"${path.basename(folder)}" is already on the floor — nothing to add`, 'warn');
@@ -367,7 +381,7 @@ async function main(): Promise<void> {
 				const res = await createGitRepo(parent, name);
 				if (!res.ok) { toast(`Couldn't create repo "${name.trim()}": ${res.error}`, 'error'); return; }
 				repos = mergeRepos(repos, discoverRepos(res.path!));
-				grids.forEach((g) => g.setRepos(repos));
+				grids.forEach((g, id) => g.setRepos(reposForWorkspace(repos, id)));
 				persist();
 				statusSpan.textContent = `${repos.length} repos · created ${name.trim()}`;
 				if (res.committed) toast(`Created "${name.trim()}" — ready for worktrees`, 'success');

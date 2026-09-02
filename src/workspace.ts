@@ -45,3 +45,14 @@ export function mergeRepos(existing: RepoConfig[], add: RepoConfig[]): RepoConfi
   const seen = new Set(existing.map((r) => path.resolve(r.path)));
   return [...existing, ...add.filter((r) => !seen.has(path.resolve(r.path)))];
 }
+
+/** The targets a given workspace tab should offer.
+ *
+ *  `RepoConfig.group` has been in the type since the beginning but nothing ever read it, so
+ *  every tab showed every repo and a workspace scoped only its terminals. Honouring it here
+ *  makes a tab able to narrow to its own targets. An ungrouped repo (no `group`) stays visible
+ *  everywhere, which is what every existing config has — so this changes nothing until a repo
+ *  is deliberately assigned to a workspace. */
+export function reposForWorkspace(repos: RepoConfig[], workspaceId: string): RepoConfig[] {
+  return repos.filter((r) => !r.group || r.group === workspaceId);
+}

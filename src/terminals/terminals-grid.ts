@@ -18,6 +18,7 @@ import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabe
 import { emptyState, applyKeystroke, onReady as rqReady, onSubmit as rqSubmit, onClose as rqClose, onClick as rqClick, onOverview as rqOverview } from './ready-queue';
 import { decideCenter, type SpotlightState } from './focus-decider';
 import { partitionByHidden } from './session-partition';
+import { normalizeToolbarState, type ToolbarState } from './toolbar-state';
 import { GodConsole } from './god-console';
 import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, EFFORT_LEVELS, type OutboxMessage, type GodSelfImprove } from './god';
 import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
@@ -54,6 +55,10 @@ export interface GridDeps {
 	toast: (msg: string, variant?: ToastVariant) => void;
 	promptForTopic: (title: string, placeholder: string, initial?: string, okLabel?: string) => Promise<string | null>;
 	openSettings: () => void;
+	/** This workspace's remembered spawn-toolbar selection, restored on mount. */
+	initialToolbar?: ToolbarState;
+	/** Called when the user changes a toolbar dropdown, so the app can persist it per workspace. */
+	onToolbarChange?: (state: ToolbarState) => void;
 }
 interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; folder?: boolean; model?: string; effort?: string; }
 
@@ -92,6 +97,8 @@ const KANE_PULSE = '[pulse] One line, in character: what\'s the floor doing righ
 /** Controls bar + a bubbling stage of embedded claude terminals, scoped to one repo group. */
 export class TerminalsGrid {
 	private repos: RepoConfig[] = [];
+	/** Remembered dropdown selection for THIS workspace (toolbar-state.ts). */
+	private toolbar: ToolbarState = {};
 	private repoSel: HTMLSelectElement | null = null;
 	private branchSel: HTMLSelectElement | null = null;
 	private modelSel: HTMLSelectElement | null = null;
@@ -165,6 +172,7 @@ export class TerminalsGrid {
 
 	constructor(private deps: GridDeps) {
 		this.overseerName = (deps.overseerName && deps.overseerName.trim()) || 'Kane';
+		this.toolbar = normalizeToolbarState(deps.initialToolbar);
 		this.sidecarPath = deps.sidecarPath;
 		this.notifyScriptPath = deps.notifyScriptPath;
 		this.sessionsFile = deps.sessionsFile;
@@ -207,19 +215,30 @@ export class TerminalsGrid {
 		this.controlsEl = controls;
 		this.parentEl = parent;
 
+		// Restore this tab's remembered selection as each select is built. Sessions already
+		// survived a tab switch; the toolbar did not, so returning to a tab silently re-pointed
+		// Play at the first repo in the list and main/master.
+		const saved = this.toolbar;
+
 		this.repoSel = controls.createEl('select');
 		for (const r of this.repos) this.repoSel.createEl('option', { text: repoOptionLabel(r), value: r.name });
-		this.repoSel.addEventListener('change', () => void this.refreshBranches());
+		if (saved.repo && this.repos.some((r) => r.name === saved.repo)) this.repoSel.value = saved.repo;
+		this.repoSel.addEventListener('change', () => { this.rememberToolbar(); void this.refreshBranches(); });
 
 		this.branchSel = controls.createEl('select');
+		this.branchSel.addEventListener('change', () => this.rememberToolbar());
 
 		this.modelSel = controls.createEl('select');
 		this.modelSel.title = 'Model for new terminals';
 		for (const m of SPAWN_MODELS) this.modelSel.createEl('option', { text: m.label, value: m.value });
+		if (saved.model && SPAWN_MODELS.some((m) => m.value === saved.model)) this.modelSel.value = saved.model;
+		this.modelSel.addEventListener('change', () => this.rememberToolbar());
 
 		this.effortSel = controls.createEl('select');
 		this.effortSel.title = 'Effort for new terminals';
 		for (const m of SPAWN_EFFORTS) this.effortSel.createEl('option', { text: m.label, value: m.value });
+		if (saved.effort && SPAWN_EFFORTS.some((m) => m.value === saved.effort)) this.effortSel.value = saved.effort;
+		this.effortSel.addEventListener('change', () => this.rememberToolbar());
 
 		const newBranchBtn = controls.createEl('button', { text: '+ New branch' });
 		newBranchBtn.addEventListener('click', () => {
@@ -467,13 +486,32 @@ export class TerminalsGrid {
 			// select, so the toolbar doesn't look broken while a folder target is picked.
 			this.branchSel.createEl('option', { text: '(no branch — folder)', value: '' });
 			this.branchSel.disabled = true;
+			this.rememberToolbar();
 			return;
 		}
 		this.branchSel.disabled = false;
 		const branches = await listBranches(repo.path);
 		for (const b of branches) this.branchSel.createEl('option', { text: b, value: b });
+		// The branch this tab was left on wins; main/master is the fallback for a first visit,
+		// or for a remembered branch that has since been deleted.
 		const def = defaultBranch(branches); // default to main / master, not git's first-listed
-		if (def) this.branchSel.value = def;
+		if (this.toolbar.branch && branches.includes(this.toolbar.branch)) this.branchSel.value = this.toolbar.branch;
+		else if (def) this.branchSel.value = def;
+		this.rememberToolbar();
+	}
+
+	/** Snapshot the four dropdowns into this workspace's remembered state and hand it up to be
+	 *  persisted. Called on every change and after each branch refresh — a human changes these
+	 *  rarely, and the app's config writer serializes the resulting writes. */
+	private rememberToolbar(): void {
+		const next = normalizeToolbarState({
+			repo: this.repoSel?.value,
+			branch: this.branchSel?.value,
+			model: this.modelSel?.value,
+			effort: this.effortSel?.value,
+		});
+		this.toolbar = next;
+		this.deps.onToolbarChange?.(next);
 	}
 
 	private async play(): Promise<void> {
@@ -1421,6 +1459,22 @@ export class TerminalsGrid {
 	/** Persist THIS group's currently-open sessions (called on play + on close). */
 	private persist(): Promise<void> {
 		const run = TerminalsGrid.persistChain.then(() => this.persistNow()).catch(() => { /* best effort */ });
+		TerminalsGrid.persistChain = run;
+		return run;
+	}
+
+	/** Drop a workspace's session bucket when its tab is closed. Closing a workspace removed the
+	 *  tab but left its records in the sessions file forever — the live file still carries a
+	 *  `test-2` bucket for a tab deleted weeks ago. Goes through the same chain as every other
+	 *  write so it can never race a grid's persist. */
+	static forgetGroup(sessionsFile: string, group: string): Promise<void> {
+		const run = TerminalsGrid.persistChain.then(async () => {
+			let all: Record<string, unknown>;
+			try { all = JSON.parse(await fs.readFile(sessionsFile, 'utf8')) as Record<string, unknown>; } catch { return; }
+			if (!(group in all)) return;
+			delete all[group];
+			try { await fs.writeFile(sessionsFile, JSON.stringify(all, null, 2), 'utf8'); } catch { /* best effort */ }
+		}).catch(() => { /* best effort */ });
 		TerminalsGrid.persistChain = run;
 		return run;
 	}
