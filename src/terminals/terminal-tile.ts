@@ -622,6 +622,10 @@ export class TerminalTile implements StageTile {
 			if (fallbackFresh && /no\s*conversation\s*found\s*to\s*continue/i.test(stripAnsi(probe))) {
 				this.hiddenBuf.clear();      // stale pre-reset output must not replay after the reset
 				this.term?.reset();          // --continue had nothing to resume → start fresh in place
+				// ...and SAY so. Swapping in a blank session silently made a restored tile whose
+				// transcript was gone look identical to one that had started broken: right name,
+				// right branch, empty prompt, no explanation anywhere. State it instead.
+				this.writeOut('\r\n[no saved conversation found for this worktree — started a fresh session]\r\n');
 				this.startSession(false);
 				return;
 			}
