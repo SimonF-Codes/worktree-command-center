@@ -21,6 +21,7 @@ import { partitionByHidden } from './session-partition';
 import { SPAWN_MODELS } from './spawn-models';
 import { normalizeToolbarState, type ToolbarState } from './toolbar-state';
 import { GodConsole } from './god-console';
+import { godIndexOf, godRecords, highestGodIndex, PRIMARY_GOD_INDEX } from './god-sessions';
 import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, EFFORT_LEVELS, type OutboxMessage, type GodSelfImprove } from './god';
 import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
 import { looksLikePrompt } from './chat-room';
@@ -61,7 +62,7 @@ export interface GridDeps {
 	/** Called when the user changes a toolbar dropdown, so the app can persist it per workspace. */
 	onToolbarChange?: (state: ToolbarState) => void;
 }
-interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; folder?: boolean; model?: string; effort?: string; }
+interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; }
 
 // Effort options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
 const SPAWN_EFFORTS: { label: string; value: string }[] = [
@@ -123,8 +124,10 @@ export class TerminalsGrid {
 	private godConsole: GodConsole | null = null;
 	private godVisible = false;
 	private focusedKane: GodConsole | null = null;   // which Kane console (primary or duplicate) holds keyboard focus
-	private extraKanes: GodConsole[] = [];
-	private kaneSeq = 1; // monotonic: duplicates are Kane 2, 3, … — numbers never reused in-session
+	private extraKanes: Array<{ n: number; console: GodConsole }> = []; // with the instance number naming each one's .god home
+	// Highest instance number claimed. Seeded at restore from the persisted records AND the .god
+	// homes on disk, so a new duplicate can never land on an existing transcript.
+	private kaneSeq = PRIMARY_GOD_INDEX;
 	private holdUntil = 0;               // epoch ms: autoCenter is suppressed until then
 	private kanePersonality = false;          // off = Kane behaves exactly as today (no persona, no pulses)
 	private pulseTimer: number | null = null;
@@ -858,7 +861,7 @@ export class TerminalsGrid {
 	applyTerminalPalette(p: TerminalPalette): void {
 		for (const t of [...this.tiles, ...this.hidden]) if (!t.isJournal) (t as TerminalTile).setTerminalPalette(p);
 		this.godConsole?.setTerminalPalette(p);
-		for (const k of this.extraKanes) k.setTerminalPalette(p);
+		for (const k of this.extraKanes) k.console.setTerminalPalette(p);
 	}
 
 	/** Toggle the GOD console: spawn on first open, then just show/hide (session persists). */
@@ -890,10 +893,16 @@ export class TerminalsGrid {
 		this.godConsole.focus();
 	}
 
-	/** Dock an ADDITIONAL Kane console — its own session + home dir. Duplicates are cheap:
-	 *  the × disposes them entirely and they are not persisted across app restarts. */
-	private addKane(): void {
-		const n = ++this.kaneSeq;
+	/** Dock an ADDITIONAL Kane console — its own session + home dir. Duplicates persist exactly
+	 *  like the primary: the instance number goes into the sessions file and the next launch
+	 *  reopens the console, --continue-ing its own .god/<group>-N conversation. The × disposes it
+	 *  and drops the record; the transcript on disk is left alone.
+	 *  Pass `index` to reopen a persisted duplicate; omit it for a user-created one, which takes
+	 *  the next unclaimed number and gets the focus. */
+	private addKane(index?: number): void {
+		const n = index ?? this.kaneSeq + 1;
+		if (this.extraKanes.some((k) => k.n === n)) return; // already live — never two consoles on one home dir
+		this.kaneSeq = Math.max(this.kaneSeq, n);
 		const godHomeDir = path.join(this.coordDir, '..', '.god', `${this.deps.group}-${n}`);
 		const kane = new GodConsole(
 			{
@@ -903,28 +912,33 @@ export class TerminalsGrid {
 				godHomeDir,
 				sessionEnv: this.deps.sessionEnv,
 				selfImprove: this.deps.godSelfImprove,
+				// Same as the primary: --continue picks this duplicate's own conversation back up,
+				// falling back to a fresh session when there is nothing to resume yet.
+				resume: true,
 				onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); },
 				instanceName: `${this.overseerName} ${n}`,
 				terminalId: String(-n),
 			},
 			() => {
 				kane.dispose();
-				this.extraKanes = this.extraKanes.filter((k) => k !== kane);
+				this.extraKanes = this.extraKanes.filter((k) => k.console !== kane);
+				void this.persist(); // × closes it for good — drop the record so it doesn't reopen
 				this.applyLayout();
 			},
 		);
 		if (this.stageWrapEl) kane.render(this.stageWrapEl);
-		this.extraKanes.push(kane);
+		this.extraKanes.push({ n, console: kane });
+		void this.persist(); // record its existence so the next launch reopens it
 		this.startFloorFeed();
 		this.applyLayout();
-		kane.focus();
+		if (index === undefined) kane.focus(); // a restore must not steal focus from the tiles coming back
 	}
 
 	/** Ping the primary Kane and every duplicate (they share the god role — any of them
 	 *  may have registered the watch or flipped the personality). */
 	private notifyKanes(text: string): void {
 		this.godConsole?.notify(text);
-		for (const k of this.extraKanes) k.notify(text);
+		for (const k of this.extraKanes) k.console.notify(text);
 	}
 
 	/** Restart every live claude session in this workspace in place (--continue, fresh
@@ -934,7 +948,7 @@ export class TerminalsGrid {
 	restartSessions(): void {
 		for (const t of [...this.tiles, ...this.hidden]) if (!t.isJournal) (t as TerminalTile).restartInPlace();
 		this.godConsole?.restartInPlace();
-		for (const k of this.extraKanes) k.restartInPlace();
+		for (const k of this.extraKanes) k.console.restartInPlace();
 	}
 
 	private showGod(): void {
@@ -1432,6 +1446,12 @@ export class TerminalsGrid {
 		});
 	}
 
+	/** Names of the .god/* home directories that exist on disk, across every group. Best effort:
+	 *  no directory yet, or an unreadable one, just means there is nothing extra to claim. */
+	private async readGodDirNames(): Promise<string[]> {
+		try { return await fs.readdir(path.join(this.coordDir, '..', '.god')); } catch { return []; }
+	}
+
 	private async readAllSessions(): Promise<Record<string, SessionRecord[]>> {
 		try { return JSON.parse(await fs.readFile(this.sessionsFile, 'utf8')) as Record<string, SessionRecord[]>; } catch { return {}; }
 	}
@@ -1485,14 +1505,21 @@ export class TerminalsGrid {
 		// Retained unrestored records — minus any worktree the user has since reopened
 		// as a live tile (the live tile's record supersedes the stale one).
 		const liveWts = new Set([...this.tiles, ...this.hidden].filter((t) => !t.isJournal).map((t) => (t as TerminalTile).worktreePath));
-		const retained = this.unrestored.filter((r) => r.kind === 'journal' || r.kind === 'god' || !liveWts.has(r.worktreePath));
+		// A god record whose console is live gets re-emitted below from live state; retaining it as
+		// well would restore that same console twice on the next launch.
+		const liveGods = new Set<number>([...(this.godConsole ? [PRIMARY_GOD_INDEX] : []), ...this.extraKanes.map((k) => k.n)]);
+		const retained = this.unrestored.filter((r) => r.kind === 'god'
+			? !liveGods.has(godIndexOf(r))
+			: r.kind === 'journal' || !liveWts.has(r.worktreePath));
 		all[this.deps.group] = [
 			...this.tiles.map((t) => serializeTile(t, false)),
 			...this.hidden.map((t) => serializeTile(t, true)),
 			...retained,
 			// Kane persists like the tiles (2026-07-24): once opened he comes back on the next
 			// launch, resumed with --continue. /clear inside his session is the fresh-start path.
-			...(this.godConsole ? [{ kind: 'god', worktreePath: '', branch: '', repoName: 'god', repoPath: '', baseBranch: '' } as SessionRecord] : []),
+			// Every 🜲+ duplicate persists the same way, tagged with its instance number; the
+			// primary stays untagged so an older build still reads the file and reopens it.
+			...(godRecords(!!this.godConsole, this.extraKanes.map((k) => k.n)) as SessionRecord[]),
 		];
 		try { await fs.writeFile(this.sessionsFile, JSON.stringify(all, null, 2), 'utf8'); } catch { /* best effort */ }
 	}
@@ -1501,6 +1528,9 @@ export class TerminalsGrid {
 	private async restoreSessions(): Promise<void> {
 		const all = await this.readAllSessions();
 		const recs = all[this.deps.group] ?? [];
+		// Claim every instance number already used — by a record or by a .god home on disk — before
+		// anything can add a duplicate, so a new one never lands on a live transcript.
+		this.kaneSeq = Math.max(this.kaneSeq, highestGodIndex(recs, await this.readGodDirNames(), this.deps.group));
 		const { visible, hidden } = partitionByHidden(recs);
 		for (const rec of [...visible, ...hidden]) {
 			try {
@@ -1521,7 +1551,10 @@ export class TerminalsGrid {
 	private async restoreRecord(rec: SessionRecord): Promise<void> {
 		{
 			if (rec.kind === 'god') {
-				if (!this.godConsole) this.toggleGod(); // opens + resumes (resume: true in toggleGod)
+				// No godIndex — which is every record written before duplicates were persisted —
+				// reads as the primary, so existing sessions restore exactly as they did.
+				if (godIndexOf(rec) === PRIMARY_GOD_INDEX) { if (!this.godConsole) this.toggleGod(); } // opens + resumes (resume: true in toggleGod)
+				else this.addKane(godIndexOf(rec)); // duplicate: --continue-s its own .god/<group>-N
 				return;
 			}
 			if (rec.kind === 'journal') {
@@ -1563,7 +1596,7 @@ export class TerminalsGrid {
 		this.stopPulse();
 		this.stopFloorFeed(); // feed now persists across unmount()/hideGod(), so stop it on real teardown
 		this.godConsole?.dispose(); this.godConsole = null;
-		for (const k of this.extraKanes) k.dispose();
+		for (const k of this.extraKanes) k.console.dispose();
 		this.extraKanes = [];
 		for (const t of this.tiles) t.kill();
 		for (const t of this.hidden) t.kill();

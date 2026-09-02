@@ -14,6 +14,23 @@ landed on `main`.
 - The notice now goes to a toast instead, which nothing in the session can repaint. Anything
   written into a tile belongs to the TUI running in it; this belongs outside.
 
+**A duplicate overseer console comes back after a restart**
+- A second 🜲 console — the `Kane 2` panel the toolbar’s 🜲+ button docks — was never written to
+  the sessions file. `persist()` wrote exactly one `god` record and gated it on the primary, so
+  the duplicate simply vanished on the next launch. Its conversation was still there:
+  `.coordination/.god/<workspace>-2` held a real, multi-megabyte transcript that nothing in the
+  UI could reach any more. Every duplicate now persists with its instance number, and each one
+  reopens on the next launch with `--continue` against its own home directory.
+- 🜲+ also started a duplicate fresh instead of resuming, and the instance counter lived only in
+  memory — it reset to 1 every launch, so the next duplicate re-claimed `.god/<workspace>-2`, a
+  directory already holding an unrelated conversation. The counter is now derived from the
+  persisted records and the `.god` homes that actually exist on disk, so a new console can never
+  land on a conversation that already belongs to another console.
+- A record written before this change carries no instance number; that is the primary, and it
+  still restores as the primary, so nothing currently open is disturbed. Closing a duplicate with
+  its × drops its record and it stays closed; closing the workspace drops all of them. Nothing
+  under `.god/` is ever deleted — the transcripts outlive the panels.
+
 ## 0.6.0 — 2026-09-02
 
 **The model picker is current, and stays current**
