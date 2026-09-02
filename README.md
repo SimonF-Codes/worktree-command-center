@@ -33,6 +33,55 @@ A standalone desktop app (Electron). Originally Windows-first; this fork adds ma
 | Alt+K | Open/focus Kane |
 | Alt+↑/↓ | Switch workspace |
 
+### External dispatch
+
+A local, non-overseer process can ask the app to act on a workspace's floor without going
+through Kane at all: drop a JSON file into `<coordDir>/god-outbox/`, where `coordDir` is
+`<userData>/.coordination/<workspaceId>` (the `id` from `config.json`'s `workspaces` list). This
+is the exact channel `cos-coord tell/watch/spawn/rename/personality` writes to — it is a
+documented, supported integration point, not an implementation detail, and a change to the shapes
+below is a breaking change.
+
+Write atomically — a temp file in the same directory, then `rename()` over the final name — so the
+watcher never reads a half-written file:
+
+```js
+const fs = require('fs'), path = require('path');
+const ts = Date.now(), rand = Math.random().toString(36).slice(2, 8);
+const outbox = path.join(coordDir, 'god-outbox');
+fs.mkdirSync(outbox, { recursive: true });
+const final = path.join(outbox, `${ts}-${rand}.json`);
+const tmp = path.join(outbox, `.${ts}-${rand}.tmp`);
+fs.writeFileSync(tmp, JSON.stringify({ ts, kind: 'spawn', repo: 'app', base: 'main', task: 'do X', model: null, effort: null, name: null }));
+fs.renameSync(tmp, final);
+```
+
+Record shapes (`kind` selects the fields; an untagged `{target, message}` is read as `tell` for
+back-compat):
+
+| kind | fields |
+| --- | --- |
+| `tell` | `target: string`, `message: string` |
+| `watch` | `target: string`, `note: string` |
+| `spawn` | `repo: string`, `base: string \| null`, `task: string`, `model: string \| null`, `effort: string \| null`, `name: string \| null` |
+| `rename` | `target: string`, `name: string` |
+| `personality` | *(no fields)* |
+
+The canonical parser is `parseOutboxMessage` in `src/terminals/god.ts` — its tests
+(`tests/god.test.ts`) are the source of truth for exactly which fields are required.
+
+Caveats:
+- **The gate on `cos-coord`'s CLI (`COS_ROLE=god`) does not apply here** — it guards who may run
+  the *command*, not the file format. Writing directly to `god-outbox/` is the supported way for a
+  process that isn't Kane (and isn't spoofing being Kane) to reach the same channel.
+- **A workspace drains as soon as its grid exists**, which now happens at app launch for every
+  configured workspace, not just the one you're looking at or one where Kane has been opened —
+  see the Unreleased changelog entry. `spawn` works immediately even in a workspace nobody has
+  switched to yet this launch, since it doesn't need an existing session. `tell`/`watch`/`rename`
+  target a *live* terminal by name, so they only resolve once that workspace has actually been
+  mounted (switched to) this launch and the terminal exists; until then they fail with an error
+  written to `<coordDir>/god-inbox/` rather than silently doing nothing.
+
 ## Build from source
 
 ```bash

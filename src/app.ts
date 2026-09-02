@@ -175,6 +175,11 @@ async function main(): Promise<void> {
 			return g;
 		};
 		let activeGrid = gridFor(activeId);
+		// Construct (NOT mount) every other workspace's grid too, right away. Its sessions stay
+		// unrestored until you actually switch to it — but the grid's GOD outbox watcher arms in its
+		// constructor, so a workspace nobody has opened this launch still drains external dispatches
+		// (Kane's outbox channel — see README "External dispatch") instead of leaving them unread.
+		for (const w of workspaces) gridFor(w.id);
 
 		// Merge over a FRESH read: other writers (e.g. the private overlay via PrivateApi.config.set)
 		// must not have their keys clobbered by this startup-snapshot spread.

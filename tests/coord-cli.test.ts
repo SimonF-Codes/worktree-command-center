@@ -14,10 +14,10 @@ function run(args: string[], id = '1', name = 'termA') {
       env: { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: id, COS_TERMINAL_NAME: name, COS_COORD_WAIT_MS: '0' },
       encoding: 'utf8',
     });
-    return { code: 0, out };
+    return { code: 0, out, err: '' };
   } catch (e: unknown) {
-    const err = e as { status: number; stdout: string };
-    return { code: err.status, out: err.stdout };
+    const err = e as { status: number; stdout: string; stderr: string };
+    return { code: err.status, out: err.stdout, err: err.stderr };
   }
 }
 
@@ -48,10 +48,10 @@ describe('cos-coord CLI', () => {
     expect(parts[1]).toBe('A');
     expect(parts[2]).toBe('hello team');
   });
-  it('tell is a no-op without COS_ROLE=god', () => {
-    execFileSync('node', [CLI, 'tell', 'A', 'hello'], {
-      env: { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '1', COS_TERMINAL_NAME: 'x' }, encoding: 'utf8',
-    });
+  it('tell without COS_ROLE=god is refused: exit 2, no file, stderr explains why', () => {
+    const r = run(['tell', 'A', 'hello'], '1', 'x');
+    expect(r.code).toBe(2);
+    expect(r.err).toContain('COS_ROLE=god');
     expect(fs.existsSync(path.join(dir, 'god-outbox'))).toBe(false);
   });
   it('tell from GOD drops a message file', () => {
@@ -64,10 +64,9 @@ describe('cos-coord CLI', () => {
     expect(msg).toMatchObject({ target: 'A', message: 'hello' });
   });
   it('watch/spawn are god-only and drop tagged files', () => {
-    // No role → no-op
-    execFileSync('node', [CLI, 'watch', 'A', '--note', 'x'], {
-      env: { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '1', COS_TERMINAL_NAME: 'x' }, encoding: 'utf8',
-    });
+    // No role → refused (exit 2), nothing written
+    const denied = run(['watch', 'A', '--note', 'x'], '1', 'x');
+    expect(denied.code).toBe(2);
     expect(fs.existsSync(path.join(dir, 'god-outbox'))).toBe(false);
     // As god → files appear
     const god = { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Able', COS_ROLE: 'god' };
