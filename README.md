@@ -35,52 +35,88 @@ A standalone desktop app (Electron). Originally Windows-first; this fork adds ma
 
 ### External dispatch
 
-A local, non-overseer process can ask the app to act on a workspace's floor without going
-through Kane at all: drop a JSON file into `<coordDir>/god-outbox/`, where `coordDir` is
-`<userData>/.coordination/<workspaceId>` (the `id` from `config.json`'s `workspaces` list). This
-is the exact channel `cos-coord tell/watch/spawn/rename/personality` writes to — it is a
-documented, supported integration point, not an implementation detail, and a change to the shapes
-below is a breaking change.
+A local, non-overseer app — a separate process on the same machine, not Kane and not spoofing
+being Kane — can ask a workspace's floor to do work through the **connector channel**: a
+directory pair per connector, under `coordDir` (`<userData>/.coordination/<workspaceId>`, the
+`id` from `config.json`'s `workspaces` list):
 
-Write atomically — a temp file in the same directory, then `rename()` over the final name — so the
-watcher never reads a half-written file:
+```
+<coordDir>/connectors/<connectorId>/requests/   you write requests here
+<coordDir>/connectors/<connectorId>/receipts/   the app writes one receipt per request here
+```
+
+`<connectorId>` is a slug (`[a-z0-9-]`), e.g. `brain-2-0`. It must first be registered in
+`config.json`'s `connectors` list (`[{ "id": "brain-2-0", "label": "Brain 2.0" }]`) — a local
+trust boundary between the user's own apps, not authentication. A request from an id that isn't
+registered gets a rejected receipt, not silence.
+
+This is deliberately narrower than Kane's own channel (below): connectors get **`spawn` only**.
+Not `tell` (injecting keystrokes into a terminal the connector didn't create), not `rename` or
+`personality` (acting on the operator's own workspace) — those are the overseer's power over
+every terminal on the floor, not something a request from a separate app should inherit.
+
+Write a request atomically — a temp file in `requests/`, then `rename()` over the final name —
+and give it a v1 envelope with an id you choose (the receipt refers back to it, so you can
+correlate without parsing filenames):
 
 ```js
 const fs = require('fs'), path = require('path');
-const ts = Date.now(), rand = Math.random().toString(36).slice(2, 8);
-const outbox = path.join(coordDir, 'god-outbox');
-fs.mkdirSync(outbox, { recursive: true });
-const final = path.join(outbox, `${ts}-${rand}.json`);
-const tmp = path.join(outbox, `.${ts}-${rand}.tmp`);
-fs.writeFileSync(tmp, JSON.stringify({ ts, kind: 'spawn', repo: 'app', base: 'main', task: 'do X', model: null, effort: null, name: null }));
-fs.renameSync(tmp, final);
+const id = require('crypto').randomUUID();
+const reqDir = path.join(coordDir, 'connectors', 'brain-2-0', 'requests');
+fs.mkdirSync(reqDir, { recursive: true });
+const body = { v: 1, id, connector: 'brain-2-0', sentMs: Date.now(), kind: 'spawn',
+  repo: 'app', base: 'main', task: 'do X', model: null, effort: null, name: null };
+const tmp = path.join(reqDir, `.${id}.tmp`);
+fs.writeFileSync(tmp, JSON.stringify(body));
+fs.renameSync(tmp, path.join(reqDir, `${id}.json`));
 ```
 
-Record shapes (`kind` selects the fields; an untagged `{target, message}` is read as `tell` for
-back-compat):
-
-| kind | fields |
+| field | type |
 | --- | --- |
-| `tell` | `target: string`, `message: string` |
-| `watch` | `target: string`, `note: string` |
-| `spawn` | `repo: string`, `base: string \| null`, `task: string`, `model: string \| null`, `effort: string \| null`, `name: string \| null` |
-| `rename` | `target: string`, `name: string` |
-| `personality` | *(no fields)* |
+| `v` | `1` |
+| `id` | `string` — your own unique id; the receipt is named after it |
+| `connector` | `string` — your registered connector id |
+| `sentMs` | `number` |
+| `kind` | `"spawn"` — the only permitted value |
+| `repo` | `string` |
+| `base` | `string \| null` |
+| `task` | `string` |
+| `model` | `string \| null` |
+| `effort` | `string \| null` |
+| `name` | `string \| null` |
 
-The canonical parser is `parseOutboxMessage` in `src/terminals/god.ts` — its tests
-(`tests/god.test.ts`) are the source of truth for exactly which fields are required.
+For every request drained, the app writes `connectors/<connectorId>/receipts/<id>.json` — so
+delivery is never inferred from a file just disappearing:
 
-Caveats:
-- **The gate on `cos-coord`'s CLI (`COS_ROLE=god`) does not apply here** — it guards who may run
-  the *command*, not the file format. Writing directly to `god-outbox/` is the supported way for a
-  process that isn't Kane (and isn't spoofing being Kane) to reach the same channel.
-- **A workspace drains as soon as its grid exists**, which now happens at app launch for every
-  configured workspace, not just the one you're looking at or one where Kane has been opened —
-  see the Unreleased changelog entry. `spawn` works immediately even in a workspace nobody has
-  switched to yet this launch, since it doesn't need an existing session. `tell`/`watch`/`rename`
-  target a *live* terminal by name, so they only resolve once that workspace has actually been
-  mounted (switched to) this launch and the terminal exists; until then they fail with an error
-  written to `<coordDir>/god-inbox/` rather than silently doing nothing.
+```json
+{ "v": 1, "id": "...", "status": "accepted", "terminalName": "bx-a1--thing", "handledMs": 1788363509001 }
+{ "v": 1, "id": "...", "status": "rejected", "reason": "unknown repo \"ghost\". Known: app, notes", "handledMs": 1788363509001 }
+```
+
+`status` is `"accepted"` (with the `terminalName` the app actually created) or `"rejected"`
+(with a human-readable `reason` — always present, never silent): the connector isn't registered,
+the envelope is malformed, `kind` isn't `spawn`, or the repo is unknown. Receipts are the
+connector's to clean up; the app prunes anything older than ~7 days on its own so the directory
+can't grow forever if you stop reading them.
+
+The canonical parser is `parseConnectorRequest`/`evaluateConnectorRequest` in
+`src/terminals/connectors.ts` — its tests (`tests/connectors.test.ts`) are the source of truth for
+exactly which fields are required and which reject reasons exist.
+
+**A workspace drains as soon as its grid exists**, same as Kane's channel below — every configured
+workspace's grid is constructed at app launch, so a `spawn` into an unvisited workspace works
+immediately.
+
+#### Kane's own channel (internal, not an external integration point)
+
+`god-outbox/` is where Kane's `cos-coord tell/watch/spawn/rename/personality` writes — it carries
+the overseer's own privileged intent (typing into *any* terminal, renaming *anything*, toggling
+`personality`), because the overseer console *is* the app's own trusted UI. It is **not** the
+channel for an external app to use — that's what the connector channel above is for. Nothing
+technically stops a local process from writing the same shapes into `god-outbox/` (the
+`COS_ROLE=god` gate only guards the `cos-coord` *command*, not the file format), but doing so
+means impersonating the overseer's full authority over the floor, not requesting work — treat that
+as unsupported, not as a shortcut.
 
 ## Build from source
 

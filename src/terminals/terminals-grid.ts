@@ -23,6 +23,7 @@ import { normalizeToolbarState, type ToolbarState } from './toolbar-state';
 import { GodConsole } from './god-console';
 import { godIndexOf, godRecords, highestGodIndex, PRIMARY_GOD_INDEX } from './god-sessions';
 import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, EFFORT_LEVELS, type OutboxMessage, type GodSelfImprove } from './god';
+import { evaluateConnectorRequest, receiptFilename, isReceiptStale, type ConnectorConfig, type ConnectorReceipt } from './connectors';
 import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
 import { looksLikePrompt } from './chat-room';
 import { classifyAttention, classifyOne, attentionKind, type AttentionItem, type AttentionKind } from './attention';
@@ -54,6 +55,9 @@ export interface GridDeps {
 	sessionEnv?: () => Record<string, string>;
 	overseerName?: string;   // configurable name of the overseer console (default 'Kane')
 	godSelfImprove?: GodSelfImprove;
+	/** Connectors registered in config.json — a request from an unregistered id gets a rejected
+	 *  receipt rather than being honoured. See README "External dispatch". */
+	connectors?: ConnectorConfig[];
 	toast: (msg: string, variant?: ToastVariant) => void;
 	promptForTopic: (title: string, placeholder: string, initial?: string, okLabel?: string) => Promise<string | null>;
 	openSettings: () => void;
@@ -143,6 +147,8 @@ export class TerminalsGrid {
 	private floorTimer: number | null = null;
 	private spotlightTimer: number | null = null;
 	private godOutboxWatcher: import('fs').FSWatcher | null = null;
+	private connectorsWatcher: import('fs').FSWatcher | null = null;
+	private connectors: ConnectorConfig[] = [];
 	private parentEl: HTMLElement | null = null;
 	private readonly sidecarPath: string;
 	private readonly notifyScriptPath: string;
@@ -175,6 +181,7 @@ export class TerminalsGrid {
 		this.coordHookPath = deps.coordHookPath;
 		this.repos = deps.repos; // set here (not just loadRepos() at mount) so a spawn dispatched
 		// through the outbox before this workspace is ever mounted still resolves a known repo.
+		this.connectors = deps.connectors ?? [];
 		// One shared settings file for every session, written beside the sidecar — never into a
 		// worktree. Synchronous + here in the constructor so it exists before any tile spawns.
 		try { writeWorktreeSettings(path.dirname(this.sidecarPath), this.notifyScriptPath, this.coordHookPath); } catch { /* best effort */ }
@@ -186,6 +193,11 @@ export class TerminalsGrid {
 		// documented as a supported integration point — see README "External dispatch") must not
 		// have its commands pile up unread just because nobody has opened Kane in this workspace.
 		this.armOutbox();
+		// Same guarantee for the connector channel (a separate, narrower path for a non-overseer
+		// local app — see README "External dispatch"): armed from construction too, independent
+		// of both the overseer console and of whether the connector that dropped a request is
+		// even registered yet (an unregistered drop still needs to be answered with a rejection).
+		this.armConnectors();
 	}
 
 	/** Journal destinations configured in Settings (app-wide, not scoped to this workspace/group). */
@@ -301,7 +313,7 @@ export class TerminalsGrid {
 			this.coordWatcher = (await import('fs')).watch(this.coordDir, (_evt, filename) => {
 				const fn = String(filename ?? '');
 				// Our own ledger write + the GOD feed dirs must never trigger a worktree rescan loop.
-				if (fn === 'worktrees.md' || fn.startsWith('floor') || fn.startsWith('god-outbox') || fn.startsWith('god-inbox')) return;
+				if (fn === 'worktrees.md' || fn.startsWith('floor') || fn.startsWith('god-outbox') || fn.startsWith('god-inbox') || fn.startsWith('connectors')) return;
 				if (this.scanDebounce !== null) window.clearTimeout(this.scanDebounce);
 				// Rate-limit watcher-triggered scans. A busy floor (chat, locks, ready markers)
 				// otherwise refires this every 500ms, and each scan spawns git per repo ON the
@@ -985,6 +997,7 @@ export class TerminalsGrid {
 
 	private floorDir(): string { return path.join(this.coordDir, 'floor'); }
 	private outboxDir(): string { return path.join(this.coordDir, 'god-outbox'); }
+	private connectorsRootDir(): string { return path.join(this.coordDir, 'connectors'); }
 
 	/** Drain whatever's waiting in the GOD outbox, then watch for new drops. Idempotent, and
 	 *  deliberately independent of the overseer console's lifetime (see the constructor). */
@@ -998,6 +1011,21 @@ export class TerminalsGrid {
 		} catch { /* outbox unavailable */ }
 	}
 
+	/** Drain whatever's waiting for every connector (registered or not — an unregistered drop
+	 *  still needs a rejected receipt), then watch for new drops anywhere under connectors/.
+	 *  `recursive: true` picks up requests dropped into a connector id nobody has spawned a
+	 *  subdirectory for yet; Node supports it natively on both platforms this app ships for
+	 *  (Windows, macOS) so there's no need for a second, per-connector watcher. */
+	private armConnectors(): void {
+		if (this.connectorsWatcher) return;
+		try {
+			const root = this.connectorsRootDir();
+			fsSync.mkdirSync(root, { recursive: true });
+			this.drainConnectors();
+			this.connectorsWatcher = fsSync.watch(root, { recursive: true }, () => this.drainConnectors());
+		} catch { /* connectors unavailable */ }
+	}
+
 	/** Begin writing terminal snapshots while the console is open (the outbox watcher is already
 	 *  armed from construction — this only (re-)confirms it, cheaply, via armOutbox's own guard). */
 	private startFloorFeed(): void {
@@ -1009,6 +1037,7 @@ export class TerminalsGrid {
 	private stopFloorFeed(): void {
 		if (this.floorTimer !== null) { window.clearInterval(this.floorTimer); this.floorTimer = null; }
 		this.godOutboxWatcher?.close(); this.godOutboxWatcher = null;
+		this.connectorsWatcher?.close(); this.connectorsWatcher = null;
 	}
 
 	/** Dump each live session's recent output to coordDir/floor/<id>-<slug>.md + an INDEX.md;
@@ -1097,6 +1126,91 @@ export class TerminalsGrid {
 			}
 		} else {
 			void this.spawnFromKane(msg.repo, msg.base, msg.task, msg.model, msg.effort, msg.name);
+		}
+	}
+
+	/** Drain every connector subdirectory's requests, then prune its stale receipts. Both are
+	 *  cheap no-ops when there's nothing to do, so re-running this on every fs event is fine. */
+	private drainConnectors(): void {
+		const root = this.connectorsRootDir();
+		let ids: string[] = [];
+		try { ids = fsSync.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { return; }
+		for (const connectorId of ids) {
+			this.drainConnectorRequests(connectorId);
+			this.pruneConnectorReceipts(connectorId);
+		}
+	}
+
+	/** Deliver (or reject) whatever's waiting in one connector's requests/, then archive the
+	 *  request files to .done/ — same shape as drainOutbox, but the receipt is written separately
+	 *  (keyed by the request's own `id`, not the filename) since accepting a spawn needs an await
+	 *  before the terminal name it reports back is known. */
+	private drainConnectorRequests(connectorId: string): void {
+		const reqDir = path.join(this.connectorsRootDir(), connectorId, 'requests');
+		let files: string[] = [];
+		try { files = fsSync.readdirSync(reqDir).filter((f) => f.endsWith('.json')); } catch { return; }
+		if (!files.length) return;
+		const done = path.join(reqDir, '.done');
+		try { fsSync.mkdirSync(done, { recursive: true }); } catch { /* ignore */ }
+		for (const f of files) {
+			const full = path.join(reqDir, f);
+			let text = '';
+			try { text = fsSync.readFileSync(full, 'utf8'); } catch { continue; }
+			try { fsSync.renameSync(full, path.join(done, f)); } catch { try { fsSync.unlinkSync(full); } catch { /* ignore */ } }
+			void this.handleConnectorRequest(connectorId, text);
+		}
+	}
+
+	/** Evaluate one connector request (pure decision in connectors.ts), then either spawn and
+	 *  report the terminal it actually created, or write a rejected receipt with a reason —
+	 *  never nothing, which is the entire point of this channel over reusing god-outbox. */
+	private async handleConnectorRequest(connectorId: string, text: string): Promise<void> {
+		const outcome = evaluateConnectorRequest(text, {
+			connectorId,
+			registeredConnectorIds: this.connectors.map((c) => c.id),
+			knownRepoNames: this.repos.map((r) => r.name),
+		});
+		if (outcome.status === 'rejected') {
+			// No recoverable id (unparseable JSON, or no "id" field at all) — nothing to name a
+			// receipt file after, so there's nothing more to do than drop it, same as the outbox.
+			if (outcome.id) this.writeConnectorReceipt(connectorId, { v: 1, id: outcome.id, status: 'rejected', reason: outcome.reason, handledMs: Date.now() });
+			return;
+		}
+		const { request } = outcome;
+		const tile = await this.spawnFromName(request.repo, request.base, request.task, request.model ?? undefined, request.effort ?? undefined, request.name ?? undefined);
+		if (tile) {
+			this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'accepted', terminalName: tile.name, handledMs: Date.now() });
+		} else {
+			this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'rejected', reason: `couldn't spawn in repo "${request.repo}" — see the app's toast for detail`, handledMs: Date.now() });
+		}
+	}
+
+	/** Write one receipt, temp-then-renamed like every other atomic write in this file. */
+	private writeConnectorReceipt(connectorId: string, receipt: ConnectorReceipt): void {
+		try {
+			const dir = path.join(this.connectorsRootDir(), connectorId, 'receipts');
+			fsSync.mkdirSync(dir, { recursive: true });
+			const fname = receiptFilename(receipt.id);
+			const tmp = path.join(dir, `.${fname}.tmp`);
+			fsSync.writeFileSync(tmp, JSON.stringify(receipt), 'utf8');
+			fsSync.renameSync(tmp, path.join(dir, fname));
+		} catch { /* best effort */ }
+	}
+
+	/** Receipts are the connector's to clean up; prune anything older than ~7 days on drain so
+	 *  the directory cannot grow forever if a connector never reads them. */
+	private pruneConnectorReceipts(connectorId: string): void {
+		const dir = path.join(this.connectorsRootDir(), connectorId, 'receipts');
+		let files: string[] = [];
+		try { files = fsSync.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return; }
+		const now = Date.now();
+		for (const f of files) {
+			const full = path.join(dir, f);
+			try {
+				const body = JSON.parse(fsSync.readFileSync(full, 'utf8')) as { handledMs?: unknown };
+				const handledMs = typeof body.handledMs === 'number' ? body.handledMs : fsSync.statSync(full).mtimeMs;
+				if (isReceiptStale(handledMs, now)) fsSync.unlinkSync(full);
+			} catch { /* malformed/unreadable receipt — leave it rather than guess */ }
 		}
 	}
 

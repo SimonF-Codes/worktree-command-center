@@ -3,6 +3,7 @@ import { toast } from './ui/toast';
 import { promptForTopic, promptForConfirm } from './ui/prompt-dialog';
 import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/terminals-grid';
 import { parseGodSelfImprove } from './terminals/god';
+import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, reposForWorkspace } from './workspace';
 import { SerialWriter } from './serial-writer';
 import { normalizeToolbars, setToolbarState, pruneToolbars, type WorkspaceToolbars } from './terminals/toolbar-state';
@@ -149,6 +150,10 @@ async function main(): Promise<void> {
 		const siCfg = parseGodSelfImprove(cfg.god);
 		const godSelfImprove = siCfg ? { sourceRepo: siCfg.sourceRepo, toolsDir: siCfg.toolsDir ?? path.join(os.homedir(), 'kane-tools') } : undefined;
 
+		// Connectors registered for the external request/receipt channel (see README "External
+		// dispatch"). App-wide, like repos — every workspace's grid gets the same list.
+		const connectors = parseConnectors(cfg.connectors);
+
 		const depsFor = (id: string): GridDeps => ({
 			// Scoped, not the whole list: a repo tagged with a `group` belongs to that workspace
 			// alone. Untagged repos (every existing config) still appear everywhere.
@@ -163,6 +168,7 @@ async function main(): Promise<void> {
 			sessionsFile: path.join(userData, '.terminal-sessions.json'),
 			bypassPermissions: true,
 			godSelfImprove,
+			connectors,
 			sessionEnv: () => sessionEnvProvider({ workspaceId: id }),
 			overseerName: typeof cfg.overseerName === 'string' ? cfg.overseerName : undefined,
 			toast,

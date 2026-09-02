@@ -5,6 +5,29 @@ landed on `main`.
 
 ## Unreleased
 
+**A real connector channel, separate from Kane's own outbox**
+- The previous entry below documented `god-outbox/` as a supported integration point for any
+  local process — that was wrong. It conflated two different actors: Kane's outbox carries the
+  overseer's own privileged intent (`tell` into any terminal, `rename` anything, toggle
+  `personality`), trusted because the overseer console *is* the app's own UI; an external app is a
+  different actor that should be able to request work, not inherit that authority over every
+  terminal on the floor. Writing both through one directory meant an external app silently gained
+  the overseer's full command set, with no way to tell the two apart.
+- New channel: `<coordDir>/connectors/<connectorId>/requests/` (in) and `.../receipts/` (out), one
+  directory pair per connector. Connectors get **`spawn` only** — deliberately not `tell`/`rename`/
+  `personality`. A connector must be registered in `config.json`'s new `connectors` list before its
+  requests are honoured; an unregistered id gets a rejected receipt rather than being ignored.
+- Every request drained now gets a receipt — `{ status: "accepted", terminalName }` or
+  `{ status: "rejected", reason }` — instead of the old outbox's only signal being the file
+  disappearing, which couldn't distinguish "accepted" from "rejected as malformed" from "unknown
+  repo". Rejection reasons: connector not registered, envelope malformed, `kind` not permitted, or
+  the repo is unknown. Receipts are the connector's to clean up; anything older than ~7 days is
+  pruned on drain.
+- Armed the same way the outbox already is — from grid construction, for every workspace,
+  independent of the overseer console ever being opened. `god-outbox/` itself is unchanged; the
+  README's "External dispatch" section now describes it as Kane's internal channel and points
+  external integrations at connectors instead.
+
 **A refused `cos-coord` command no longer reports success**
 - `tell`, `watch`, `spawn`, `rename` and `personality` are GOD-only — called without
   `COS_ROLE=god`, they did nothing and exited 0, indistinguishable from having actually run. A
