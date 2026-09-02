@@ -1,7 +1,8 @@
 'use strict';
 // cos-coord <status|acquire|release|note> — agents call this from Bash.
 // Fail-open: unexpected errors exit 0 (allow). A timed-out acquire exits 1
-// (the lock is working — the && chain should stop).
+// (the lock is working — the && chain should stop). tell/watch/spawn/rename/personality are
+// GOD-only: called without COS_ROLE=god they exit 2 (a refusal is a failure, not a silent no-op).
 const core = require('./coord-core.cjs');
 const store = require('./coord-store.cjs');
 
@@ -9,6 +10,14 @@ function env(name, dflt) { return process.env[name] != null ? process.env[name] 
 function flag(args, name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; }
 
 function ageStr(ms) { const s = Math.max(0, Math.round(ms / 1000)); return s < 90 ? `${s}s` : `${Math.round(s / 60)}m`; }
+
+// A refused privileged command is a FAILURE, not a no-op success: exit 2 + say why on stderr, so
+// a caller checking the exit code (a shell `&&` chain, a script) finds out instead of silently
+// getting nothing. The command still does nothing else — this only changes how the refusal reports.
+function denyGodOnly(cmd) {
+  console.error(`coord: ${cmd} requires COS_ROLE=god — refused`);
+  process.exit(2);
+}
 
 function main() {
   const dir = env('COS_COORD_DIR');
@@ -39,7 +48,7 @@ function main() {
   }
 
   if (cmd === 'tell') {
-    if (env('COS_ROLE') !== 'god') process.exit(0); // only GOD may inject into worker terminals
+    if (env('COS_ROLE') !== 'god') denyGodOnly('tell'); // only GOD may inject into worker terminals
     const target = resource;
     const message = rest.join(' ');
     if (target && message) store.tell(dir, target, message);
@@ -47,7 +56,7 @@ function main() {
   }
 
   if (cmd === 'watch') {
-    if (env('COS_ROLE') !== 'god') process.exit(0);
+    if (env('COS_ROLE') !== 'god') denyGodOnly('watch');
     const target = resource;
     const note = flag(rest, '--note') || '';
     if (target && note) store.watch(dir, target, note);
@@ -55,7 +64,7 @@ function main() {
   }
 
   if (cmd === 'spawn') {
-    if (env('COS_ROLE') !== 'god') process.exit(0);
+    if (env('COS_ROLE') !== 'god') denyGodOnly('spawn');
     const repo = resource;
     const base = flag(rest, '--base') || '';
     const task = flag(rest, '--task') || '';
@@ -67,7 +76,7 @@ function main() {
   }
 
   if (cmd === 'rename') {
-    if (env('COS_ROLE') !== 'god') process.exit(0); // only GOD may rename worker terminals
+    if (env('COS_ROLE') !== 'god') denyGodOnly('rename'); // only GOD may rename worker terminals
     const target = resource;
     const to = flag(rest, '--to') || '';
     if (target && to.trim()) store.rename(dir, target, to);
@@ -75,7 +84,7 @@ function main() {
   }
 
   if (cmd === 'personality') {
-    if (env('COS_ROLE') !== 'god') process.exit(0); // only Kane toggles his own personality
+    if (env('COS_ROLE') !== 'god') denyGodOnly('personality'); // only Kane toggles his own personality
     store.personality(dir);
     process.exit(0);
   }

@@ -5,6 +5,29 @@ landed on `main`.
 
 ## Unreleased
 
+**A refused `cos-coord` command no longer reports success**
+- `tell`, `watch`, `spawn`, `rename` and `personality` are GOD-only — called without
+  `COS_ROLE=god`, they did nothing and exited 0, indistinguishable from having actually run. A
+  caller checking the exit code (a shell `&&` chain, or an external process driving the CLI) had
+  no way to tell a refusal from a success; found while a standalone dispatcher opened runs for
+  terminals that were never actually spawned, and only discovered it much later when reconcile
+  wrote them off as `unknown`. Refusal is now a failure: exit 2, with one line on stderr naming
+  the missing role. The commands still do nothing else — only how the refusal is reported changed.
+
+**External dispatch is now a documented, supported path**
+- The `god-outbox/` file format Kane's `cos-coord tell/watch/spawn/rename/personality` writes to
+  was an internal implementation detail with no stability promise, even though it already worked
+  end-to-end for a local process writing to it directly. It's now documented in the README
+  ("External dispatch") as a supported integration point, with the record shape for each `kind`
+  — a shape change there is a breaking change going forward, not just a refactor.
+- Its watcher also only armed once an overseer console had been opened in that workspace, so a
+  command dropped before then just sat there unread — the workspace's grid didn't even exist yet
+  if nobody had switched to that tab this launch. Every configured workspace's grid is now
+  constructed (not mounted — its terminals stay unrestored until you actually switch to it) at
+  app launch, and each one arms its outbox watcher from construction, independent of Kane. A
+  `spawn` into an unvisited workspace now works immediately; `tell`/`watch`/`rename` still need a
+  live terminal to target, so they resolve once that workspace has actually been switched to.
+
 **A restored terminal that lost its conversation now actually tells you**
 - 0.5.0 made the tile print a line when `--continue` found nothing to resume and it fell back to
   a fresh session. That line never survived: the replacement `claude` starts immediately after

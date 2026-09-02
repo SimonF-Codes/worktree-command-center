@@ -173,12 +173,19 @@ export class TerminalsGrid {
 		this.sessionsFile = deps.sessionsFile;
 		this.coordDir = deps.coordDir;
 		this.coordHookPath = deps.coordHookPath;
+		this.repos = deps.repos; // set here (not just loadRepos() at mount) so a spawn dispatched
+		// through the outbox before this workspace is ever mounted still resolves a known repo.
 		// One shared settings file for every session, written beside the sidecar — never into a
 		// worktree. Synchronous + here in the constructor so it exists before any tile spawns.
 		try { writeWorktreeSettings(path.dirname(this.sidecarPath), this.notifyScriptPath, this.coordHookPath); } catch { /* best effort */ }
 		this.journalStore = new JournalStore(path.join(this.coordDir, 'journals'));
 		this.formatProbe = new FormatProbe({ sidecarPath: this.sidecarPath, cwd: this.coordDir, sessionEnv: deps.sessionEnv });
 		this.convertProbe = new ConvertProbe({ sidecarPath: this.sidecarPath, cwd: this.coordDir, sessionEnv: deps.sessionEnv });
+		// Arm the GOD outbox from the moment this workspace exists — not gated on the overseer
+		// console ever being opened here. A dispatcher outside the app (Kane's own outbox channel,
+		// documented as a supported integration point — see README "External dispatch") must not
+		// have its commands pile up unread just because nobody has opened Kane in this workspace.
+		this.armOutbox();
 	}
 
 	/** Journal destinations configured in Settings (app-wide, not scoped to this workspace/group). */
@@ -979,16 +986,24 @@ export class TerminalsGrid {
 	private floorDir(): string { return path.join(this.coordDir, 'floor'); }
 	private outboxDir(): string { return path.join(this.coordDir, 'god-outbox'); }
 
-	/** Begin writing terminal snapshots + watching the GOD outbox while the console is open. */
-	private startFloorFeed(): void {
-		this.writeFloorSnapshot();
-		if (this.floorTimer === null) this.floorTimer = window.setInterval(() => this.writeFloorSnapshot(), 4000);
+	/** Drain whatever's waiting in the GOD outbox, then watch for new drops. Idempotent, and
+	 *  deliberately independent of the overseer console's lifetime (see the constructor). */
+	private armOutbox(): void {
+		if (this.godOutboxWatcher) return;
 		try {
 			const out = this.outboxDir();
 			fsSync.mkdirSync(out, { recursive: true });
 			this.drainOutbox();
-			if (!this.godOutboxWatcher) this.godOutboxWatcher = fsSync.watch(out, () => this.drainOutbox());
-		} catch { /* outbox unavailable — snapshots still work */ }
+			this.godOutboxWatcher = fsSync.watch(out, () => this.drainOutbox());
+		} catch { /* outbox unavailable */ }
+	}
+
+	/** Begin writing terminal snapshots while the console is open (the outbox watcher is already
+	 *  armed from construction — this only (re-)confirms it, cheaply, via armOutbox's own guard). */
+	private startFloorFeed(): void {
+		this.writeFloorSnapshot();
+		if (this.floorTimer === null) this.floorTimer = window.setInterval(() => this.writeFloorSnapshot(), 4000);
+		this.armOutbox();
 	}
 
 	private stopFloorFeed(): void {
