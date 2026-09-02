@@ -5,6 +5,29 @@ landed on `main`.
 
 ## Unreleased
 
+## 0.6.0 — 2026-09-02
+
+**The model picker is current, and stays current**
+- The list had gone stale: it named **Opus 4.8** as the top Opus long after Opus 5 shipped, and
+  pinned `claude-haiku-4-5-20251001` — a dated snapshot rather than the canonical
+  `claude-haiku-4-5`. Both are fixed, and Opus 5 is now offered.
+- It no longer rots by construction. The everyday entries are now the CLI's **aliases** —
+  `opus`, `sonnet`, `haiku`, `fable` — which the CLI resolves to the newest release in each
+  family at spawn time, so they cannot fall behind a release. Exact versions are still offered
+  below them for pinning a run to a known model, and those are the only rows that need touching
+  when a new model ships.
+- The list moved to its own module with a validator behind it, so the shapes that caused this —
+  a dated snapshot id, a list with no aliases, a missing default row, duplicates — now fail the
+  unit tests instead of going unnoticed.
+
+**The release pipeline actually releases**
+- Every tagged release since v0.2.0 failed at the same step, and no GitHub Release was ever
+  produced. `npm run dist` ran `electron-builder --win` with no publish flag, and
+  electron-builder's default policy (`onTagOrDraft`) meant a tag build tried to create the
+  GitHub Release itself, then died with "GitHub Personal Access Token is not set". The installer
+  had already built fine — only the publish step failed. `dist` now passes `--publish never`,
+  leaving publishing to the workflow step that was always meant to do it.
+
 ## 0.5.0 — 2026-09-02
 
 **Your tab settings stay put**
