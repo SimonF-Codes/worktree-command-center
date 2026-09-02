@@ -18,6 +18,7 @@ import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabe
 import { emptyState, applyKeystroke, onReady as rqReady, onSubmit as rqSubmit, onClose as rqClose, onClick as rqClick, onOverview as rqOverview } from './ready-queue';
 import { decideCenter, type SpotlightState } from './focus-decider';
 import { partitionByHidden } from './session-partition';
+import { SPAWN_MODELS } from './spawn-models';
 import { normalizeToolbarState, type ToolbarState } from './toolbar-state';
 import { GodConsole } from './god-console';
 import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, EFFORT_LEVELS, type OutboxMessage, type GodSelfImprove } from './god';
@@ -61,15 +62,6 @@ export interface GridDeps {
 	onToolbarChange?: (state: ToolbarState) => void;
 }
 interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; folder?: boolean; model?: string; effort?: string; }
-
-// Model options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
-const SPAWN_MODELS: { label: string; value: string }[] = [
-	{ label: 'Model: Default', value: '' },
-	{ label: 'Opus 4.8', value: 'claude-opus-4-8' },
-	{ label: 'Sonnet 5', value: 'claude-sonnet-5' },
-	{ label: 'Fable 5', value: 'claude-fable-5' },
-	{ label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
-];
 
 // Effort options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
 const SPAWN_EFFORTS: { label: string; value: string }[] = [
