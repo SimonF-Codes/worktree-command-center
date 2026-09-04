@@ -1161,14 +1161,17 @@ export class TerminalsGrid {
 		}
 	}
 
-	/** Evaluate one connector request (pure decision in connectors.ts), then either spawn and
-	 *  report the terminal it actually created, or write a rejected receipt with a reason —
-	 *  never nothing, which is the entire point of this channel over reusing god-outbox. */
+	/** Evaluate one connector request (pure decision in connectors.ts), then either act — spawn a
+	 *  terminal, or deliver a message into a live one — and report the terminal it actually
+	 *  touched, or write a rejected receipt with a reason. Never nothing: that silent-drop shape
+	 *  (`cos-coord spawn` used to exit 0 without acting) is the exact failure this channel exists
+	 *  to eliminate. */
 	private async handleConnectorRequest(connectorId: string, text: string): Promise<void> {
 		const outcome = evaluateConnectorRequest(text, {
 			connectorId,
 			registeredConnectorIds: this.connectors.map((c) => c.id),
 			knownRepoNames: this.repos.map((r) => r.name),
+			liveTerminals: this.allSessions().map((t) => ({ name: t.name, isJournal: t.isJournal })),
 		});
 		if (outcome.status === 'rejected') {
 			// No recoverable id (unparseable JSON, or no "id" field at all) — nothing to name a
@@ -1177,6 +1180,21 @@ export class TerminalsGrid {
 			return;
 		}
 		const { request } = outcome;
+		if (request.kind === 'tell') {
+			// Resolved against the roster moments ago, in evaluateConnectorRequest — re-check here
+			// rather than trust it blindly, since draining is async and the tile could have closed
+			// (or been renamed into a journal, impossible today but not worth assuming) in between.
+			// No busy/idle check: delivery means "typed into the terminal", same as Kane's own tell —
+			// a Claude Code session queues input typed while it's mid-task, it doesn't drop it.
+			const tile = this.allSessions().find((t) => t.name === request.terminal);
+			if (tile && !tile.isJournal) {
+				(tile as TerminalTile).sendLine(request.message);
+				this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'accepted', terminalName: tile.name, handledMs: Date.now() });
+			} else {
+				this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'rejected', reason: `"${request.terminal}" is no longer a live terminal`, handledMs: Date.now() });
+			}
+			return;
+		}
 		const tile = await this.spawnFromName(request.repo, request.base, request.task, request.model ?? undefined, request.effort ?? undefined, request.name ?? undefined);
 		if (tile) {
 			this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'accepted', terminalName: tile.name, handledMs: Date.now() });

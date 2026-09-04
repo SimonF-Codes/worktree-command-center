@@ -5,6 +5,25 @@ landed on `main`.
 
 ## Unreleased
 
+**Connectors can now `tell` an existing terminal, not only `spawn` a new one**
+- The connector channel below shipped `spawn`-only. The user's butler ("Brain 2.0") needed to
+  hand work to a terminal that's already open, not just open new ones — the thing `cos-coord tell`
+  already does for the overseer, with no external equivalent.
+- Added a `tell` request kind: `{ kind: "tell", terminal, message }`, alongside `spawn`, both still
+  the only permitted kinds — `watch`/`rename`/`personality` remain overseer-only. Receipt semantics
+  match `spawn` exactly: `accepted` (with `terminalName`) only once the message is actually
+  delivered, `rejected` with a reason otherwise (no such terminal, the name is ambiguous, the
+  target is a journal tile, the message is over a 4000-character cap) — never silence, and never
+  "accepted" without delivery.
+- A connector may address any live terminal (matching the user's ask), but only one that already
+  exists and by exact/unambiguous-case-insensitive name; unlike Kane's own `resolveTellTarget`, an
+  ambiguous case-insensitive match is rejected rather than guessed at. No new rate limit beyond the
+  size cap and the receipt-per-attempt trail — consistent with `spawn` never having had one either.
+- No new roster mechanism: `floor/INDEX.md` already lists every live terminal's exact name and
+  Brain 2.0 already reads it, so that's what a connector reads to pick a `terminal` value.
+- `god-outbox/` and Kane's own `tell` are unchanged; connector `tell` goes through the same
+  request/receipt path as connector `spawn`, not a second door into the outbox.
+
 **A real connector channel, separate from Kane's own outbox**
 - The previous entry below documented `god-outbox/` as a supported integration point for any
   local process — that was wrong. It conflated two different actors: Kane's outbox carries the

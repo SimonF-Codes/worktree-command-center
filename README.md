@@ -50,10 +50,24 @@ directory pair per connector, under `coordDir` (`<userData>/.coordination/<works
 trust boundary between the user's own apps, not authentication. A request from an id that isn't
 registered gets a rejected receipt, not silence.
 
-This is deliberately narrower than Kane's own channel (below): connectors get **`spawn` only**.
-Not `tell` (injecting keystrokes into a terminal the connector didn't create), not `rename` or
-`personality` (acting on the operator's own workspace) — those are the overseer's power over
-every terminal on the floor, not something a request from a separate app should inherit.
+This is deliberately narrower than Kane's own channel (below): connectors get **`spawn` and
+`tell`, and nothing else**. Not `watch` or `rename` or `personality` — those act on the
+operator's own workspace (Kane's watchers, Kane's own mode), not on requesting work from a
+terminal, so they stay the overseer's alone.
+
+`tell` looks like it narrows the gap with Kane's `tell`, so the asymmetry is worth spelling out:
+a connector may address **any** live terminal by its exact name — same as the user's ask ("submit
+tasks to all the worktree command center tabs") — but only a terminal that already exists; it
+cannot create, rename, or retarget one, an ambiguous or non-terminal (journal) name is rejected
+rather than guessed at, the message is capped at 4000 characters (a paste-expanded message has
+jammed a terminal's input before), and — the actual backstop against a connector spamming the
+floor — every single attempt gets a receipt with a reason when it didn't land, so a connector
+misbehaving is visible immediately rather than silently. There is no separate rate limit beyond
+that; `spawn` has never had one either, and adding one only for `tell` would be a second,
+inconsistent mechanism for the same risk the receipt trail already surfaces. A `tell` into a
+terminal that's mid-task is still accepted and delivered — the message is typed into that
+terminal exactly like Kane's own `tell`, which a running Claude Code session queues rather than
+drops; "accepted" means "typed and submitted," not "acted on immediately."
 
 Write a request atomically — a temp file in `requests/`, then `rename()` over the final name —
 and give it a v1 envelope with an id you choose (the receipt refers back to it, so you can
@@ -71,19 +85,40 @@ fs.writeFileSync(tmp, JSON.stringify(body));
 fs.renameSync(tmp, path.join(reqDir, `${id}.json`));
 ```
 
+A `spawn` request:
+
 | field | type |
 | --- | --- |
 | `v` | `1` |
 | `id` | `string` — your own unique id; the receipt is named after it |
 | `connector` | `string` — your registered connector id |
 | `sentMs` | `number` |
-| `kind` | `"spawn"` — the only permitted value |
+| `kind` | `"spawn"` |
 | `repo` | `string` |
 | `base` | `string \| null` |
 | `task` | `string` |
 | `model` | `string \| null` |
 | `effort` | `string \| null` |
 | `name` | `string \| null` |
+
+A `tell` request — same envelope header (`v`/`id`/`connector`/`sentMs`), different body:
+
+| field | type |
+| --- | --- |
+| `kind` | `"tell"` |
+| `terminal` | `string` — exact live terminal name (case-insensitive if unambiguous) |
+| `message` | `string` — max 4000 characters |
+
+```json
+{ "v": 1, "id": "...", "connector": "brain-2-0", "sentMs": 0, "kind": "tell",
+  "terminal": "b2-drag", "message": "run the migration script and report back" }
+```
+
+**Discovering terminal names:** `<coordDir>/floor/INDEX.md` already lists every live terminal's
+exact name (Brain 2.0 already reads this file for run reconciliation), refreshed every few
+seconds — that's the roster a connector reads to pick a `terminal` value for `tell`. No second
+mechanism was added for this; the file already existed, already lived under `coordDir`, and
+already carried exactly the field (`name`) a `tell` needs to address.
 
 For every request drained, the app writes `connectors/<connectorId>/receipts/<id>.json` — so
 delivery is never inferred from a file just disappearing:
@@ -93,15 +128,18 @@ delivery is never inferred from a file just disappearing:
 { "v": 1, "id": "...", "status": "rejected", "reason": "unknown repo \"ghost\". Known: app, notes", "handledMs": 1788363509001 }
 ```
 
-`status` is `"accepted"` (with the `terminalName` the app actually created) or `"rejected"`
-(with a human-readable `reason` — always present, never silent): the connector isn't registered,
-the envelope is malformed, `kind` isn't `spawn`, or the repo is unknown. Receipts are the
+`status` is `"accepted"` (with `terminalName` — the terminal a `spawn` created, or the one a
+`tell` was delivered into) or `"rejected"` (with a human-readable `reason` — always present, never
+silent): the connector isn't registered, the envelope is malformed, `kind` isn't `spawn`/`tell`,
+the repo is unknown, or — `tell` only — no such terminal, the name is ambiguous, the target is a
+journal tile rather than a terminal, or the message is over the length cap. Receipts are the
 connector's to clean up; the app prunes anything older than ~7 days on its own so the directory
 can't grow forever if you stop reading them.
 
-The canonical parser is `parseConnectorRequest`/`evaluateConnectorRequest` in
-`src/terminals/connectors.ts` — its tests (`tests/connectors.test.ts`) are the source of truth for
-exactly which fields are required and which reject reasons exist.
+The canonical parser is `parseConnectorRequest`/`evaluateConnectorRequest` (and, for `tell`,
+`resolveConnectorTellTarget`) in `src/terminals/connectors.ts` — its tests
+(`tests/connectors.test.ts`) are the source of truth for exactly which fields are required and
+which reject reasons exist.
 
 **A workspace drains as soon as its grid exists**, same as Kane's channel below — every configured
 workspace's grid is constructed at app launch, so a `spawn` into an unvisited workspace works
