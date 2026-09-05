@@ -3,6 +3,7 @@ import { toast } from './ui/toast';
 import { promptForTopic, promptForConfirm } from './ui/prompt-dialog';
 import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/terminals-grid';
 import { parseGodSelfImprove } from './terminals/god';
+import { parseRoleLibrary } from './terminals/role-library';
 import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, reposForWorkspace } from './workspace';
 import { SerialWriter } from './serial-writer';
@@ -154,6 +155,11 @@ async function main(): Promise<void> {
 		// dispatch"). App-wide, like repos — every workspace's grid gets the same list.
 		const connectors = parseConnectors(cfg.connectors);
 
+		// Agent role files (see the vault's _meta/agents/Charter.md): when config.json names a
+		// folder, each session's system prompt comes from the role file there instead of the
+		// compiled-in builder. Absent key = built-ins, which is every existing config.
+		const roleLibrary = parseRoleLibrary(cfg.roleLibrary);
+
 		const depsFor = (id: string): GridDeps => ({
 			// Scoped, not the whole list: a repo tagged with a `group` belongs to that workspace
 			// alone. Untagged repos (every existing config) still appear everywhere.
@@ -168,6 +174,7 @@ async function main(): Promise<void> {
 			sessionsFile: path.join(userData, '.terminal-sessions.json'),
 			bypassPermissions: true,
 			godSelfImprove,
+			roleLibrary,
 			connectors,
 			sessionEnv: () => sessionEnvProvider({ workspaceId: id }),
 			overseerName: typeof cfg.overseerName === 'string' ? cfg.overseerName : undefined,

@@ -5,6 +5,25 @@ landed on `main`.
 
 ## Unreleased
 
+**Agent instructions read from role files instead of compiled-in strings**
+- The worker terminal, folder terminal and overseer prompts existed only as TypeScript string
+  builders, so changing how an agent behaves meant an edit, a build and a reinstall — which kills
+  every session on the floor. New optional `roleLibrary: { path }` key in `config.json` points at a
+  folder of markdown role files; each session's appended system prompt is then that role's prose
+  plus a `## Session facts` block carrying the runtime values the builders used to interpolate.
+- Roles are looked up by their `role:` frontmatter slug, never by filename, and only load at
+  `status: active` — a renamed file keeps working, and a draft or retired directive cannot
+  silently start governing a live session.
+- Every failure falls back to the existing builder, which is unchanged and staying: no key, a
+  missing folder, an unreadable file (these live in cloud-synced folders, where a placeholder can
+  fail outright on read), no file with that slug, a non-active status. A session starting with *no*
+  instructions is far worse than one running a slightly stale compiled default.
+- Each session start logs `[roles] <slug> — vault (<file>)` or `— built-in (<reason>)`. Without it a
+  loader that silently read nothing would be indistinguishable from a working one, and the feature
+  would appear to work while doing nothing.
+- Note this is a behaviour change, not a refactor: with a library configured, the agents start
+  following the role files' text, which is not identical to the compiled strings.
+
 **A real connector channel, separate from Kane's own outbox**
 - The previous entry below documented `god-outbox/` as a supported integration point for any
   local process — that was wrong. It conflated two different actors: Kane's outbox carries the
