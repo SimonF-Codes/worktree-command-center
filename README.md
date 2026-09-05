@@ -118,6 +118,51 @@ technically stops a local process from writing the same shapes into `god-outbox/
 means impersonating the overseer's full authority over the floor, not requesting work — treat that
 as unsupported, not as a shortcut.
 
+### Agent role files
+
+The system prompt each session starts with — the worker terminal's, the folder terminal's, and
+Kane's — can come from markdown files on disk instead of the strings compiled into the app. Point
+`config.json` at a folder of them:
+
+```json
+{ "roleLibrary": { "path": "C:/Users/you/vault/_meta/agents" } }
+```
+
+Each file is frontmatter plus prose. Only three fields matter: `role:` is the slug the app looks
+up (**not** the filename, so a role can be renamed for display without breaking anything),
+`status:` must be `active`, and everything after the frontmatter becomes the prompt. The three
+slugs the app asks for are `worker-terminal`, `folder-terminal` and `alpha` (the overseer).
+
+```markdown
+---
+role: worker-terminal
+status: active
+---
+
+## Mission
+
+…
+```
+
+Runtime values are **not** templated into the prose — no `{{placeholders}}`. The app appends them
+as a `## Session facts` block (repo, branch and worktree for a worker; folder and working
+directory for a folder target; the floor's targets, coordination dir and overseer name for Kane),
+so the file stays readable prose that a person edits.
+
+Files are read **at session start**, so restart a terminal to pick up an edit; a running session
+keeps the text it was given. Every failure — no key configured, missing folder, unreadable file, no
+file with that slug, a role that isn't `active` — falls back to the compiled-in prompt, because a
+session that starts with *no* instructions is far worse than one running a slightly stale default.
+Each start logs one line naming the slug and the source:
+
+```
+[roles] worker-terminal — vault (Worker Terminal.md)
+[roles] alpha — built-in (no roleLibrary configured)
+```
+
+Parsing lives in `src/terminals/role-library.ts` (pure, tested) with the file reads in
+`src/terminals/role-loader.ts`.
+
 ## Build from source
 
 ```bash
