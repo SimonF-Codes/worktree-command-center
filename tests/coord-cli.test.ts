@@ -82,4 +82,24 @@ describe('cos-coord CLI', () => {
     expect(msgs.find((m) => m.kind === 'spawn' && m.task === 'do Y')).toMatchObject({ model: 'opus', effort: 'max', name: 'Linehaul' });
     expect(msgs.find((m) => m.kind === 'rename')).toMatchObject({ target: 'wt-1', name: 'Linehaul fix' });
   });
+  it('as GOD, a required arg left empty is refused (exit 2) instead of silently dropping nothing', () => {
+    const god = { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god' };
+    const cases: Array<[string[], string]> = [
+      [['tell', 'A'], 'tell requires'],
+      [['watch', 'A'], 'watch requires'],
+      [['spawn', 'app', '--base', 'main'], 'spawn requires'], // no --task
+      [['rename', 'A'], 'rename requires'], // no --to
+    ];
+    for (const [args, expectedErr] of cases) {
+      try {
+        execFileSync('node', [CLI, ...args], { env: god, encoding: 'utf8' });
+        throw new Error(`expected ${args.join(' ')} to exit non-zero`);
+      } catch (e: unknown) {
+        const err = e as { status: number; stderr: string };
+        expect(err.status).toBe(2);
+        expect(err.stderr).toContain(expectedErr);
+      }
+    }
+    expect(fs.existsSync(path.join(dir, 'god-outbox'))).toBe(false);
+  });
 });
