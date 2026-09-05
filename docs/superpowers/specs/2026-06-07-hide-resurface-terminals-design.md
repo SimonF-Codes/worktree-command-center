@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Hide / Resurface Terminals — Design
 
 **Date:** 2026-06-07

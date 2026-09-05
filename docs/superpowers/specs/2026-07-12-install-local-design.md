@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Install as a Permanent App — design
 
 **Date:** 2026-07-12

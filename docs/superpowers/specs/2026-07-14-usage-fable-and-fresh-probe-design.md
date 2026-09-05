@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Usage Battery: Fable Readout + Fresh-Session Refresh — design
 
 **Date:** 2026-07-14

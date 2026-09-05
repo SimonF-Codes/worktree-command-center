@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Multiple Workspaces — Design
 
 > Status: approved design, pre-implementation. Date: 2026-06-17.

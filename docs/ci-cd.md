@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # CI / CD
 
 GitHub Actions guard every change and automate releases. Two workflows live in

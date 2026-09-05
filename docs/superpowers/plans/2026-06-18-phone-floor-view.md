@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Phone Floor View Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Steps use `- [ ]`.

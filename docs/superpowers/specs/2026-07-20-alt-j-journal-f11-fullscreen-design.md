@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Alt+J Journal Shortcut & F11 Fullscreen — Design
 
 **Date:** 2026-07-20
