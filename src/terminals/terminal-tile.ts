@@ -7,6 +7,8 @@ import * as path from 'path';
 import { SessionBridge, safeSessionEnv } from './session-bridge';
 import { readClipboardText, writeClipboardText } from './clipboard';
 import { removeWorktreeAndBranch, terminalSystemPrompt, folderSystemPrompt, worktreeSettingsPath, type WorktreeInfo } from './worktree-manager';
+import { loadRolePrompt } from './role-loader';
+import type { SessionFact } from './role-library';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { FitThrottle } from './fit-throttle';
 import { HiddenOutputBuffer } from './hidden-buffer';
@@ -30,6 +32,9 @@ export interface TerminalTileOpts {
 	folder?: boolean;
 	sidecarPath: string;
 	coordDir: string;
+	/** config.json's `roleLibrary.path` — the vault folder holding the agents' role files.
+	 *  Undefined (the default) means this tile uses the compiled-in system prompt. */
+	roleLibraryPath?: string;
 	sessionEnv?: () => Record<string, string>;
 	onClosed: (tile: TerminalTile) => void;
 	onHide?: (tile: TerminalTile) => void;
@@ -522,14 +527,26 @@ export class TerminalTile implements StageTile {
 			const dir = path.join(path.dirname(this.opts.sidecarPath), 'contexts');
 			fs.mkdirSync(dir, { recursive: true });
 			const file = path.join(dir, `tile-${this.opts.tileId}.md`);
-			const prompt = this.opts.folder
-				? folderSystemPrompt(this.opts.repoName, this.opts.worktree.worktreePath)
-				: terminalSystemPrompt(this.opts.repoName, this.opts.worktree.branch, this.opts.worktree.worktreePath);
-			fs.writeFileSync(file, prompt, 'utf8');
+			fs.writeFileSync(file, this.sessionPrompt(), 'utf8');
 			return file;
 		} catch {
 			return null;
 		}
+	}
+
+	/** This session's appended system prompt: the vault's role file when one is configured and
+	 *  loadable, else the compiled builder unchanged. The facts handed to a role file are exactly
+	 *  the values those builders interpolate — a role file is given nothing the built-in prompt
+	 *  did not already carry. */
+	private sessionPrompt(): string {
+		const wt = this.opts.worktree;
+		const facts: SessionFact[] = this.opts.folder
+			? [{ label: 'folder', value: this.opts.repoName }, { label: 'working directory', value: wt.worktreePath }]
+			: [{ label: 'repo', value: this.opts.repoName }, { label: 'branch', value: wt.branch }, { label: 'worktree', value: wt.worktreePath }];
+		return loadRolePrompt(this.opts.roleLibraryPath, this.opts.folder ? 'folder-terminal' : 'worker-terminal', facts)
+			?? (this.opts.folder
+				? folderSystemPrompt(this.opts.repoName, wt.worktreePath)
+				: terminalSystemPrompt(this.opts.repoName, wt.branch, wt.worktreePath));
 	}
 
 	/** Set the tile's display name (persisted via onRename). */

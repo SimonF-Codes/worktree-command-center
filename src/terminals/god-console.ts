@@ -8,6 +8,8 @@ import * as path from 'path';
 import { SessionBridge, safeSessionEnv } from './session-bridge';
 import { readClipboardText, writeClipboardText } from './clipboard';
 import { godSystemPrompt, type GodRepo, type GodSelfImprove } from './god';
+import { loadRolePrompt } from './role-loader';
+import type { SessionFact } from './role-library';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { FitThrottle } from './fit-throttle';
 import { ctrlClickActivator, openExternalUrl } from './links';
@@ -20,6 +22,9 @@ export interface GodConsoleOpts {
 	godHomeDir: string;   // a neutral cwd outside every repo
 	sessionEnv?: () => Record<string, string>;
 	selfImprove?: GodSelfImprove; // when set, Kane may improve his own source + build tools
+	/** config.json's `roleLibrary.path` — the vault folder holding the agents' role files.
+	 *  Undefined (the default) means this console uses the compiled-in godSystemPrompt. */
+	roleLibraryPath?: string;
 	onFocusChange?: (focused: boolean) => void;
 	instanceName?: string;   // head label + COS_TERMINAL_NAME (default 'Kane')
 	terminalId?: string;     // COS_TERMINAL_ID for cos-coord identity (default '0')
@@ -362,9 +367,34 @@ export class GodConsole {
 		try {
 			fs.mkdirSync(this.opts.godHomeDir, { recursive: true });
 			const file = path.join(this.opts.godHomeDir, 'god-system-prompt.md');
-			fs.writeFileSync(file, godSystemPrompt(this.opts.repos, this.opts.coordDir, this.opts.instanceName ?? 'Kane', this.opts.selfImprove), 'utf8');
+			fs.writeFileSync(file, this.systemPrompt(), 'utf8');
 			return file;
 		} catch { return null; }
+	}
+
+	/** The overseer's appended system prompt: the vault's `alpha` role file when one is configured
+	 *  and loadable, else godSystemPrompt unchanged. The facts are exactly the values that builder
+	 *  interpolates — the floor's targets, the coordination directory, this console's name, and
+	 *  the self-improvement paths when that is configured. */
+	private systemPrompt(): string {
+		const name = this.opts.instanceName ?? 'Kane';
+		const si = this.opts.selfImprove;
+		const targets = this.opts.repos.length
+			? this.opts.repos.map((r) => `- ${r.name} → ${r.path}${r.folder ? '   [plain folder — no git]' : ''}`).join('\n')
+			: '- (no targets added yet)';
+		const facts: SessionFact[] = [
+			{ label: 'overseer name', value: name },
+			{ label: 'coordination directory', value: this.opts.coordDir },
+			{ label: 'targets on the floor (name → path)', value: targets },
+			// Only present when self-improvement is configured: the built-in prompt omits the whole
+			// carve-out in that case, so naming the paths anyway would grant more than it did.
+			...(si ? [
+				{ label: 'own source repo', value: si.sourceRepo },
+				{ label: 'standalone tools directory', value: si.toolsDir },
+			] : []),
+		];
+		return loadRolePrompt(this.opts.roleLibraryPath, 'alpha', facts)
+			?? godSystemPrompt(this.opts.repos, this.opts.coordDir, name, si);
 	}
 
 	/** Full teardown — kills the session. */

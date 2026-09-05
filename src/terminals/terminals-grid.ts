@@ -24,6 +24,7 @@ import { GodConsole } from './god-console';
 import { godIndexOf, godRecords, highestGodIndex, PRIMARY_GOD_INDEX } from './god-sessions';
 import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, EFFORT_LEVELS, type OutboxMessage, type GodSelfImprove } from './god';
 import { evaluateConnectorRequest, receiptFilename, isReceiptStale, type ConnectorConfig, type ConnectorReceipt } from './connectors';
+import type { RoleLibraryConfig } from './role-library';
 import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
 import { looksLikePrompt } from './chat-room';
 import { classifyAttention, classifyOne, attentionKind, type AttentionItem, type AttentionKind } from './attention';
@@ -55,6 +56,9 @@ export interface GridDeps {
 	sessionEnv?: () => Record<string, string>;
 	overseerName?: string;   // configurable name of the overseer console (default 'Kane')
 	godSelfImprove?: GodSelfImprove;
+	/** config.json's `roleLibrary` — the vault folder every session's role file is read from.
+	 *  Absent means every session uses its compiled-in system prompt. */
+	roleLibrary?: RoleLibraryConfig;
 	/** Connectors registered in config.json — a request from an unregistered id gets a rejected
 	 *  receipt rather than being honoured. See README "External dispatch". */
 	connectors?: ConnectorConfig[];
@@ -888,7 +892,7 @@ export class TerminalsGrid {
 		if (!this.godConsole) {
 			const godHomeDir = path.join(this.coordDir, '..', '.god', this.deps.group);
 			const kane: GodConsole = new GodConsole(
-				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, resume: true, onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
+				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, roleLibraryPath: this.deps.roleLibrary?.path, resume: true, onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
 				() => this.hideGod(),
 			);
 			this.godConsole = kane;
@@ -931,6 +935,7 @@ export class TerminalsGrid {
 				godHomeDir,
 				sessionEnv: this.deps.sessionEnv,
 				selfImprove: this.deps.godSelfImprove,
+				roleLibraryPath: this.deps.roleLibrary?.path,
 				// Same as the primary: --continue picks this duplicate's own conversation back up,
 				// falling back to a fresh session when there is nothing to resume yet.
 				resume: true,
@@ -1548,6 +1553,7 @@ export class TerminalsGrid {
 			repoName, repoPath, baseBranch, worktree, folder,
 			sidecarPath: this.sidecarPath,
 			coordDir: this.coordDir,
+			roleLibraryPath: this.deps.roleLibrary?.path,
 			sessionEnv: this.deps.sessionEnv,
 			resume,
 			bypassPermissions: this.deps.bypassPermissions,
