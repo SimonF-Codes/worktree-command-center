@@ -70,7 +70,7 @@ export interface GridDeps {
 	/** Called when the user changes a toolbar dropdown, so the app can persist it per workspace. */
 	onToolbarChange?: (state: ToolbarState) => void;
 }
-interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; }
+interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string; }
 
 // Effort options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
 const SPAWN_EFFORTS: { label: string; value: string }[] = [
@@ -543,7 +543,7 @@ export class TerminalsGrid {
 	/** Spawn core for a FOLDER target: no `git worktree add`, no branch — the tile's working
 	 *  directory IS the folder. Mirrors spawnWorktree's tile/persist/layout tail so both kinds of
 	 *  terminal behave identically once they exist. */
-	private async spawnFolder(repo: RepoConfig, opts: { task?: string; model?: string; effort?: string; name?: string }): Promise<TerminalTile | null> {
+	private async spawnFolder(repo: RepoConfig, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string }): Promise<TerminalTile | null> {
 		try {
 			await fs.access(repo.path); // a moved/unmounted folder should say so, not spawn into nothing
 		} catch {
@@ -552,7 +552,7 @@ export class TerminalsGrid {
 		}
 		const model = opts.model ?? (this.modelSel?.value || undefined);
 		const effort = opts.effort ?? (this.effortSel?.value || undefined);
-		const tile = this.makeTile({ worktreePath: repo.path, branch: '' }, repo.name, repo.path, '', false, opts.name, model, effort, true);
+		const tile = this.makeTile({ worktreePath: repo.path, branch: '' }, repo.name, repo.path, '', false, opts.name, model, effort, true, opts.roleSlug);
 		if (opts.task) this.pendingTask.set(tile.tileId, opts.task);
 		if (this.stageEl) tile.render(this.stageEl);
 		this.tiles.push(tile);
@@ -877,6 +877,19 @@ export class TerminalsGrid {
 		if (repo.folder) return this.spawnFolder(repo, { task, model, effort, name }); // --base is meaningless here
 		const baseBranch = base ?? (defaultBranch(await listBranches(repo.path)) ?? 'main');
 		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name });
+	}
+
+	/** Spawn a terminal on a NAMED role, in a folder that need not be one of the floor's repos.
+	 *  A folder target, deliberately: the library folder is a vault, not a git repo, and nothing
+	 *  about reviewing it wants a worktree or a branch.
+	 *
+	 *  The only caller today is the agent-instruction view's "Review with Custodian". It checks
+	 *  that the role file actually loads before offering the action — a tile whose role failed to
+	 *  load falls back to the generic folder-terminal prompt, which would be a session that looks
+	 *  like a Custodian and is not one. */
+	async spawnRoleTerminal(folderPath: string, roleSlug: string, opts: { name?: string; task?: string; model?: string; effort?: string } = {}): Promise<TerminalTile | null> {
+		const name = opts.name ?? roleSlug;
+		return this.spawnFolder({ name, path: folderPath, folder: true }, { ...opts, name, roleSlug });
 	}
 
 	/** Re-tint every live terminal well for a theme switch (tiles, hidden tiles, Kanes).
@@ -1565,13 +1578,14 @@ export class TerminalsGrid {
 
 	/** Build a tile with all the grid callbacks wired. `resume` → claude --continue.
 	 *  `folder` → a plain-folder target (no worktree, no branch). */
-	private makeTile(worktree: WorktreeInfo, repoName: string, repoPath: string, baseBranch: string, resume: boolean, name?: string, model?: string, effort?: string, folder?: boolean): TerminalTile {
+	private makeTile(worktree: WorktreeInfo, repoName: string, repoPath: string, baseBranch: string, resume: boolean, name?: string, model?: string, effort?: string, folder?: boolean, roleSlug?: string): TerminalTile {
 		return new TerminalTile({
 			tileId: this.nextTileId++,
 			repoName, repoPath, baseBranch, worktree, folder,
 			sidecarPath: this.sidecarPath,
 			coordDir: this.coordDir,
 			roleLibraryPath: this.deps.roleLibrary?.path,
+			roleSlug,
 			sessionEnv: this.deps.sessionEnv,
 			resume,
 			bypassPermissions: this.deps.bypassPermissions,
@@ -1734,7 +1748,7 @@ export class TerminalsGrid {
 			let exists = false;
 			try { await fs.access(rec.worktreePath); exists = true; } catch { exists = false; }
 			if (!exists) { this.unrestored.push(rec); return; } // retained — retried next launch
-			const tile = this.makeTile({ worktreePath: rec.worktreePath, branch: rec.branch }, rec.repoName, rec.repoPath, rec.baseBranch, true, rec.name, rec.model, rec.effort, rec.folder);
+			const tile = this.makeTile({ worktreePath: rec.worktreePath, branch: rec.branch }, rec.repoName, rec.repoPath, rec.baseBranch, true, rec.name, rec.model, rec.effort, rec.folder, rec.roleSlug);
 			if (this.stageEl) tile.render(this.stageEl);
 			if (rec.hidden) { tile.setHidden(true); this.hidden.push(tile); }
 			else this.tiles.push(tile);
