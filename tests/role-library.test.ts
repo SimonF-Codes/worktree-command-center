@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-	parseRoleFile, indexRoles, pickRole, renderFacts, buildPrompt, parseRoleLibrary,
+	parseRoleFile, indexRoles, pickRole, renderFacts, buildPrompt, parseRoleLibrary, isRoleDocument,
 } from '../src/terminals/role-library';
 
 const alpha = [
@@ -74,6 +74,12 @@ describe('indexRoles', () => {
 		expect(idx.roles.size).toBe(2);
 	});
 
+	it('carries the whole frontmatter through, for readers that need the display fields', () => {
+		const idx = indexRoles(files);
+		expect(idx.roles.get('alpha')!.frontmatter.name).toBe('Alpha');
+		expect(idx.roles.get('alpha')!.frontmatter['custodian-reviewed']).toBe('');
+	});
+
 	it('reports a duplicate slug and lets the last file win', () => {
 		const idx = indexRoles([
 			{ name: 'Old.md', text: '---\nrole: alpha\nstatus: active\n---\nold' },
@@ -81,6 +87,27 @@ describe('indexRoles', () => {
 		]);
 		expect(idx.duplicates).toEqual(['alpha']);
 		expect(idx.roles.get('alpha')!.body).toBe('new');
+	});
+});
+
+describe('isRoleDocument', () => {
+	it('excludes the documents ABOUT the library — Custodian Procedure step 2', () => {
+		expect(isRoleDocument('Index.md')).toBe(false);
+		expect(isRoleDocument('Charter.md')).toBe(false);
+		expect(isRoleDocument('Summary.md')).toBe(false);
+		expect(isRoleDocument('Custodian Reports/2026-09-05 Custodian Review.md')).toBe(false);
+	});
+
+	it('is case- and separator-insensitive (OneDrive on Windows preserves neither)', () => {
+		expect(isRoleDocument('charter.md')).toBe(false);
+		expect(isRoleDocument('CUSTODIAN REPORTS\\2026-09-05.md')).toBe(false);
+		expect(isRoleDocument('./Summary.MD')).toBe(false);
+	});
+
+	it('keeps every actual role file, including ones whose name contains an excluded word', () => {
+		expect(isRoleDocument('Alpha.md')).toBe(true);
+		expect(isRoleDocument('Agent Custodian.md')).toBe(true);
+		expect(isRoleDocument('Worker Terminal.md')).toBe(true);
 	});
 });
 
@@ -144,7 +171,7 @@ describe('renderFacts', () => {
 
 describe('buildPrompt', () => {
 	it('is the role body, a rule, then the session facts', () => {
-		const role = { slug: 'alpha', status: 'active', body: '\nBody text.\n\n', file: 'Alpha.md' };
+		const role = { slug: 'alpha', status: 'active', body: '\nBody text.\n\n', file: 'Alpha.md', frontmatter: {} };
 		expect(buildPrompt(role, [{ label: 'repo', value: 'app' }]))
 			.toBe('Body text.\n\n---\n\n## Session facts\n\n- repo: app\n');
 	});

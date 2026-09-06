@@ -21,12 +21,16 @@ export interface ParsedRoleFile {
 }
 
 /** An indexed role: what the loader needs to decide whether to use it and to say where it
- *  came from. `file` is carried purely so the log line can name it. */
+ *  came from. `file` is carried purely so the log line can name it. `frontmatter` is the whole
+ *  parsed block, kept because a second reader (the agent-instruction view) needs the display
+ *  fields — name, surface, authority — that a session prompt has no use for. Carrying them here
+ *  rather than re-parsing the folder in the view is what keeps "one reader, one answer" true. */
 export interface Role {
 	slug: string;
 	status: string;
 	body: string;
 	file: string;
+	frontmatter: Record<string, string>;
 }
 
 /** Split a role file into frontmatter + body. The fence must be the first thing in the file
@@ -53,6 +57,27 @@ export function parseRoleFile(text: string): ParsedRoleFile | null {
 	return { frontmatter, body: lines.slice(end + 1).join('\n').replace(/^\n+/, '').trimEnd() };
 }
 
+/** Markdown files that live in the role folder but are NOT roles. They are documents about the
+ *  library — `Charter.md` and `Index.md` even carry a `role:` slug of their own, so nothing in
+ *  the frontmatter tells them apart from a role — plus the Custodian's own outputs, which appear
+ *  in this folder as it runs.
+ *
+ *  The set is not invented here: it is Procedure step 2 of the vault's `Agent Custodian.md`,
+ *  which defines exactly this inventory for its review pass. Sharing one definition is the point
+ *  — if the app and the Custodian disagreed about what counts as a role, one of them would be
+ *  reasoning about a library the other cannot see. */
+const NON_ROLE_DOCUMENTS = new Set(['index.md', 'charter.md', 'summary.md']);
+const NON_ROLE_FOLDERS = ['custodian reports/'];
+
+/** Is this entry in the library folder a role file, as opposed to a document about the library?
+ *  Takes a file name or a library-relative path. Case-insensitive: the vault lives on Windows
+ *  inside OneDrive, and neither preserves case reliably. */
+export function isRoleDocument(fileName: string): boolean {
+	const rel = String(fileName).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+	if (NON_ROLE_FOLDERS.some((f) => rel.startsWith(f) || rel.includes('/' + f))) return false;
+	return !NON_ROLE_DOCUMENTS.has(rel.split('/').pop() ?? '');
+}
+
 /** Every parseable role, keyed by slug, plus any slug that appeared more than once. Duplicates
  *  are last-wins (the caller still gets a working prompt) but they are a Custodian-relevant
  *  condition — two files claiming one slug means one of them is silently dead — so they are
@@ -74,7 +99,7 @@ export function indexRoles(files: { name: string; text: string }[]): RoleIndex {
 		const slug = (parsed.frontmatter.role ?? '').trim();
 		if (!slug) continue;
 		if (roles.has(slug) && !duplicates.includes(slug)) duplicates.push(slug);
-		roles.set(slug, { slug, status: (parsed.frontmatter.status ?? '').trim(), body: parsed.body, file: f.name });
+		roles.set(slug, { slug, status: (parsed.frontmatter.status ?? '').trim(), body: parsed.body, file: f.name, frontmatter: parsed.frontmatter });
 	}
 	return { roles, duplicates };
 }
