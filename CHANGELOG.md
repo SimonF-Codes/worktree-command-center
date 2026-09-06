@@ -5,6 +5,40 @@ landed on `main`.
 
 ## Unreleased
 
+**📖 Roles — a browsable, read-only wiki of every agent role**
+- The role library the sessions read at start had no view. `Index.md` is a wall of table and the
+  role files are 3–12KB each, so "what does the Sorter actually do, and what may it write?" meant
+  opening a file and reading a page.
+- A **full-window view** — not a modal, not a panel beside the terminals, not a workspace tab.
+  Opened from the top bar, it takes the whole window and hides the terminal surface the same way
+  an overlay does, so leaving it puts every workspace back exactly as it was. Escape closes it.
+- One tile per role, grouped by surface: name, the **authority rung** (coloured, because it is the
+  one word that says blast radius and it is what you scan a wall of tiles for), status, the first
+  paragraph of `## Mission`, and the Custodian-review state — including the Charter's own staleness
+  rule, so a review older than the last edit says so. An optional `summary:` frontmatter field
+  overrides the Mission paragraph for the ones that crop badly; it is deliberately not required.
+- Filters compose and are pure view state, nothing persisted: surface, rung, status, a search over
+  name/mission/scope text, and **un-migrated**, which is off by default. An un-migrated role — one
+  that lives only as a string literal in some app's source, or in a scheduled-task config — renders
+  from its registry row plus the steps to migrate it, derived from what the registry says about
+  where it lives. The gap should be actionable where it is visible.
+- A coverage count ("8 of 14 roles have a role file") sits in the chrome. It says more about the
+  health of the library than any individual tile.
+- Clicking a tile opens the `.md`: `obsidian://` when a `.obsidian/` folder is found by walking up
+  from the file, the OS default app otherwise or when nothing answers the URI, plus a 📁 reveal.
+- **Nothing in the view changes the state of an agent.** The vault is the one writer over these
+  files; the first editable field here is where a second source of truth begins. The single
+  exception is library-level, not per-tile: *Review with Custodian* spawns a terminal on the
+  `agent-custodian` role against the library folder, and only when that role file exists and is
+  `status: active` — otherwise it says why, rather than starting a session that runs the generic
+  folder-terminal prompt while calling itself the Custodian.
+- With no `roleLibrary` configured the view opens and explains that; an unreadable folder (a
+  stalled OneDrive placeholder) reports and offers a retry. Neither can break the app.
+- Reads through the existing `role-library.ts` — one parse, so the view and the running sessions
+  cannot disagree about what a role says. `Index.md`, `Charter.md`, `Summary.md` and
+  `Custodian Reports/` are excluded from the role inventory using the Custodian's own Procedure
+  step 2, so the app and the Custodian agree on what counts as a role.
+
 **Connectors can now `tell` an existing terminal, not only `spawn` a new one**
 - The connector channel below shipped `spawn`-only. The user's butler ("Brain 2.0") needed to
   hand work to a terminal that's already open, not just open new ones — the thing `cos-coord tell`

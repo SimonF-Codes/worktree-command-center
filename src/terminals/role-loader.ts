@@ -11,7 +11,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { indexRoles, pickRole, buildPrompt, type SessionFact } from './role-library';
+import { indexRoles, pickRole, buildPrompt, isRoleDocument, type SessionFact } from './role-library';
 
 /** Bounds on what the loader will pull into memory. The folder is a handful of hand-written
  *  markdown files; anything past these limits is a wrong path in config, not a role library. */
@@ -29,11 +29,14 @@ function report(slug: string, source: string, configured: boolean): void {
 	else console.log(line);
 }
 
-/** Read every `*.md` in the library folder. One unreadable file (a stalled OneDrive placeholder,
- *  a permissions oddity) skips that file rather than losing the rest — the role we want may well
- *  be one of the ones that read fine. */
-function readRoleFiles(dir: string): { name: string; text: string }[] {
-	const names = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.md')).slice(0, MAX_FILES);
+/** Read every role `*.md` in the library folder — the documents ABOUT the library (Charter.md,
+ *  Index.md, Summary.md) are skipped by isRoleDocument, which is the Custodian's own inventory
+ *  rule. One unreadable file (a stalled OneDrive placeholder, a permissions oddity) skips that
+ *  file rather than losing the rest — the role we want may well be one of the ones that read
+ *  fine. Exported because the agent-instruction view reads the same folder the same way; two
+ *  readers with two rules is the drift this whole library exists to avoid. */
+export function readRoleFiles(dir: string): { name: string; text: string }[] {
+	const names = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.md') && isRoleDocument(n)).slice(0, MAX_FILES);
 	const files: { name: string; text: string }[] = [];
 	for (const name of names) {
 		const full = path.join(dir, name);

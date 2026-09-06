@@ -17,6 +17,8 @@ import { AttentionWidget } from './ui/attention-widget';
 import { WorkspaceBar } from './ui/workspace-bar';
 import { SettingsPanel } from './ui/settings-panel';
 import { ChangelogPanel } from './ui/changelog-panel';
+import { RolesView } from './ui/roles-view';
+import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
 import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, type Workspace } from './terminals/workspace-store';
 import { THEMES, normalizeTheme, setActiveTheme, activeTerminalPalette } from './terminals/theme-store';
 import * as path from 'path';
@@ -274,6 +276,48 @@ async function main(): Promise<void> {
 			terminalRoot.style.display = '';
 			await activeGrid.mount(gridContainer); // resume tiles (the workspace-switch path)
 		};
+
+		// --- 📖 Agent instructions: a FULL-WINDOW view, not a panel and not a workspace tab.
+		// It rides the same hide/show machinery an overlay surface uses, so the terminal grid
+		// unmounts (every tile suspends) while something else owns the window, and leaving puts
+		// the workspaces back exactly as they were.
+		const rolesBtn = topBar.createEl('button', { cls: 'wcc-settings-btn', text: '📖 Roles' });
+		// The library path is re-read from config on every open rather than captured at startup:
+		// adding the roleLibrary key should show up in the wiki without relaunching the app.
+		// (Running SESSIONS still pick a role file up at session start only, by design.)
+		let viewLibraryPath = roleLibrary?.path;
+		let terminalWasShownBeforeRoles = true;
+		const rolesView = new RolesView({
+			libraryPath: () => viewLibraryPath,
+			toast,
+			// The one state-changing action in the whole view, and it is library-level: a terminal
+			// on the Agent Custodian role, in the library folder. Close first, so the terminal it
+			// spawns is the thing you are looking at.
+			reviewWithCustodian: (libPath) => {
+				closeRoles();
+				void activeGrid.spawnRoleTerminal(libPath, CUSTODIAN_SLUG, {
+					name: 'Agent Custodian',
+					task: `Run a review pass over the agent role library at ${libPath}.`,
+				}).then((tile) => {
+					if (tile) toast('Agent Custodian started on the role library — its review pass is read-only', 'success');
+					else toast(`Couldn't start the Custodian — ${libPath} is unreachable`, 'error');
+				});
+			},
+		});
+		const closeRoles = (): void => {
+			if (!rolesView.isOpen) return;
+			rolesView.close();
+			if (terminalWasShownBeforeRoles) void showTerminal();
+		};
+		rolesView.onClose = closeRoles;
+		const openRoles = async (): Promise<void> => {
+			const fresh = await window.wcc.getConfig().catch(() => ({} as Record<string, unknown>));
+			viewLibraryPath = parseRoleLibrary(fresh.roleLibrary)?.path ?? roleLibrary?.path;
+			terminalWasShownBeforeRoles = terminalShown;
+			hideTerminal();
+			rolesView.open(appEl);
+		};
+		rolesBtn.addEventListener('click', () => { if (rolesView.isOpen) closeRoles(); else void openRoles(); });
 
 		async function onAdd(): Promise<void> {
 			const name = await promptForTopic('New workspace', 'workspace name', '', 'Create');

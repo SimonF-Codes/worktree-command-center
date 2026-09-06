@@ -35,6 +35,11 @@ export interface TerminalTileOpts {
 	/** config.json's `roleLibrary.path` — the vault folder holding the agents' role files.
 	 *  Undefined (the default) means this tile uses the compiled-in system prompt. */
 	roleLibraryPath?: string;
+	/** Which role file this session runs on, by `role:` slug. Undefined — every ordinary
+	 *  terminal — means the target decides it: `folder-terminal` or `worker-terminal`. Set only
+	 *  when a caller is deliberately spawning some OTHER agent, e.g. the Agent Custodian from
+	 *  the agent-instruction view. Persisted, so a restored session is still that agent. */
+	roleSlug?: string;
 	sessionEnv?: () => Record<string, string>;
 	onClosed: (tile: TerminalTile) => void;
 	onHide?: (tile: TerminalTile) => void;
@@ -543,7 +548,8 @@ export class TerminalTile implements StageTile {
 		const facts: SessionFact[] = this.opts.folder
 			? [{ label: 'folder', value: this.opts.repoName }, { label: 'working directory', value: wt.worktreePath }]
 			: [{ label: 'repo', value: this.opts.repoName }, { label: 'branch', value: wt.branch }, { label: 'worktree', value: wt.worktreePath }];
-		return loadRolePrompt(this.opts.roleLibraryPath, this.opts.folder ? 'folder-terminal' : 'worker-terminal', facts)
+		const slug = this.opts.roleSlug ?? (this.opts.folder ? 'folder-terminal' : 'worker-terminal');
+		return loadRolePrompt(this.opts.roleLibraryPath, slug, facts)
 			?? (this.opts.folder
 				? folderSystemPrompt(this.opts.repoName, wt.worktreePath)
 				: terminalSystemPrompt(this.opts.repoName, wt.branch, wt.worktreePath));
@@ -557,7 +563,7 @@ export class TerminalTile implements StageTile {
 	}
 
 	/** Serializable record for persistence. */
-	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; folder?: boolean; model?: string; effort?: string } {
+	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; folder?: boolean; model?: string; effort?: string; roleSlug?: string } {
 		return {
 			worktreePath: this.opts.worktree.worktreePath,
 			branch: this.opts.worktree.branch,
@@ -568,6 +574,9 @@ export class TerminalTile implements StageTile {
 			...(this.opts.folder ? { folder: true } : {}),
 			...(this.opts.model ? { model: this.opts.model } : {}),
 			...(this.opts.effort ? { effort: this.opts.effort } : {}),
+			// Without this a restored Custodian would come back as an ordinary folder terminal —
+			// same transcript, different instructions, and nothing on screen saying so.
+			...(this.opts.roleSlug ? { roleSlug: this.opts.roleSlug } : {}),
 		};
 	}
 
