@@ -201,6 +201,34 @@ Each start logs one line naming the slug and the source:
 Parsing lives in `src/terminals/role-library.ts` (pure, tested) with the file reads in
 `src/terminals/role-loader.ts`.
 
+### 📖 Roles — the agent instruction interface
+
+The **📖 Roles** button in the top bar opens a full-window, read-only wiki of that library: one
+tile per role, grouped by surface, showing the rung it declares, its status, the first paragraph
+of its `## Mission`, and when the Custodian last reviewed it. Filter by surface, authority rung or
+status, search across name, mission and scope text, and click a tile to open the `.md` — in
+Obsidian when the library sits inside a vault (walking up for a `.obsidian/` folder), otherwise in
+the OS default app; 📁 reveals it in Explorer. Leaving the view puts your workspaces back exactly
+as they were.
+
+Nothing in the view edits anything. The vault is the one writer over these files, and an edit
+surface here would be a second one. Two things follow from that:
+
+- **Un-migrated roles** — agents that exist only as a string literal in some app's source or in a
+  scheduled-task config — are read from the registry table in `Index.md` beside the role files.
+  They are a filter of their own, off by default, and each renders the steps to migrate it. A
+  coverage count ("8 of 14 roles have a role file") says more about the health of the library than
+  any single tile.
+- The one action that changes anything is library-level: **Review with Custodian** spawns a
+  terminal on the `agent-custodian` role, in the library folder. It is offered only when that role
+  file exists and is `status: active` — a session that fell back to the generic folder-terminal
+  prompt would look like a Custodian without being one.
+
+View logic is pure and tested in `src/terminals/role-view.ts`, the folder read in
+`src/terminals/role-view-loader.ts`, and the DOM in `src/ui/roles-view.ts`. It reads the library
+through the same parser a session start uses: if the view parsed the folder its own way, it and
+the running sessions could disagree about what a role says, and the view is the one you'd trust.
+
 ## Build from source
 
 ```bash

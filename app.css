@@ -639,3 +639,82 @@ html, body {
 	.wcc-toast { animation: none; transition: none; }
 	.wcc-toast:hover { transform: none; }
 }
+
+/* ── Agent Instruction Interface (📖 Agent instructions) ──────────────────────────────────────
+   A FULL-WINDOW view, not a panel: it sits beside .wcc-terminal-root in #app and takes the
+   whole window while the terminal surface is hidden, so leaving it puts the workspaces back
+   exactly as they were. Read-only throughout — every control here filters, searches or opens
+   a file; the one button that changes anything is library-level (Review with Custodian). */
+.wcc-roles { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--background-primary); }
+
+.wcc-roles-top { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); }
+.wcc-roles-title { font-weight: 600; font-size: 13.5px; }
+.wcc-roles-spacer { flex: 1 1 auto; }
+.wcc-roles-back, .wcc-roles-btn { background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 5px 11px; cursor: pointer; font-size: 12px; }
+.wcc-roles-back:hover, .wcc-roles-btn:hover { border-color: var(--interactive-accent); }
+.wcc-roles-custodian { border-color: var(--interactive-accent); color: var(--interactive-accent); }
+.wcc-roles-custodian.disabled { border-color: var(--background-modifier-border); color: var(--text-faint); }
+.wcc-roles-coverage { font-size: 12px; color: var(--text-muted); border: 1px solid var(--background-modifier-border); border-radius: 999px; padding: 3px 10px; }
+.wcc-roles-coverage.gap { color: var(--color-yellow); border-color: var(--color-yellow); }
+
+.wcc-roles-filters { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 14px; background: var(--background-primary-alt); border-bottom: 1px solid var(--background-modifier-border); }
+.wcc-roles-search { flex: 0 0 260px; background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 5px 9px; font-size: 12.5px; }
+.wcc-roles-search:focus { outline: none; border-color: var(--interactive-accent); }
+.wcc-roles-chiprow { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.wcc-roles-chiplabel { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; margin-right: 2px; }
+.wcc-roles-chip { background: transparent; color: var(--text-muted); border: 1px solid var(--background-modifier-border); border-radius: 999px; padding: 3px 10px; cursor: pointer; font-size: 11.5px; }
+.wcc-roles-chip:hover { color: var(--text-normal); border-color: var(--background-modifier-border-hover); }
+.wcc-roles-chip.on { background: var(--interactive-accent); border-color: var(--interactive-accent); color: var(--text-on-accent); }
+.wcc-roles-unmigrated.on { background: var(--color-yellow); border-color: var(--color-yellow); color: #1a1408; }
+.wcc-roles-clear { border-style: dashed; }
+
+.wcc-roles-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; }
+.wcc-roles-notice { font-size: 12px; color: var(--text-muted); border: 1px solid var(--background-modifier-border); border-left: 3px solid var(--color-yellow); border-radius: 6px; padding: 7px 11px; margin-bottom: 10px; }
+
+.wcc-roles-group { margin-bottom: 18px; }
+.wcc-roles-group-h { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding-bottom: 5px; border-bottom: 1px solid var(--background-modifier-border); }
+.wcc-roles-group-name { font-weight: 600; font-size: 12.5px; color: var(--text-normal); }
+.wcc-roles-group-count { font-size: 11px; color: var(--text-faint); }
+.wcc-roles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+
+.wcc-role-tile { display: flex; flex-direction: column; gap: 6px; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 9px; padding: 11px 13px; }
+.wcc-role-tile.clickable { cursor: pointer; }
+.wcc-role-tile.clickable:hover { border-color: var(--interactive-accent); background: var(--background-secondary-alt); }
+.wcc-role-tile.clickable:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.wcc-role-tile.stub { background: transparent; border-style: dashed; }
+.wcc-role-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.wcc-role-name { font-weight: 600; font-size: 13px; }
+.wcc-role-chips { display: flex; align-items: center; gap: 5px; flex: none; }
+
+/* The rung chip: the one word that says blast radius, coloured by how much it can do. */
+.wcc-role-rung { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; border-radius: 4px; padding: 2px 6px; border: 1px solid; }
+.wcc-role-rung[data-rung="observer"] { color: var(--color-cyan); border-color: var(--color-cyan); }
+.wcc-role-rung[data-rung="proposer"] { color: var(--color-green); border-color: var(--color-green); }
+.wcc-role-rung[data-rung="operator"] { color: var(--color-yellow); border-color: var(--color-yellow); }
+.wcc-role-rung[data-rung="autonomous"] { color: var(--color-red); border-color: var(--color-red); }
+.wcc-role-rung.proposed { border-style: dashed; opacity: .8; }
+.wcc-role-status { font-size: 10.5px; color: var(--text-muted); }
+.wcc-role-status[data-status="active"]::before { content: '\25CF '; color: var(--color-green); }
+.wcc-role-status[data-status="proposed"]::before { content: '\25CB '; color: var(--text-faint); }
+.wcc-role-status[data-status="retired"]::before { content: '\00B7 '; color: var(--text-faint); }
+
+.wcc-role-meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); }
+.wcc-role-tag { font-size: 10px; color: var(--text-faint); border: 1px solid var(--background-modifier-border); border-radius: 4px; padding: 1px 5px; }
+.wcc-role-tag.warn { color: var(--color-yellow); border-color: var(--color-yellow); }
+.wcc-role-summary { font-size: 12.5px; line-height: 1.5; color: var(--text-normal); }
+.wcc-role-foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.wcc-role-reviewed { flex: 1 1 auto; font-size: 11px; color: var(--text-faint); }
+.wcc-role-reviewed.stale { color: var(--color-yellow); }
+.wcc-role-open, .wcc-role-reveal { background: var(--background-primary); color: var(--text-muted); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 3px 8px; cursor: pointer; font-size: 11px; }
+.wcc-role-open:hover, .wcc-role-reveal:hover { color: var(--text-normal); border-color: var(--interactive-accent); }
+
+.wcc-role-warn { display: flex; flex-direction: column; gap: 2px; border-left: 3px solid var(--color-yellow); padding: 2px 0 2px 9px; }
+.wcc-role-warn-h { font-size: 11.5px; font-weight: 600; color: var(--color-yellow); }
+.wcc-role-warn-where { font-size: 11px; color: var(--text-muted); font-family: var(--font-monospace); }
+.wcc-role-steps { margin: 2px 0 0; padding-left: 20px; font-size: 11.5px; line-height: 1.55; color: var(--text-muted); }
+.wcc-role-steps li { margin-bottom: 2px; }
+
+.wcc-roles-empty { max-width: 680px; margin: 24px auto; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 9px; padding: 18px 20px; }
+.wcc-roles-empty-h { font-weight: 600; font-size: 13.5px; margin-bottom: 8px; }
+.wcc-roles-empty-p { font-size: 12.5px; line-height: 1.55; color: var(--text-muted); margin-bottom: 8px; }
+.wcc-roles-code { background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 9px 11px; font: 12px var(--font-monospace); color: var(--text-normal); overflow-x: auto; margin: 0 0 10px; }
