@@ -1115,6 +1115,11 @@ export class TerminalsGrid {
 			try { text = fsSync.readFileSync(full, 'utf8'); } catch { continue; }
 			const msg = parseOutboxMessage(text);
 			if (msg) this.dispatchOutbox(msg, names);
+			// A message that fails to parse (bad JSON, unknown/missing required fields — e.g. a
+			// hand-written external drop) used to just get archived, indistinguishable from one
+			// that dispatched fine. That's the same silent-no-op shape as an unresolved tell/watch
+			// target, so it gets the same treatment.
+			else this.writeGodInbox(`dropped an unreadable god-outbox message (${f}): ${text.slice(0, 200)}`);
 			try { fsSync.renameSync(full, path.join(done, f)); } catch { try { fsSync.unlinkSync(full); } catch { /* ignore */ } }
 		}
 	}
@@ -1277,13 +1282,17 @@ export class TerminalsGrid {
 		if (this.pulseTimer !== null) { window.clearInterval(this.pulseTimer); this.pulseTimer = null; }
 	}
 
-	/** Leave GOD an error note he can read back. */
+	/** A handoff to a worker (tell/watch/rename/spawn) failed after cos-coord already returned
+	 *  success — e.g. the target name doesn't match a live terminal. Leave GOD a durable note
+	 *  AND push it into his terminal now via notifyKanes, the same channel a fired watch uses —
+	 *  otherwise the failure is only discoverable by choosing to read an undocumented file. */
 	private writeGodInbox(message: string): void {
 		try {
 			const inbox = path.join(this.coordDir, 'god-inbox');
 			fsSync.mkdirSync(inbox, { recursive: true });
 			fsSync.writeFileSync(path.join(inbox, `${Date.now()}-error.md`), message + '\n', 'utf8');
 		} catch { /* best effort */ }
+		this.notifyKanes(`[error] ${message}`);
 	}
 
 	/** Center a tile AND give its terminal keyboard focus (so typing goes there). */

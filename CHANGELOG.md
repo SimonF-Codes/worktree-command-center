@@ -5,6 +5,19 @@ landed on `main`.
 
 ## Unreleased
 
+**A handoff to a worker terminal fails loud now, at every step, instead of quietly going nowhere**
+- `cos-coord tell/watch/spawn/rename`, called as GOD but missing a required argument (an empty
+  target, message, task, or `--to`), used to do nothing and exit 0 — the same silent-success shape
+  as the missing-role case above, just one level down. They now exit 2 with a line on stderr
+  naming what's missing, same as a role refusal.
+- A tell/watch/rename whose *target name* doesn't match a live terminal (or a spawn naming an
+  unknown repo) already wrote an error to `god-inbox/` — but nothing told the overseer to look
+  there, and it wasn't in his own list of what he can see. He's now pinged directly, the same way
+  a fired `watch` pings him, and `god-inbox/` is named in his system prompt.
+- A dropped `god-outbox/` file that fails to parse (bad JSON, or missing a required field for its
+  kind) used to be archived silently, indistinguishable from one that dispatched fine. It now
+  leaves the same kind of note.
+
 **📖 Roles — a browsable, read-only wiki of every agent role**
 - The role library the sessions read at start had no view. `Index.md` is a wall of table and the
   role files are 3–12KB each, so "what does the Sorter actually do, and what may it write?" meant

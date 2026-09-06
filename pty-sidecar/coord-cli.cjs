@@ -3,6 +3,8 @@
 // Fail-open: unexpected errors exit 0 (allow). A timed-out acquire exits 1
 // (the lock is working — the && chain should stop). tell/watch/spawn/rename/personality are
 // GOD-only: called without COS_ROLE=god they exit 2 (a refusal is a failure, not a silent no-op).
+// The same commands also exit 2 when called AS god but missing a required argument (empty
+// target/message/task/etc.) — a malformed handoff must fail loud too, not just an unauthorized one.
 const core = require('./coord-core.cjs');
 const store = require('./coord-store.cjs');
 
@@ -16,6 +18,15 @@ function ageStr(ms) { const s = Math.max(0, Math.round(ms / 1000)); return s < 9
 // getting nothing. The command still does nothing else — this only changes how the refusal reports.
 function denyGodOnly(cmd) {
   console.error(`coord: ${cmd} requires COS_ROLE=god — refused`);
+  process.exit(2);
+}
+
+// Same idea, one level down: the caller had permission but left out a required argument
+// (e.g. `tell "Foo"` with no message). Silently doing nothing here is exactly as misleading
+// as the role-gate case, so it gets the same treatment: exit 2 + say what's missing.
+function requireArgs(cmd, ok, usage) {
+  if (ok) return;
+  console.error(`coord: ${cmd} requires ${usage}`);
   process.exit(2);
 }
 
@@ -51,7 +62,8 @@ function main() {
     if (env('COS_ROLE') !== 'god') denyGodOnly('tell'); // only GOD may inject into worker terminals
     const target = resource;
     const message = rest.join(' ');
-    if (target && message) store.tell(dir, target, message);
+    requireArgs('tell', Boolean(target && message), '<target> "<message>"');
+    store.tell(dir, target, message);
     process.exit(0);
   }
 
@@ -59,7 +71,8 @@ function main() {
     if (env('COS_ROLE') !== 'god') denyGodOnly('watch');
     const target = resource;
     const note = flag(rest, '--note') || '';
-    if (target && note) store.watch(dir, target, note);
+    requireArgs('watch', Boolean(target && note), '<target> --note "<note>"');
+    store.watch(dir, target, note);
     process.exit(0);
   }
 
@@ -71,7 +84,8 @@ function main() {
     const model = flag(rest, '--model') || '';
     const effort = flag(rest, '--effort') || '';
     const name = flag(rest, '--name') || '';
-    if (repo && task) store.spawn(dir, repo, base, task, model, effort, name);
+    requireArgs('spawn', Boolean(repo && task), '<repo> --task "<task>"');
+    store.spawn(dir, repo, base, task, model, effort, name);
     process.exit(0);
   }
 
@@ -79,7 +93,8 @@ function main() {
     if (env('COS_ROLE') !== 'god') denyGodOnly('rename'); // only GOD may rename worker terminals
     const target = resource;
     const to = flag(rest, '--to') || '';
-    if (target && to.trim()) store.rename(dir, target, to);
+    requireArgs('rename', Boolean(target && to.trim()), '<target> --to "<name>"');
+    store.rename(dir, target, to);
     process.exit(0);
   }
 
