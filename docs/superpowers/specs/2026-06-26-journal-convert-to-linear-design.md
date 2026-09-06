@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Journal → Convert to Linear — Design (Phase 3)
 
 > Status: approved design, pre-implementation. Date: 2026-06-26.

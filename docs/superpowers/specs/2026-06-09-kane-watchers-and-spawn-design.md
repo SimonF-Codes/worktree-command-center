@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Kane Watchers & Spawn — Design
 
 > Status: approved design, pre-implementation. Date: 2026-06-09.

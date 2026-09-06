@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Spawn Effort + Kane Spawn Flags + Focus Discipline — design
 
 **Date:** 2026-07-14

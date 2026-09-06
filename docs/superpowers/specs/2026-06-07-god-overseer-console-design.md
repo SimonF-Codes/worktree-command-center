@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # GOD Overseer Console — Design
 
 > Status: approved design, pre-implementation. Date: 2026-06-07.

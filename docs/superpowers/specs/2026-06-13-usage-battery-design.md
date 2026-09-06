@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Usage Battery — Design
 
 > Status: approved design, pre-implementation. Date: 2026-06-13.

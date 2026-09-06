@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Journal Entry Tile — Design (Phase 1: core)
 
 > Status: approved design, pre-implementation. Date: 2026-06-26.

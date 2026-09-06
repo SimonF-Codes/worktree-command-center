@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Attention Queue — Design
 
 > Status: approved design, pre-implementation. Date: 2026-06-17.

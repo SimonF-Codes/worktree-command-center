@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Kane Self-Improvement — design
 
 **Date:** 2026-07-15

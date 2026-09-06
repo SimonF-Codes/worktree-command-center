@@ -7,8 +7,15 @@
  *  separate desktop app) that should be able to REQUEST work, not inherit the overseer's command
  *  set over every terminal on the floor. So: its own directory pair per connector
  *  (`connectors/<id>/requests` in, `connectors/<id>/receipts` out), its own narrower verb set
- *  (`spawn` only, so far — deliberately not tell/rename/personality), and a registration list in
- *  config.json so an unknown id gets a rejected receipt instead of being silently honoured. */
+ *  (`spawn` + `tell` — deliberately not `watch`/`rename`/`personality`, which act on the
+ *  operator's own workspace rather than requesting work from a terminal), and a registration list
+ *  in config.json so an unknown id gets a rejected receipt instead of being silently honoured.
+ *
+ *  `tell` looks like it narrows the gap with Kane's own channel, so the asymmetry is worth being
+ *  explicit about: a connector can only address a terminal by its exact live name (never create,
+ *  rename, or retarget one), an ambiguous or journal target is rejected rather than guessed at
+ *  (see resolveConnectorTellTarget), the message is size-capped, and every attempt gets a receipt
+ *  — so unlike Kane's `tell`, there is no way for this to happen silently or at unbounded volume. */
 
 import { EFFORT_LEVELS } from './god';
 
@@ -31,15 +38,31 @@ export function parseConnectors(v: unknown): ConnectorConfig[] {
 	return out;
 }
 
-/** The one verb connectors get. */
-export interface ConnectorRequest {
+/** The two verbs connectors get. `spawn` opens a NEW worktree terminal; `tell` delivers a
+ *  message into one that's already open (the thing `cos-coord tell` does for the overseer,
+ *  now reachable from outside). Deliberately NOT `watch`, `rename`, or `personality` — those
+ *  act on the operator's own workspace (retargeting Kane's watchers, touching Kane's own mode),
+ *  not requesting work from a terminal. */
+export interface SpawnConnectorRequest {
 	v: number; id: string; connector: string; sentMs: number; kind: 'spawn';
 	repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null;
 }
 
+export interface TellConnectorRequest {
+	v: number; id: string; connector: string; sentMs: number; kind: 'tell';
+	terminal: string; message: string;
+}
+
+export type ConnectorRequest = SpawnConnectorRequest | TellConnectorRequest;
+
 export type ParsedConnectorRequest =
 	| { ok: true; request: ConnectorRequest }
 	| { ok: false; id: string | null; reason: string };
+
+/** A paste-expanded message has jammed a terminal's input before (real incident, not
+ *  hypothetical) — cap it well above any reasonable task/instruction so a connector bug or a
+ *  runaway generation can't dump an entire file into someone's terminal. */
+export const MAX_TELL_MESSAGE_LEN = 4000;
 
 /** Parse one connector request file's contents. Unlike parseOutboxMessage (which just returns
  *  null on any problem — the outbox has no receipts, so a drop is invisible either way), this
@@ -61,8 +84,17 @@ export function parseConnectorRequest(text: string): ParsedConnectorRequest {
 	if (typeof o.v !== 'number') return { ok: false, id, reason: 'malformed request — missing "v"' };
 	if (typeof o.sentMs !== 'number') return { ok: false, id, reason: 'malformed request — missing "sentMs"' };
 	const kind = typeof o.kind === 'string' ? o.kind : '';
-	if (kind !== 'spawn') {
-		return { ok: false, id, reason: `kind "${kind || '(missing)'}" is not permitted for connectors — only "spawn" is` };
+	if (kind !== 'spawn' && kind !== 'tell') {
+		return { ok: false, id, reason: `kind "${kind || '(missing)'}" is not permitted for connectors — only "spawn" or "tell" is` };
+	}
+	if (kind === 'tell') {
+		if (typeof o.terminal !== 'string' || !o.terminal.trim() || typeof o.message !== 'string' || !o.message) {
+			return { ok: false, id, reason: 'malformed tell request — "terminal" and "message" are required' };
+		}
+		if (o.message.length > MAX_TELL_MESSAGE_LEN) {
+			return { ok: false, id, reason: `message is too long (${o.message.length} chars, max ${MAX_TELL_MESSAGE_LEN}) — trim it before sending` };
+		}
+		return { ok: true, request: { v: o.v, id, connector: o.connector, sentMs: o.sentMs, kind: 'tell', terminal: o.terminal.trim(), message: o.message } };
 	}
 	if (typeof o.repo !== 'string' || !o.repo.trim() || typeof o.task !== 'string' || !o.task) {
 		return { ok: false, id, reason: 'malformed spawn request — "repo" and "task" are required' };
@@ -74,24 +106,61 @@ export function parseConnectorRequest(text: string): ParsedConnectorRequest {
 	return { ok: true, request: { v: o.v, id, connector: o.connector, sentMs: o.sentMs, kind: 'spawn', repo: o.repo, base, task: o.task, model, effort, name } };
 }
 
+/** One live terminal, as far as `tell` resolution needs to know about it. Journals are on the
+ *  same roster (floor/INDEX.md lists them) but can't receive a message — same rule
+ *  dispatchOutbox already applies to Kane's own `tell`. */
+export interface LiveTerminal { name: string; isJournal: boolean; }
+
+export type TellResolution = { ok: true; name: string } | { ok: false; reason: string };
+
+/** Resolve a `tell` target the way a connector needs to, which is stricter than Kane's own
+ *  resolveTellTarget (god.ts): Kane is a single trusted actor picking from a list he can also
+ *  read himself, so silently taking the first case-insensitive match is fine. A connector's
+ *  request has to come back with a reason if that pick would have been a guess — so an
+ *  ambiguous case-insensitive match is its own rejection, not resolved arbitrarily. */
+export function resolveConnectorTellTarget(target: string, terminals: LiveTerminal[]): TellResolution {
+	const notATerminal = (name: string): TellResolution =>
+		({ ok: false, reason: `"${name}" is a journal tile, not a terminal — it can't accept a message` });
+	const exact = terminals.find((t) => t.name === target);
+	if (exact) return exact.isJournal ? notATerminal(exact.name) : { ok: true, name: exact.name };
+	const lc = target.toLowerCase();
+	const matches = terminals.filter((t) => t.name.toLowerCase() === lc);
+	if (matches.length === 0) {
+		const live = terminals.map((t) => t.name).join(', ') || '(none)';
+		return { ok: false, reason: `no such terminal "${target}". Live: ${live}` };
+	}
+	if (matches.length > 1) {
+		return { ok: false, reason: `"${target}" is ambiguous — matches ${matches.map((m) => m.name).join(', ')}` };
+	}
+	return matches[0].isJournal ? notATerminal(matches[0].name) : { ok: true, name: matches[0].name };
+}
+
 export type ConnectorOutcome =
 	| { status: 'accepted'; id: string; request: ConnectorRequest }
 	| { status: 'rejected'; id: string | null; reason: string };
 
 /** The whole accept/reject decision, IO-free: parse the envelope, then check it against what only
- *  the app knows — which connector ids are registered and which repos exist. Registration is
- *  checked before the repo so an unregistered connector never learns anything about the floor's
- *  repo list. The one thing this can't decide is whether the spawn itself succeeds (that needs the
- *  filesystem) — the caller finishes that part and writes the final receipt. */
+ *  the app knows — which connector ids are registered, which repos exist, which terminals are
+ *  live. Registration is checked before anything else so an unregistered connector never learns
+ *  the floor's repo list OR its terminal roster. For `tell`, the accepted request's `terminal` is
+ *  normalized to the resolved live name (case-insensitively matched), so the caller can act on it
+ *  directly without re-resolving. The one thing this can't decide is whether a spawn/delivery
+ *  actually succeeds (that needs the filesystem/PTY) — the caller finishes that part and writes
+ *  the final receipt. */
 export function evaluateConnectorRequest(
 	text: string,
-	opts: { connectorId: string; registeredConnectorIds: string[]; knownRepoNames: string[] },
+	opts: { connectorId: string; registeredConnectorIds: string[]; knownRepoNames: string[]; liveTerminals?: LiveTerminal[] },
 ): ConnectorOutcome {
 	const parsed = parseConnectorRequest(text);
 	if (!parsed.ok) return { status: 'rejected', id: parsed.id, reason: parsed.reason };
 	const { request } = parsed;
 	if (!opts.registeredConnectorIds.includes(opts.connectorId)) {
 		return { status: 'rejected', id: request.id, reason: `connector "${opts.connectorId}" is not registered` };
+	}
+	if (request.kind === 'tell') {
+		const resolved = resolveConnectorTellTarget(request.terminal, opts.liveTerminals ?? []);
+		if (!resolved.ok) return { status: 'rejected', id: request.id, reason: resolved.reason };
+		return { status: 'accepted', id: request.id, request: { ...request, terminal: resolved.name } };
 	}
 	const repoKnown = opts.knownRepoNames.some((n) => n === request.repo || n.toLowerCase() === request.repo.toLowerCase());
 	if (!repoKnown) {
@@ -103,6 +172,8 @@ export function evaluateConnectorRequest(
 	return { status: 'accepted', id: request.id, request };
 }
 
+/** `terminalName` is the terminal a `spawn` created or a `tell` was delivered into — present on
+ *  every `accepted` receipt, whichever kind produced it. */
 export interface ConnectorReceipt {
 	v: 1; id: string; status: 'accepted' | 'rejected'; reason?: string; terminalName?: string; handledMs: number;
 }

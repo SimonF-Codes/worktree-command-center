@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # WCC themes — Olympus / Hades / Olis (ported from Sargent)
 
 **Date:** 2026-07-24

@@ -1,3 +1,7 @@
+---
+status: stable
+---
+
 # Journal Format — Design (Phase 2)
 
 > Status: approved design, pre-implementation. Date: 2026-06-26.
