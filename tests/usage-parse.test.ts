@@ -17,6 +17,22 @@ const REAL_FABLE =
   'Current week (all models) ███████████████████████████ 54% usedResets Jul 20, 12am (America/New_York)\n' +
   'Current week (Fable)███████████████████████████████████▌               71% used                  Rests Jul 20, 12am (Amerca/New_York)';
 
+// Verbatim from a real stripped 2.1.211 capture: /usage now renders inside the tabbed
+// Settings view. A promo line sits between the week and Fable rows, and the Fable label's
+// "Current week (" prefix is painted as a separate cell run — only "Fable)" survives
+// adjacent to its number in the stripped stream.
+const REAL_TABBED_SETTINGS =
+  'Settings' +
+  'Status   Config   Usage Stats' +
+  'Session' +
+  'Total cost:            $0.0000' +
+  'Usage:                 0 input, 0 output, 0 cache read, 0 cache write\n' +
+  'Current session████████████████████████████████▌65%usedResets 7pm(America/New_York)\n' +
+  'Current week (all models)███▌7%usedResets Jul 25, 12am (America/New_York)' +
+  '+50% weekly limits promo through Aug 19 · clau.de/cc-50-promoFable)███▌13% used\n' +
+  "What's contributing to your limits usage?Approximate, based on local sessions on this machine\n" +
+  'Usage creditsUsag credits are off · /usage-credits to turn them on';
+
 // Collapsed form, like a stripped TUI buffer where spacing escapes were removed.
 const COLLAPSED =
   'Currentsession██▍28%usedResets3:50am(America/New_York)Currentweek(allmodels)███6%usedResetsJun15,12am(America/New_York)Currentweek(Sonetnly)▌1%usedResetsJun14';
@@ -55,6 +71,17 @@ describe('parseUsage', () => {
     expect(r.weekPct).toBe(54);
     expect(r.fablePct).toBe(71);
     expect(r.fableReset).toBe('Jul 20, 12am (Amerca/New_York)');
+  });
+  it('parses the 2.1.211 tabbed Settings view (split Fable label, promo line, credits off)', () => {
+    const r = parseUsage(REAL_TABBED_SETTINGS);
+    expect(r.sessionPct).toBe(65);
+    expect(r.sessionReset).toBe('7pm(America/New_York)');
+    expect(r.weekPct).toBe(7);      // not 50 (promo) and not 13 (Fable)
+    expect(r.weekReset).toBe('Jul 25, 12am (America/New_York)');
+    expect(r.fablePct).toBe(13);    // label prefix painted separately — only "Fable)" is adjacent
+    expect(r.fableReset).toBeNull(); // the tabbed view doesn't repeat the boundary on the Fable row
+    expect(r.creditsPct).toBeNull(); // credits are off — no bar to read
+    expect(r.creditsSpent).toBeNull();
   });
   it('returns nulls for junk, never throws', () => {
     const empty = { sessionPct: null, sessionReset: null, weekPct: null, weekReset: null, fablePct: null, fableReset: null, creditsPct: null, creditsSpent: null, creditsReset: null };

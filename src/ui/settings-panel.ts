@@ -1,12 +1,13 @@
 import type { ConvertDestination, TrackerDestination, VaultDestination } from '../terminals/convert-destinations';
 import { newDestinationId } from '../terminals/convert-destinations';
 import { promptForChoice, promptForTopic, promptForConfirm } from './prompt-dialog';
+import type { ToastVariant } from './toast-queue';
 
 export interface SettingsPanelDeps {
 	addFolder: () => Promise<string | null>;
 	getConfig: () => Promise<{ convertDestinations?: ConvertDestination[]; [k: string]: unknown }>;
 	setConfig: (c: Record<string, unknown>) => Promise<boolean>;
-	toast: (msg: string) => void;
+	toast: (msg: string, variant?: ToastVariant) => void;
 	/** Apply a changed overseer name live (updates the button + open console immediately). */
 	onOverseerNameChange?: (name: string) => void;
 }
@@ -68,7 +69,7 @@ export class SettingsPanel {
 				const val = nameInput.value.trim();
 				await this.deps.setConfig({ ...cfg, overseerName: val || undefined });
 				this.deps.onOverseerNameChange?.(val || 'Kane');
-				this.deps.toast(val ? `Overseer renamed to "${val}"` : 'Overseer name reset to Kane');
+				this.deps.toast(val ? `Overseer renamed to "${val}"` : 'Overseer name reset to Kane', 'success');
 			})();
 		});
 
@@ -126,7 +127,7 @@ export class SettingsPanel {
 		if (!folder) return;
 		const dest: VaultDestination = { kind: 'vault', id: newDestinationId(label, existing), label, vaultPath: folder };
 		await this.saveDestinations([...existing, dest]);
-		this.deps.toast(`Added "${label}"`);
+		this.deps.toast(`Added "${label}" — journals can now be saved to ${folder}`, 'success');
 		await this.renderBody();
 	}
 
@@ -139,7 +140,7 @@ export class SettingsPanel {
 		if (!target) return;
 		const dest: TrackerDestination = { kind: 'tracker', id: newDestinationId(label, existing), label, mcpTool, target };
 		await this.saveDestinations([...existing, dest]);
-		this.deps.toast(`Added "${label}"`);
+		this.deps.toast(`Added "${label}" — issues will go to ${target}`, 'success');
 		await this.renderBody();
 	}
 }

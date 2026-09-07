@@ -25,6 +25,10 @@ export class UsageProbe {
 			b.onExit(() => { this.bridge = null; this.ready = false; });
 			b.onReady(() => { this.ready = true; });
 			b.start();
+			// Since 2.1.211 the CLI renders /usage inside the tabbed Settings view, which is
+			// taller than the PTY's default 24 rows — the Fable and credits sections fall below
+			// the fold and never paint, so they can't be scraped. 50 rows fits the whole view.
+			b.resize(80, 50);
 		}
 		// Resolve on first ready THAT ISN'T A MENU, or after a boot timeout (claude takes a few
 		// seconds). A first-run prompt (e.g. "Claude in Chrome extension detected") also goes idle
@@ -61,14 +65,22 @@ export class UsageProbe {
 		// Bundling "/usage\r" into one write makes the sidecar/ConPTY coalesce it so the \r lands
 		// as a pasted newline that never submits — which is why the battery read 0 (it never ran).
 		b.write('/usage');
-		window.setTimeout(() => this.bridge?.write('\r'), 60);
+		// 200ms: match TerminalTile.sendLine — the new TUI's wider paste window eats a fast \r.
+		window.setTimeout(() => this.bridge?.write('\r'), 200);
 		const readout = await new Promise<UsageReadout>((resolve) => {
 			const started = Date.now();
+			let lastKey = '';
 			const iv = window.setInterval(() => {
 				const r = parseUsage(this.buf);
 				const tail = stripAnsi(this.buf).slice(-200);
 				const settled = r.sessionPct !== null && r.sessionReset !== null && !/scanning|refreshing/i.test(tail);
-				if (settled || Date.now() - started > 12000) {
+				// Settle needs one extra tick of stability: the tabbed view paints progressively
+				// (a value was observed changing ~200 ms after the first complete parse), so only
+				// resolve once two consecutive polls parse identically.
+				const key = JSON.stringify(r);
+				const stable = settled && key === lastKey;
+				lastKey = key;
+				if (stable || Date.now() - started > 12000) {
 					window.clearInterval(iv);
 					resolve(parseUsage(this.buf));
 				}

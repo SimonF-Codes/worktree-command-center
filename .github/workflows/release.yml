@@ -1,0 +1,75 @@
+name: Release
+
+# Cut a release by pushing a version tag, e.g.:  git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # needed to create the GitHub Release + upload the installer
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Gate the release on the same checks every PR passes, plus tag/version/changelog
+  # consistency — so a tag can never ship code that doesn't build or isn't documented.
+  validate:
+    name: Validate tag, version & changelog
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc -noEmit -skipLibCheck
+      - name: Unit tests
+        run: npm test
+      - name: Build bundles
+        run: node esbuild.config.mjs
+      - name: Tag must match package.json version and appear in CHANGELOG
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag v$tag does not match package.json version $pkg. Bump package.json (and lockfile) before tagging."
+            exit 1
+          fi
+          if ! grep -qE "^##[[:space:]]+$pkg( |\$)" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## $pkg' section. Promote the Unreleased notes under a '## $pkg — <date>' heading before releasing."
+            exit 1
+          fi
+          echo "v$tag validated against package.json and CHANGELOG ✔"
+
+  # Build the Windows installer and attach it to the GitHub Release. NSIS needs no signing
+  # cert, so this runs unattended. (macOS packaging is intentionally not wired yet — it needs
+  # the self-signed cert set up as a secret; see docs/ci-cd.md.)
+  windows-installer:
+    name: Build Windows installer
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # `npm run dist` passes --publish never. electron-builder's default publish policy is
+      # onTagOrDraft, so on a tag build it tried to create the GitHub Release itself and died
+      # with "GitHub Personal Access Token is not set" — which is what failed every release
+      # from v0.2.0 on. Publishing is the next step's job, not electron-builder's.
+      - name: Package (electron-builder --win)
+        run: npm run dist
+      - name: Publish GitHub Release with installer
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true

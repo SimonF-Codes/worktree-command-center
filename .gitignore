@@ -3,6 +3,7 @@ dist/
 release/
 release-private/
 pty-sidecar/contexts/
+pty-sidecar/settings/
 *.log
 .DS_Store
 .superpowers/

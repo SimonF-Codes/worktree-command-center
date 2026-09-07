@@ -2,9 +2,11 @@ import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
-import { listBranches, createWorktree, writeReadyHook, ensureClaudeSettingsIgnored, defaultBranch, parkWorktree, reopenWorktree, type WorktreeInfo } from './worktree-manager';
+import { listBranches, createWorktree, writeWorktreeSettings, ensureClaudeSettingsIgnored, defaultBranch, parkWorktree, reopenWorktree, type WorktreeInfo } from './worktree-manager';
 import { nextWorktreeBranch, parseWorktreeList, parseStatusPorcelain, parseAheadBehind, isParkCommitSubject, formatRegistryMarkdown, type WorktreeEntry } from './worktree-registry';
+import { repoOptionLabel } from '../workspace';
 import { runCommand } from '../command-runner';
+import type { TerminalPalette } from './theme-store';
 import { TerminalTile } from './terminal-tile';
 import { BoardView } from './board-view';
 import { promptForConfirm, promptForChoice } from '../ui/prompt-dialog';
@@ -13,14 +15,17 @@ import { EDITORS, FILE_BROWSER, CUSTOM_EDITOR, resolveEditorCommand, type Editor
 import { ChatRoom } from './chat-room';
 import { ChatTile } from './chat-tile';
 import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight } from './bubble-layout';
-import { emptyState, applyKeystroke, onReady as rqReady, onSubmit as rqSubmit, onClose as rqClose, onClick as rqClick } from './ready-queue';
+import { emptyState, applyKeystroke, onReady as rqReady, onSubmit as rqSubmit, onClose as rqClose, onClick as rqClick, onOverview as rqOverview } from './ready-queue';
 import { decideCenter, type SpotlightState } from './focus-decider';
 import { partitionByHidden } from './session-partition';
+import { SPAWN_MODELS } from './spawn-models';
+import { normalizeToolbarState, type ToolbarState } from './toolbar-state';
 import { GodConsole } from './god-console';
-import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, EFFORT_LEVELS, type OutboxMessage } from './god';
+import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, EFFORT_LEVELS, type OutboxMessage, type GodSelfImprove } from './god';
 import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
 import { looksLikePrompt } from './chat-room';
-import { classifyAttention, type AttentionItem } from './attention';
+import { classifyAttention, classifyOne, attentionKind, type AttentionItem, type AttentionKind } from './attention';
+import type { ToastVariant } from '../ui/toast';
 import { JournalTile } from './journal-tile';
 import { JournalStore } from './journal-store';
 import { FormatProbe } from './format-probe';
@@ -28,7 +33,12 @@ import { ConvertProbe } from './convert-probe';
 import { vaultNoteFilename, vaultNoteContent, type ConvertDestination, type VaultDestination } from './convert-destinations';
 import type { StageTile } from './stage-tile';
 
-export interface RepoConfig { name: string; path: string; remote?: string; group?: string; }
+/** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
+ *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
+ *  worktree-backed default — so configs written before folder targets existed keep behaving
+ *  exactly as they did. */
+export interface RepoConfig { name: string; path: string; remote?: string; group?: string; folder?: boolean; }
+
 export interface RemoteTerminal { id: number; name: string; repo: string; branch: string; state: string; output: string; remoteOn: boolean; }
 
 export interface GridDeps {
@@ -42,20 +52,16 @@ export interface GridDeps {
 	bypassPermissions: boolean;
 	sessionEnv?: () => Record<string, string>;
 	overseerName?: string;   // configurable name of the overseer console (default 'Kane')
-	toast: (msg: string) => void;
+	godSelfImprove?: GodSelfImprove;
+	toast: (msg: string, variant?: ToastVariant) => void;
 	promptForTopic: (title: string, placeholder: string, initial?: string, okLabel?: string) => Promise<string | null>;
 	openSettings: () => void;
+	/** This workspace's remembered spawn-toolbar selection, restored on mount. */
+	initialToolbar?: ToolbarState;
+	/** Called when the user changes a toolbar dropdown, so the app can persist it per workspace. */
+	onToolbarChange?: (state: ToolbarState) => void;
 }
-interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal'; journalSlug?: string; model?: string; effort?: string; }
-
-// Model options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
-const SPAWN_MODELS: { label: string; value: string }[] = [
-	{ label: 'Model: Default', value: '' },
-	{ label: 'Opus 4.8', value: 'claude-opus-4-8' },
-	{ label: 'Sonnet 5', value: 'claude-sonnet-5' },
-	{ label: 'Fable 5', value: 'claude-fable-5' },
-	{ label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
-];
+interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; folder?: boolean; model?: string; effort?: string; }
 
 // Effort options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
 const SPAWN_EFFORTS: { label: string; value: string }[] = [
@@ -65,6 +71,7 @@ const SPAWN_EFFORTS: { label: string; value: string }[] = [
 
 // How long a manual tile choice (click / Alt+F-key / resurfacing) suppresses auto-centering.
 const MANUAL_HOLD_MS = 30_000;
+const STEAL_GRACE_MS = 4_000; // hands-off window before a fresh finisher may steal the center
 
 // --- Kane personality mode (toggled by his /personality command) ---
 const kanePersonaOn = (name: string): string =>
@@ -82,6 +89,8 @@ const KANE_PULSE = '[pulse] One line, in character: what\'s the floor doing righ
 /** Controls bar + a bubbling stage of embedded claude terminals, scoped to one repo group. */
 export class TerminalsGrid {
 	private repos: RepoConfig[] = [];
+	/** Remembered dropdown selection for THIS workspace (toolbar-state.ts). */
+	private toolbar: ToolbarState = {};
 	private repoSel: HTMLSelectElement | null = null;
 	private branchSel: HTMLSelectElement | null = null;
 	private modelSel: HTMLSelectElement | null = null;
@@ -122,6 +131,10 @@ export class TerminalsGrid {
 	private watchers: Array<{ target: string; note: string }> = [];
 	private pendingTask = new Map<number, string>();
 	private idleTiles = new Set<number>();
+	// Per-tab (+ Alpha, keyed -1) last attention bucket — so the per-tab markers update and a pop-up
+	// notification fires only on a TRANSITION into a new bucket, never repeatedly while it persists.
+	// `undefined` = never seen yet (seeds silently, so a floor restore doesn't burst toasts).
+	private lastAttn = new Map<number, AttentionKind | 'none'>();
 	private stageWrapEl: HTMLElement | null = null;
 	private floorTimer: number | null = null;
 	private spotlightTimer: number | null = null;
@@ -132,6 +145,9 @@ export class TerminalsGrid {
 	private readonly coordDir: string;
 	private readonly coordHookPath: string;
 	private q = emptyState();
+	// Steal grace (2026-07-24 queue spec): a fresh finisher only steals the center when the
+	// user has been hands-off this long — typing/clicking means it queues (and pulses) instead.
+	private lastActivityAt = 0;
 	private keydown: ((e: KeyboardEvent) => void) | null = null;
 	private keyup: ((e: KeyboardEvent) => void) | null = null;
 	private onWinFocus: (() => void) | null = null;
@@ -139,17 +155,22 @@ export class TerminalsGrid {
 	private scanTimer: number | null = null;
 	private coordWatcher: import('fs').FSWatcher | null = null;
 	private scanDebounce: number | null = null;
+	private lastScanAt = 0; // rate-limits watcher-triggered scans (see the coordWatcher comment)
 	private stageResizeObs: ResizeObserver | null = null;
 	private layoutRaf: number | null = null;
 	private overseerName: string;
 
 	constructor(private deps: GridDeps) {
 		this.overseerName = (deps.overseerName && deps.overseerName.trim()) || 'Kane';
+		this.toolbar = normalizeToolbarState(deps.initialToolbar);
 		this.sidecarPath = deps.sidecarPath;
 		this.notifyScriptPath = deps.notifyScriptPath;
 		this.sessionsFile = deps.sessionsFile;
 		this.coordDir = deps.coordDir;
 		this.coordHookPath = deps.coordHookPath;
+		// One shared settings file for every session, written beside the sidecar — never into a
+		// worktree. Synchronous + here in the constructor so it exists before any tile spawns.
+		try { writeWorktreeSettings(path.dirname(this.sidecarPath), this.notifyScriptPath, this.coordHookPath); } catch { /* best effort */ }
 		this.journalStore = new JournalStore(path.join(this.coordDir, 'journals'));
 		this.formatProbe = new FormatProbe({ sidecarPath: this.sidecarPath, cwd: this.coordDir, sessionEnv: deps.sessionEnv });
 		this.convertProbe = new ConvertProbe({ sidecarPath: this.sidecarPath, cwd: this.coordDir, sessionEnv: deps.sessionEnv });
@@ -183,24 +204,35 @@ export class TerminalsGrid {
 		const controls = parent.createDiv({ cls: 'cos-terminals-controls' });
 		this.controlsEl = controls;
 
+		// Restore this tab's remembered selection as each select is built. Sessions already
+		// survived a tab switch; the toolbar did not, so returning to a tab silently re-pointed
+		// Play at the first repo in the list and main/master.
+		const saved = this.toolbar;
+
 		this.repoSel = controls.createEl('select');
-		for (const r of this.repos) this.repoSel.createEl('option', { text: r.name, value: r.name });
-		this.repoSel.addEventListener('change', () => void this.refreshBranches());
+		for (const r of this.repos) this.repoSel.createEl('option', { text: repoOptionLabel(r), value: r.name });
+		if (saved.repo && this.repos.some((r) => r.name === saved.repo)) this.repoSel.value = saved.repo;
+		this.repoSel.addEventListener('change', () => { this.rememberToolbar(); void this.refreshBranches(); });
 
 		this.branchSel = controls.createEl('select');
+		this.branchSel.addEventListener('change', () => this.rememberToolbar());
 
 		this.modelSel = controls.createEl('select');
 		this.modelSel.title = 'Model for new terminals';
 		for (const m of SPAWN_MODELS) this.modelSel.createEl('option', { text: m.label, value: m.value });
+		if (saved.model && SPAWN_MODELS.some((m) => m.value === saved.model)) this.modelSel.value = saved.model;
+		this.modelSel.addEventListener('change', () => this.rememberToolbar());
 
 		this.effortSel = controls.createEl('select');
 		this.effortSel.title = 'Effort for new terminals';
 		for (const m of SPAWN_EFFORTS) this.effortSel.createEl('option', { text: m.label, value: m.value });
+		if (saved.effort && SPAWN_EFFORTS.some((m) => m.value === saved.effort)) this.effortSel.value = saved.effort;
+		this.effortSel.addEventListener('change', () => this.rememberToolbar());
 
 		const newBranchBtn = controls.createEl('button', { text: '+ New branch' });
 		newBranchBtn.addEventListener('click', () => {
 			void this.deps.promptForTopic('New branch', 'branch name (based on the selected branch)', '', 'Create').then((name) => {
-				if (name && name.trim()) { this.pendingNewBranch = name.trim(); this.deps.toast(`Next Play creates branch "${name.trim()}"`); }
+				if (name && name.trim()) { this.pendingNewBranch = name.trim(); this.deps.toast(`Next Play creates branch "${name.trim()}"`, 'info'); }
 			});
 		});
 
@@ -237,7 +269,7 @@ export class TerminalsGrid {
 		const refreshBtn = controls.createEl('button', { text: '⟳ Refresh' });
 		refreshBtn.addEventListener('click', () => { void this.scanWorktrees().then(() => this.board?.refresh()); });
 
-		const journalBtn = controls.createEl('button', { text: '📓 Journal Entry', cls: 'cos-journal-btn', attr: { title: 'Open a new journal entry tile' } });
+		const journalBtn = controls.createEl('button', { text: '📓 Journal Entry', cls: 'cos-journal-btn', attr: { title: 'Open a new journal entry tile (Alt+J)' } });
 		journalBtn.addEventListener('click', () => this.spawnJournal());
 
 		if (!this.board) this.board = new BoardView(
@@ -258,7 +290,12 @@ export class TerminalsGrid {
 				// Our own ledger write + the GOD feed dirs must never trigger a worktree rescan loop.
 				if (fn === 'worktrees.md' || fn.startsWith('floor') || fn.startsWith('god-outbox') || fn.startsWith('god-inbox')) return;
 				if (this.scanDebounce !== null) window.clearTimeout(this.scanDebounce);
-				this.scanDebounce = window.setTimeout(() => { void this.scanWorktrees().then(() => this.board?.refresh()); }, 500);
+				// Rate-limit watcher-triggered scans. A busy floor (chat, locks, ready markers)
+				// otherwise refires this every 500ms, and each scan spawns git per repo ON the
+				// renderer thread — profiled at 95.7% of renderer time as `spawn` while the fleet
+				// ran (2026-07-22), i.e. THE lag. The 30s timer still guarantees freshness.
+				const wait = Math.max(500, 10_000 - (Date.now() - this.lastScanAt));
+				this.scanDebounce = window.setTimeout(() => { void this.scanWorktrees().then(() => this.board?.refresh()); }, wait);
 			});
 		} catch { /* coordDir may not exist yet; the timer still covers it */ }
 
@@ -285,6 +322,9 @@ export class TerminalsGrid {
 			this.applyLayout();
 			this.focusCentered(); // returning to the tab puts the cursor back in the centered terminal
 		}
+
+		// Back on stage: resume live parsing (each tile flushes its batched output immediately).
+		for (const t of [...this.tiles, ...this.hidden]) if (!t.isJournal) (t as TerminalTile).setDetached(false);
 
 		this.applyMaximizeChrome();
 		this.installKeyboard();
@@ -315,6 +355,9 @@ export class TerminalsGrid {
 		// second one. The stage wrap is detached-but-retained (tiles + sidecars stay alive).
 		this.controlsEl?.remove();
 		this.controlsEl = null;
+		// Detached tiles suspend live xterm parsing (output batches in each tile's hidden buffer)
+		// — an inactive workspace must not keep costing renderer CPU per PTY chunk.
+		for (const t of [...this.tiles, ...this.hidden]) if (!t.isJournal) (t as TerminalTile).setDetached(true);
 		// GOD survives a tab switch (like the tiles): detach with the stage wrap, keep the session.
 		this.stageWrapEl?.remove();
 	}
@@ -341,7 +384,9 @@ export class TerminalsGrid {
 		if (ids.length === 0) return;
 		const want = nextSpotlight(ids, this.centeredId, dir);
 		if (want === null) { this.centeredId = null; this.applyLayout(); return; } // equal grid
-		const r = rqClick(this.q, want); this.q = r.state; // pin so autoCenter keeps it
+		this.lastActivityAt = Date.now();
+		// Pin so autoCenter keeps it; the clicked-away ready tile gives up its queue turn.
+		this.q = rqClick(this.q, want, this.centeredId).state;
 		this.doCenter(want);
 	}
 
@@ -361,6 +406,10 @@ export class TerminalsGrid {
 			// Alt+K opens/focuses Kane. Kane wins this key — the letter-badge jumps only reach 'K'
 			// with 23+ visible tiles, which never happens in practice.
 			if (e.code === 'KeyK') { e.preventDefault(); this.openKane(); return; }
+			// Alt+J opens a new journal entry. Like Alt+K, this shadows the letter badges only
+			// at 22+ visible tiles (badges run F1–F12 then A…), which never happens in practice.
+			// e.code for the same macOS Option-composition reason as Alt+L / Alt+K above.
+			if (e.code === 'KeyJ') { e.preventDefault(); if (!e.repeat) this.spawnJournal(); return; }
 			const idx = keyToIndex(physicalKeyLabel(e));
 			if (idx !== null && this.tiles[idx]) { e.preventDefault(); this.handleClick(this.tiles[idx]!.tileId); }
 		};
@@ -397,7 +446,7 @@ export class TerminalsGrid {
 		if (!this.repoSel) return;
 		const cur = this.repoSel.value;
 		this.repoSel.empty();
-		for (const r of this.repos) this.repoSel.createEl('option', { text: r.name, value: r.name });
+		for (const r of this.repos) this.repoSel.createEl('option', { text: repoOptionLabel(r), value: r.name });
 		if (this.repos.some((r) => r.name === cur)) this.repoSel.value = cur;
 		void this.refreshBranches();
 	}
@@ -421,17 +470,66 @@ export class TerminalsGrid {
 		this.branchSel.empty();
 		const repo = this.selectedRepo();
 		if (!repo) return;
+		if (repo.folder) {
+			// No git, so no branches to offer. Keep one inert placeholder rather than an empty
+			// select, so the toolbar doesn't look broken while a folder target is picked.
+			this.branchSel.createEl('option', { text: '(no branch — folder)', value: '' });
+			this.branchSel.disabled = true;
+			this.rememberToolbar();
+			return;
+		}
+		this.branchSel.disabled = false;
 		const branches = await listBranches(repo.path);
 		for (const b of branches) this.branchSel.createEl('option', { text: b, value: b });
+		// The branch this tab was left on wins; main/master is the fallback for a first visit,
+		// or for a remembered branch that has since been deleted.
 		const def = defaultBranch(branches); // default to main / master, not git's first-listed
-		if (def) this.branchSel.value = def;
+		if (this.toolbar.branch && branches.includes(this.toolbar.branch)) this.branchSel.value = this.toolbar.branch;
+		else if (def) this.branchSel.value = def;
+		this.rememberToolbar();
+	}
+
+	/** Snapshot the four dropdowns into this workspace's remembered state and hand it up to be
+	 *  persisted. Called on every change and after each branch refresh — a human changes these
+	 *  rarely, and the app's config writer serializes the resulting writes. */
+	private rememberToolbar(): void {
+		const next = normalizeToolbarState({
+			repo: this.repoSel?.value,
+			branch: this.branchSel?.value,
+			model: this.modelSel?.value,
+			effort: this.effortSel?.value,
+		});
+		this.toolbar = next;
+		this.deps.onToolbarChange?.(next);
 	}
 
 	private async play(): Promise<void> {
 		const repo = this.selectedRepo();
+		if (repo?.folder) { await this.spawnFolder(repo, {}); return; } // no branch to require
 		const base = this.branchSel?.value;
-		if (!repo || !base) { this.deps.toast('Pick a repo and branch first'); return; }
+		if (!repo || !base) { this.deps.toast('Pick a repo and branch first', 'warn'); return; }
 		await this.spawnWorktree(repo, base, {});
+	}
+
+	/** Spawn core for a FOLDER target: no `git worktree add`, no branch — the tile's working
+	 *  directory IS the folder. Mirrors spawnWorktree's tile/persist/layout tail so both kinds of
+	 *  terminal behave identically once they exist. */
+	private async spawnFolder(repo: RepoConfig, opts: { task?: string; model?: string; effort?: string; name?: string }): Promise<TerminalTile | null> {
+		try {
+			await fs.access(repo.path); // a moved/unmounted folder should say so, not spawn into nothing
+		} catch {
+			this.deps.toast(`Folder unreachable — ${repo.path} is missing or on a disconnected drive`, 'error');
+			return null;
+		}
+		const model = opts.model ?? (this.modelSel?.value || undefined);
+		const effort = opts.effort ?? (this.effortSel?.value || undefined);
+		const tile = this.makeTile({ worktreePath: repo.path, branch: '' }, repo.name, repo.path, '', false, opts.name, model, effort, true);
+		if (opts.task) this.pendingTask.set(tile.tileId, opts.task);
+		if (this.stageEl) tile.render(this.stageEl);
+		this.tiles.push(tile);
+		void this.persist();
+		this.applyLayout();
+		return tile;
 	}
 
 	/** Shared spawn core: create a worktree + tile, render, persist, layout. Optionally queue an
@@ -441,7 +539,7 @@ export class TerminalsGrid {
 			const branches = await listBranches(repo.path);
 			const branch = this.pendingNewBranch ?? nextWorktreeBranch(branches, base);
 			this.pendingNewBranch = null;
-			const worktree = await createWorktree(repo.path, repo.name, base, branch, this.notifyScriptPath, this.coordHookPath);
+			const worktree = await createWorktree(repo.path, repo.name, base, branch);
 			// Explicit opts win; otherwise inherit the toolbar dropdowns ('' = CLI default = no flag).
 			const model = opts.model ?? (this.modelSel?.value || undefined);
 			const effort = opts.effort ?? (this.effortSel?.value || undefined);
@@ -453,7 +551,7 @@ export class TerminalsGrid {
 			this.applyLayout();
 			return tile;
 		} catch (e) {
-			this.deps.toast(`Worktree failed: ${(e as Error).message}`);
+			this.deps.toast(`Couldn't create a worktree in ${repo.name}: ${(e as Error).message}`, 'error');
 			return null;
 		}
 	}
@@ -478,11 +576,11 @@ export class TerminalsGrid {
 			store: this.journalStore,
 			toast: this.deps.toast,
 			onClosed: (t) => {
-				const wasCentered = this.centeredId === t.tileId;
-				const r = rqClose(this.q, t.tileId, wasCentered); this.q = r.state;
+				if (this.centeredId === t.tileId) this.centeredId = null;
+				this.q = rqClose(this.q, t.tileId).state;
 				this.tiles = this.tiles.filter((x) => x !== t); t.kill(); void this.persist();
-				if (r.center !== null) this.doCenter(r.center);
-				else { if (wasCentered) this.centeredId = null; this.applyLayout(); }
+				this.applyLayout();
+				this.autoCenter(); // serve the queue front (or drop to the equal grid)
 			},
 			onHide: (t) => this.hideTile(t),
 			onLock: (t) => this.toggleLockById(t.tileId),
@@ -532,20 +630,20 @@ export class TerminalsGrid {
 	 *  to open its download page rather than silently failing again. */
 	private async openInEditor(): Promise<void> {
 		const repo = this.selectedRepo();
-		if (!repo) { this.deps.toast('Pick a repo first'); return; }
+		if (!repo) { this.deps.toast('Pick a repo first', 'warn'); return; }
 
 		const cfg = await window.wcc.getConfig();
 		const savedId = typeof cfg.preferredEditorId === 'string' ? cfg.preferredEditorId : null;
 		const savedCustomCmd = typeof cfg.preferredEditorCustomCmd === 'string' ? cfg.preferredEditorCustomCmd : null;
 
-		if (savedId === 'file-browser') { revealInFileManager(repo.path); this.deps.toast(`Revealed ${repo.name}`); return; }
+		if (savedId === 'file-browser') { revealInFileManager(repo.path); this.deps.toast(`Revealed ${repo.name} in the file manager`, 'success'); return; }
 		if (savedId === 'custom' && savedCustomCmd) {
-			if (await this.trySpawnEditor(savedCustomCmd, [repo.path])) { this.deps.toast(`Opening ${repo.name}…`); return; }
+			if (await this.trySpawnEditor(savedCustomCmd, [repo.path])) { this.deps.toast(`Opening ${repo.name}…`, 'info'); return; }
 		} else if (savedId) {
 			const editor = EDITORS.find((e) => e.id === savedId);
 			const launch = editor ? resolveEditorCommand(editor, repo.path, process.platform) : null;
 			if (editor && launch && await this.trySpawnEditor(launch.cmd, launch.args)) {
-				this.deps.toast(`Opening ${repo.name} in ${editor.label}…`);
+				this.deps.toast(`Opening ${repo.name} in ${editor.label}…`, 'info');
 				return;
 			}
 		} else {
@@ -554,7 +652,7 @@ export class TerminalsGrid {
 			const vscode = EDITORS[0]!;
 			const launch = resolveEditorCommand(vscode, repo.path, process.platform);
 			if (launch && await this.trySpawnEditor(launch.cmd, launch.args)) {
-				this.deps.toast(`Opening ${repo.name} in ${vscode.label}…`);
+				this.deps.toast(`Opening ${repo.name} in ${vscode.label}…`, 'info');
 				await window.wcc.setConfig({ ...(await window.wcc.getConfig()), preferredEditorId: vscode.id });
 				return;
 			}
@@ -581,7 +679,7 @@ export class TerminalsGrid {
 		if (choice === FILE_BROWSER.id) {
 			revealInFileManager(repoPath);
 			await window.wcc.setConfig({ ...(await window.wcc.getConfig()), preferredEditorId: choice });
-			this.deps.toast(`Revealed ${repoName}`);
+			this.deps.toast(`Revealed ${repoName} in the file manager`, 'success');
 			return;
 		}
 
@@ -590,9 +688,9 @@ export class TerminalsGrid {
 			if (!cmd) return;
 			if (await this.trySpawnEditor(cmd, [repoPath])) {
 				await window.wcc.setConfig({ ...(await window.wcc.getConfig()), preferredEditorId: choice, preferredEditorCustomCmd: cmd });
-				this.deps.toast(`Opening ${repoName}…`);
+				this.deps.toast(`Opening ${repoName}…`, 'info');
 			} else {
-				this.deps.toast(`Couldn't run "${cmd}" — check the command and try again`);
+				this.deps.toast(`Couldn't run "${cmd}" — check the command in Settings and try again`, 'error');
 			}
 			return;
 		}
@@ -601,7 +699,7 @@ export class TerminalsGrid {
 		const launch = resolveEditorCommand(editor, repoPath, process.platform);
 		if (launch && await this.trySpawnEditor(launch.cmd, launch.args)) {
 			await window.wcc.setConfig({ ...(await window.wcc.getConfig()), preferredEditorId: choice });
-			this.deps.toast(`Opening ${repoName} in ${editor.label}…`);
+			this.deps.toast(`Opening ${repoName} in ${editor.label}…`, 'info');
 			return;
 		}
 
@@ -613,7 +711,7 @@ export class TerminalsGrid {
 			);
 			if (install) {
 				openExternalUrl(editor.downloadUrl);
-				this.deps.toast(`Opened the ${editor.label} download page — click View Code again once it's installed`);
+				this.deps.toast(`Opened the ${editor.label} download page — click View Code again once it's installed`, 'warn');
 			}
 		}
 	}
@@ -625,10 +723,11 @@ export class TerminalsGrid {
 			if (tile) { tile.setSelected(!tile.isSelected); this.updateChatBtn(); }
 			return;
 		}
-		const r = rqClick(this.q, id);
-		this.q = r.state;
+		this.lastActivityAt = Date.now();
+		// Pin the clicked tile; a clicked-away ready center gives up its turn (→ back of queue).
+		this.q = rqClick(this.q, id, this.centeredId).state;
 		this.q.composingLen = 0;
-		this.doCenter(r.center);
+		this.doCenter(id);
 		this.holdUntil = Date.now() + MANUAL_HOLD_MS; // an explicit choice — hold the spotlight here
 	}
 
@@ -649,7 +748,7 @@ export class TerminalsGrid {
 	/** Open a chat tile in the stage over the selected terminals. */
 	private openChat(): void {
 		const selected = this.tiles.filter((t) => t.isSelected);
-		if (selected.length < 2) { this.deps.toast('Select at least 2 terminals first'); return; }
+		if (selected.length < 2) { this.deps.toast('Select at least 2 terminals first', 'warn'); return; }
 		const members = (selected as TerminalTile[]).map((t) => ({
 			name: t.name,
 			sendLine: (s: string) => t.sendLine(s),
@@ -746,8 +845,17 @@ export class TerminalsGrid {
 		const repo = this.repos.find((r) => r.name === repoName)
 			?? this.repos.find((r) => r.name.toLowerCase() === repoName.toLowerCase());
 		if (!repo) return null;
+		if (repo.folder) return this.spawnFolder(repo, { task, model, effort, name }); // --base is meaningless here
 		const baseBranch = base ?? (defaultBranch(await listBranches(repo.path)) ?? 'main');
 		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name });
+	}
+
+	/** Re-tint every live terminal well for a theme switch (tiles, hidden tiles, Kanes).
+	 *  New terminals pick the palette up themselves via activeTerminalPalette(). */
+	applyTerminalPalette(p: TerminalPalette): void {
+		for (const t of [...this.tiles, ...this.hidden]) if (!t.isJournal) (t as TerminalTile).setTerminalPalette(p);
+		this.godConsole?.setTerminalPalette(p);
+		for (const k of this.extraKanes) k.setTerminalPalette(p);
 	}
 
 	/** Toggle the GOD console: spawn on first open, then just show/hide (session persists). */
@@ -755,10 +863,11 @@ export class TerminalsGrid {
 		if (!this.godConsole) {
 			const godHomeDir = path.join(this.coordDir, '..', '.god', this.deps.group);
 			const kane: GodConsole = new GodConsole(
-				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
+				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, resume: true, onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
 				() => this.hideGod(),
 			);
 			this.godConsole = kane;
+			void this.persist(); // record Kane's existence so the next launch reopens him
 			if (this.stageWrapEl) this.godConsole.render(this.stageWrapEl);
 			this.godVisible = true;
 			this.startFloorFeed();
@@ -785,11 +894,12 @@ export class TerminalsGrid {
 		const godHomeDir = path.join(this.coordDir, '..', '.god', `${this.deps.group}-${n}`);
 		const kane = new GodConsole(
 			{
-				repos: this.repos.map((r) => ({ name: r.name, path: r.path })),
+				repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })),
 				coordDir: this.coordDir,
 				sidecarPath: this.sidecarPath,
 				godHomeDir,
 				sessionEnv: this.deps.sessionEnv,
+				selfImprove: this.deps.godSelfImprove,
 				onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); },
 				instanceName: `${this.overseerName} ${n}`,
 				terminalId: String(-n),
@@ -895,10 +1005,18 @@ export class TerminalsGrid {
 		} catch { /* best effort */ }
 	}
 
-	/** The repo name a session belongs to (matches the scan/registry mapping). */
+	/** The repo name a session belongs to (matches the scan/registry mapping).
+	 *
+	 *  The tile CARRIES the target it was spawned from, and persists it, so trust that first.
+	 *  Resolving only through the worktree scan reported '?' for any tile newer than the last
+	 *  sweep (it runs every 30s) — and permanently for folder targets, which scanWorktrees skips
+	 *  entirely because they have no worktrees to list. The scan stays as the fallback for a
+	 *  record restored without a repo name. */
 	private repoNameFor(t: StageTile): string {
 		if (t.isJournal) return 'journal';
-		const e = this.lastEntries.find((x) => path.resolve(x.path) === path.resolve((t as TerminalTile).worktreePath));
+		const tt = t as TerminalTile;
+		if (tt.repoName) return tt.repoName;
+		const e = this.lastEntries.find((x) => path.resolve(x.path) === path.resolve(tt.worktreePath));
 		return e ? e.repo : '?';
 	}
 
@@ -1085,11 +1203,13 @@ export class TerminalsGrid {
 	 *  tile: a tile that needs you wins, and when everyone is thinking the grid drops to equal
 	 *  size (no spotlight). Manual clicks/cycles still set the center directly. */
 	private autoCenter(): void {
+		this.updateAttention(); // markers + notifications refresh every tick, regardless of centering
 		if (Date.now() < this.holdUntil) return; // manual-switch hold — the user chose a tile, let it be
 		const want = decideCenter({
 			tiles: this.tiles.map((t) => ({ id: t.tileId, state: this.spotlightState(t) })),
 			centeredId: this.centeredId,
-			readyOrder: this.q.stack,
+			readyOrder: this.q.queue,
+			pinnedId: this.q.pinnedId,
 			userTyping: this.q.composingLen > 0 || this.focusedKane !== null,
 			globalLock: this.locked,
 			lockedTileId: this.lockedTileId,
@@ -1097,6 +1217,50 @@ export class TerminalsGrid {
 		if (want === this.centeredId) return;          // no change → don't re-lay-out (avoids flicker)
 		if (want === null) { this.centeredId = null; this.applyLayout(); return; } // equal grid
 		this.doCenter(want);
+	}
+
+	/** Refresh the per-tab attention markers and fire a one-shot notification whenever a tab (or
+	 *  Alpha) transitions into needing you — distinct markers/toasts for input, help, and done.
+	 *  Runs every autoCenter tick (~1s). De-duped through `lastAttn` so a persistent state is
+	 *  flagged once, not every tick; first sighting seeds silently so a restore doesn't spam. */
+	private updateAttention(): void {
+		const seen = new Set<number>();
+		// Visible worker tabs: full input / help / done markers.
+		for (const t of this.tiles) {
+			seen.add(t.tileId);
+			const o = t.recentOutput();
+			const idle = this.idleTiles.has(t.tileId) && !looksBusy(o);
+			const kind = t.isJournal ? null : attentionKind(classifyOne(o, idle));
+			t.setAttention(kind);
+			this.noteAttention(t.tileId, kind, t.name);
+		}
+		// Alpha (the overseer console): input / help only — it's never "done" like a worker.
+		if (this.godConsole) {
+			seen.add(-1);
+			const ko = this.godConsole.recentOutput();
+			let kind = attentionKind(classifyOne(ko, false)); // idle=false → never 'done'
+			if (kind === 'done') kind = null;
+			this.godBtn?.setAttribute('data-attn', kind ?? '');
+			this.noteAttention(-1, kind, this.overseerName);
+		} else {
+			this.godBtn?.setAttribute('data-attn', '');
+		}
+		// Forget tabs that have gone away, so a reused id can notify again.
+		for (const id of [...this.lastAttn.keys()]) if (!seen.has(id)) this.lastAttn.delete(id);
+	}
+
+	/** Record a tab's current bucket; toast when it CHANGES into a flagging bucket. */
+	private noteAttention(id: number, kind: AttentionKind | null, name: string): void {
+		const now = kind ?? 'none';
+		const prev = this.lastAttn.get(id);
+		this.lastAttn.set(id, now);
+		if (prev === undefined || prev === now || !kind) return; // seed silently / unchanged / cleared
+		const MSG: Record<AttentionKind, string> = {
+			input: `⏳ ${name} needs your input`,
+			help: `🆘 ${name} needs help`,
+			done: `✓ ${name} finished`,
+		};
+		this.deps.toast(MSG[kind], kind);
 	}
 
 	private handleReady(t: TerminalTile): void {
@@ -1113,13 +1277,33 @@ export class TerminalsGrid {
 		const task = this.pendingTask.get(t.tileId);
 		if (task !== undefined) { this.pendingTask.delete(t.tileId); t.sendLine(task); }
 
+		// A tile ALREADY idle firing ready again is a RE-FIRE (Claude's periodic waiting-for-input
+		// notification re-creates the marker), not a fresh finish. It must never resurrect the
+		// queue or steal — dismissed idle tiles re-queueing themselves made the floor "fly around
+		// focusing and unfocusing" with zero user input (2026-07-27).
+		const wasAlreadyIdle = this.idleTiles.has(t.tileId);
 		this.idleTiles.add(t.tileId); // finished a turn → idle/done (also covers hidden background tiles)
 
 		if (this.hidden.includes(t)) return; // a hidden, background session never steals the center
 		if (this.chatRoom) { this.chatRoom.noteIdle(t.name); return; } // chat owns idle while open
-		this.q = rqReady(this.q, t.tileId).state; // record readiness + recency on the stack
-		// autoCenter re-derives the spotlight from current state — the lock / menu / typing holds
-		// and the "thinking tiles never hold the center" rule all live there now.
+		if (wasAlreadyIdle) return; // re-fire: no queue change, no steal, no re-derive
+		const r = rqReady(this.q, t.tileId); // joins the BACK of the FIFO queue
+		this.q = r.state;
+		// Steal (event-driven, less obtrusive): a FRESH finisher may take the center, but only
+		// when you're hands-off — recent typing/clicks (grace window), locks, a centered menu,
+		// or Kane focus mean it just queues (and pulses) instead of yanking the view. Its FIFO
+		// position is unchanged either way; Enter always serves the longest-waiting next.
+		const curTile = this.tiles.find((x) => x.tileId === this.centeredId);
+		const engaged = this.q.composingLen > 0 || this.focusedKane !== null
+			|| Date.now() - this.lastActivityAt < STEAL_GRACE_MS
+			|| Date.now() < this.holdUntil
+			|| this.locked || this.lockedTileId !== null
+			|| (curTile !== undefined && this.spotlightState(curTile) === 'menu');
+		if (r.added && !engaged && t.tileId !== this.centeredId) {
+			this.q = { ...this.q, pinnedId: null }; // a steal supersedes a manual pin
+			this.doCenter(t.tileId);
+			return;
+		}
 		this.autoCenter();
 	}
 
@@ -1131,7 +1315,8 @@ export class TerminalsGrid {
 		// go. (The Lock button does this globally; this does it automatically for menus.)
 		if (looksLikeMenu(t.recentOutput())) return;
 		this.holdUntil = 0; // prompt submitted — manual engagement over, the flow resumes
-		this.q = rqSubmit(this.q, t.tileId).state; // finished with it → off the ready stack
+		this.lastActivityAt = Date.now(); // an Enter is activity — no steal right on its heels
+		this.q = rqSubmit(this.q, t.tileId).state; // finished with it → out of the queue
 		// Re-derive: center the next tile that needs you, or drop to the equal grid if everyone
 		// is now thinking (nobody is waiting on you).
 		this.autoCenter();
@@ -1148,10 +1333,10 @@ export class TerminalsGrid {
 		tile.setHidden(true);
 		tile.setSelected(false);          // a hidden tile is never a chat member
 		this.updateChatBtn();
-		const r = rqClose(this.q, tile.tileId, wasCentered); // drop from the ready-queue
-		this.q = r.state;
-		if (r.center !== null) this.doCenter(r.center);
-		else { if (wasCentered) this.centeredId = null; this.applyLayout(); }
+		this.q = rqClose(this.q, tile.tileId).state; // drop from the ready-queue
+		if (wasCentered) this.centeredId = null;
+		this.applyLayout();
+		this.autoCenter(); // serve the queue front (or drop to the equal grid)
 		void this.persist();
 		this.board?.refresh();
 	}
@@ -1177,9 +1362,14 @@ export class TerminalsGrid {
 	private async closeHiddenTile(tileId: number): Promise<void> {
 		const tile = this.hidden.find((t) => t.tileId === tileId);
 		if (!tile) return;
+		// A folder target has no worktree/branch to remove, so promising to delete one would be
+		// both wrong and alarming — say what actually happens instead.
+		const isFolder = !tile.isJournal && (tile as TerminalTile).isFolder;
 		const ok = await promptForConfirm(
 			`Close "${tile.name}"?`,
-			`This kills the session and removes its worktree + branch (${tile.branch}). It can't be undone.`,
+			isFolder
+				? 'This kills the session. The folder and its files are left alone.'
+				: `This kills the session and removes its worktree + branch (${tile.branch}). It can't be undone.`,
 			'Close',
 		);
 		if (!ok) return;
@@ -1192,11 +1382,12 @@ export class TerminalsGrid {
 		this.board?.refresh();
 	}
 
-	/** Build a tile with all the grid callbacks wired. `resume` → claude --continue. */
-	private makeTile(worktree: WorktreeInfo, repoName: string, repoPath: string, baseBranch: string, resume: boolean, name?: string, model?: string, effort?: string): TerminalTile {
+	/** Build a tile with all the grid callbacks wired. `resume` → claude --continue.
+	 *  `folder` → a plain-folder target (no worktree, no branch). */
+	private makeTile(worktree: WorktreeInfo, repoName: string, repoPath: string, baseBranch: string, resume: boolean, name?: string, model?: string, effort?: string, folder?: boolean): TerminalTile {
 		return new TerminalTile({
 			tileId: this.nextTileId++,
-			repoName, repoPath, baseBranch, worktree,
+			repoName, repoPath, baseBranch, worktree, folder,
 			sidecarPath: this.sidecarPath,
 			coordDir: this.coordDir,
 			sessionEnv: this.deps.sessionEnv,
@@ -1209,12 +1400,15 @@ export class TerminalsGrid {
 			onRequestRename: (t, cur) => {
 				void this.deps.promptForTopic('Rename terminal', 'New name', cur, 'Rename').then((name) => { if (name && name.trim()) t.setName(name.trim()); });
 			},
-			onClosed: (t) => { this.idleTiles.delete(t.tileId); if (this.lockedTileId === t.tileId) this.lockedTileId = null; const wasCentered = this.centeredId === t.tileId; const r = rqClose(this.q, t.tileId, wasCentered); this.q = r.state; this.tiles = this.tiles.filter((x) => x !== t); void this.persist(); if (r.center !== null) this.doCenter(r.center); else { if (wasCentered) this.centeredId = null; this.applyLayout(); } },
+			onClosed: (t) => { this.idleTiles.delete(t.tileId); if (this.lockedTileId === t.tileId) this.lockedTileId = null; if (this.centeredId === t.tileId) this.centeredId = null; this.q = rqClose(this.q, t.tileId).state; this.tiles = this.tiles.filter((x) => x !== t); void this.persist(); this.applyLayout(); this.autoCenter(); },
 			onHide: (t) => this.hideTile(t),
 			onLock: (t) => this.toggleLockById(t.tileId),
 			onCenter: (t) => this.handleClick(t.tileId),
 			onReady: (t) => this.handleReady(t),
-			onInput: (t, data) => { this.idleTiles.delete(t.tileId); this.q.composingLen = applyKeystroke(this.q.composingLen, data); },
+			// A restored tile whose transcript is gone comes back as a blank welcome screen that
+			// looks exactly like a broken start. Say so where the new session can't paint over it.
+			onFreshFallback: (t) => this.deps.toast(`${t.name} — no saved conversation to resume, so it started fresh`, 'warn'),
+			onInput: (t, data) => { this.idleTiles.delete(t.tileId); this.lastActivityAt = Date.now(); this.q.composingLen = applyKeystroke(this.q.composingLen, data); },
 			onEnter: (t) => this.handleSubmit(t),
 			// Reset the typing-hold on ANY focus change: gaining focus starts a fresh box,
 			// and leaving a terminal means you're no longer typing — so finished terminals
@@ -1227,8 +1421,45 @@ export class TerminalsGrid {
 		try { return JSON.parse(await fs.readFile(this.sessionsFile, 'utf8')) as Record<string, SessionRecord[]>; } catch { return {}; }
 	}
 
+	/** Records that could not be reopened at launch (worktree path unreachable, or the
+	 *  restore of that one record threw). They stay in the sessions file and retry on the
+	 *  next launch — a transiently unavailable path (moved repo, unmounted drive, slow
+	 *  OneDrive) must never DELETE session history. */
+	private unrestored: SessionRecord[] = [];
+
+	/** All persists in this renderer — every grid — go through ONE chain. Concurrent
+	 *  fire-and-forget persists used to race on the shared file, and a STALE snapshot
+	 *  could land last: toggleGod()'s persist fires mid-restore, before the hidden tiles
+	 *  exist, and when its write finished after the final restore persist it rewrote the
+	 *  group as just [god] — which is how CARDTSAR lost every terminal record
+	 *  (2026-07-30). Chaining serializes the read-modify-write AND defers the state
+	 *  snapshot to write time, so the last queued persist wins with the newest state. */
+	private static persistChain: Promise<void> = Promise.resolve();
+
 	/** Persist THIS group's currently-open sessions (called on play + on close). */
-	private async persist(): Promise<void> {
+	private persist(): Promise<void> {
+		const run = TerminalsGrid.persistChain.then(() => this.persistNow()).catch(() => { /* best effort */ });
+		TerminalsGrid.persistChain = run;
+		return run;
+	}
+
+	/** Drop a workspace's session bucket when its tab is closed. Closing a workspace removed the
+	 *  tab but left its records in the sessions file forever — the live file still carries a
+	 *  `test-2` bucket for a tab deleted weeks ago. Goes through the same chain as every other
+	 *  write so it can never race a grid's persist. */
+	static forgetGroup(sessionsFile: string, group: string): Promise<void> {
+		const run = TerminalsGrid.persistChain.then(async () => {
+			let all: Record<string, unknown>;
+			try { all = JSON.parse(await fs.readFile(sessionsFile, 'utf8')) as Record<string, unknown>; } catch { return; }
+			if (!(group in all)) return;
+			delete all[group];
+			try { await fs.writeFile(sessionsFile, JSON.stringify(all, null, 2), 'utf8'); } catch { /* best effort */ }
+		}).catch(() => { /* best effort */ });
+		TerminalsGrid.persistChain = run;
+		return run;
+	}
+
+	private async persistNow(): Promise<void> {
 		const all = await this.readAllSessions();
 		const serializeTile = (t: StageTile, hidden: boolean): SessionRecord => {
 			if (t.isJournal) {
@@ -1236,9 +1467,17 @@ export class TerminalsGrid {
 			}
 			return { kind: 'terminal', ...(t as TerminalTile).sessionRecord(), hidden };
 		};
+		// Retained unrestored records — minus any worktree the user has since reopened
+		// as a live tile (the live tile's record supersedes the stale one).
+		const liveWts = new Set([...this.tiles, ...this.hidden].filter((t) => !t.isJournal).map((t) => (t as TerminalTile).worktreePath));
+		const retained = this.unrestored.filter((r) => r.kind === 'journal' || r.kind === 'god' || !liveWts.has(r.worktreePath));
 		all[this.deps.group] = [
 			...this.tiles.map((t) => serializeTile(t, false)),
 			...this.hidden.map((t) => serializeTile(t, true)),
+			...retained,
+			// Kane persists like the tiles (2026-07-24): once opened he comes back on the next
+			// launch, resumed with --continue. /clear inside his session is the fresh-start path.
+			...(this.godConsole ? [{ kind: 'god', worktreePath: '', branch: '', repoName: 'god', repoPath: '', baseBranch: '' } as SessionRecord] : []),
 		];
 		try { await fs.writeFile(this.sessionsFile, JSON.stringify(all, null, 2), 'utf8'); } catch { /* best effort */ }
 	}
@@ -1249,12 +1488,33 @@ export class TerminalsGrid {
 		const recs = all[this.deps.group] ?? [];
 		const { visible, hidden } = partitionByHidden(recs);
 		for (const rec of [...visible, ...hidden]) {
+			try {
+				await this.restoreRecord(rec);
+			} catch (e) {
+				// One bad record must not abort the loop — the remaining records still
+				// restore, and the healing persist below still runs. Keep the failed
+				// record for the next launch instead of losing it.
+				this.unrestored.push(rec);
+				console.warn('[grid] session restore failed for record, retained', rec.worktreePath || rec.kind, e);
+			}
+		}
+		await this.persist(); // heal the file: live tiles + retained unrestored records
+		this.applyLayout();
+	}
+
+	/** Restore ONE persisted record into a live tile/console. Throws → caller retains it. */
+	private async restoreRecord(rec: SessionRecord): Promise<void> {
+		{
+			if (rec.kind === 'god') {
+				if (!this.godConsole) this.toggleGod(); // opens + resumes (resume: true in toggleGod)
+				return;
+			}
 			if (rec.kind === 'journal') {
 				const doc = rec.journalSlug ? this.journalStore.load(rec.journalSlug) : null;
 				const tile = new JournalTile({
 					tileId: this.nextTileId++, name: rec.name ?? 'Journal', store: this.journalStore,
 					slug: rec.journalSlug, initialText: doc?.text ?? '', toast: this.deps.toast,
-					onClosed: (t) => { const wc = this.centeredId === t.tileId; const r = rqClose(this.q, t.tileId, wc); this.q = r.state; this.tiles = this.tiles.filter((x) => x !== t); t.kill(); void this.persist(); if (r.center !== null) this.doCenter(r.center); else { if (wc) this.centeredId = null; this.applyLayout(); } },
+					onClosed: (t) => { if (this.centeredId === t.tileId) this.centeredId = null; this.q = rqClose(this.q, t.tileId).state; this.tiles = this.tiles.filter((x) => x !== t); t.kill(); void this.persist(); this.applyLayout(); this.autoCenter(); },
 					onHide: (t) => this.hideTile(t), onLock: (t) => this.toggleLockById(t.tileId),
 					onCenter: (t) => this.handleClick(t.tileId),
 					onRequestRename: (t, cur) => { void this.deps.promptForTopic('Rename journal', 'New name', cur, 'Rename').then((n) => { if (n && n.trim()) { t.setName(n.trim()); void this.persist(); } }); },
@@ -1268,19 +1528,16 @@ export class TerminalsGrid {
 				});
 				if (this.stageEl) tile.render(this.stageEl);
 				if (rec.hidden) { tile.setHidden(true); this.hidden.push(tile); } else { this.tiles.push(tile); }
-				continue; // skip the terminal path for this record
+				return; // skip the terminal path for this record
 			}
 			let exists = false;
 			try { await fs.access(rec.worktreePath); exists = true; } catch { exists = false; }
-			if (!exists) continue;
-			const tile = this.makeTile({ worktreePath: rec.worktreePath, branch: rec.branch }, rec.repoName, rec.repoPath, rec.baseBranch, true, rec.name, rec.model, rec.effort);
-			try { await writeReadyHook(rec.worktreePath, this.notifyScriptPath, this.coordHookPath); } catch { /* best effort */ }
+			if (!exists) { this.unrestored.push(rec); return; } // retained — retried next launch
+			const tile = this.makeTile({ worktreePath: rec.worktreePath, branch: rec.branch }, rec.repoName, rec.repoPath, rec.baseBranch, true, rec.name, rec.model, rec.effort, rec.folder);
 			if (this.stageEl) tile.render(this.stageEl);
 			if (rec.hidden) { tile.setHidden(true); this.hidden.push(tile); }
 			else this.tiles.push(tile);
 		}
-		await this.persist(); // prune records whose worktree no longer exists
-		this.applyLayout();
 	}
 
 	/** Full teardown (view close): unmount + kill all sessions. */
@@ -1309,6 +1566,9 @@ export class TerminalsGrid {
 		for (const t of [...this.tiles, ...this.hidden]) {
 			if (t.isJournal) continue; // journals have no worktree to park
 			const tt = t as TerminalTile;
+			// A folder target has no branch of its own. If it happens to sit inside somebody's
+			// repo, parking would `git add -A` + commit THEIR working tree — never do that.
+			if (tt.isFolder) continue;
 			try {
 				const action = await parkWorktree(tt.worktreePath, iso);
 				if (action === 'parked') {
@@ -1324,9 +1584,11 @@ export class TerminalsGrid {
 	/** Scan every added repo's worktrees, map ownership from live tiles, write worktrees.md.
 	 *  Best-effort: any git failure degrades that entry and never throws. */
 	private async scanWorktrees(): Promise<void> {
+		this.lastScanAt = Date.now();
 		const entries: WorktreeEntry[] = [];
 		const now = Date.now();
 		for (const repo of this.repos) {
+			if (repo.folder) continue; // no git → no worktrees to list, and nothing to exclude
 			if (!this.claudeSettingsIgnoredFor.has(repo.path)) {
 				this.claudeSettingsIgnoredFor.add(repo.path);
 				await ensureClaudeSettingsIgnored(repo.path); // before git status below, so this scan already reflects it
@@ -1368,13 +1630,12 @@ export class TerminalsGrid {
 	/** Un-park a parked worktree (soft-reset / recreate folder) and attach a new tile for it. */
 	private async reopenAndOpen(branch: string): Promise<void> {
 		const entry = this.lastEntries.find((e) => e.branch === branch);
-		if (!entry) { this.deps.toast(`No scanned worktree for ${branch} — hit Refresh`); return; }
+		if (!entry) { this.deps.toast(`No scanned worktree for ${branch} — hit Refresh`, 'warn'); return; }
 		const repo = this.repos.find((r) => r.name === entry.repo);
 		if (!repo) return;
 		// Skip if a tile is already attached to this worktree.
 		if (this.tiles.some((t) => !t.isJournal && path.resolve((t as TerminalTile).worktreePath) === path.resolve(entry.path))) return;
 		await reopenWorktree(repo.path, entry.path, branch);
-		try { await writeReadyHook(entry.path, this.notifyScriptPath, this.coordHookPath); } catch { /* best effort */ }
 		const tile = this.makeTile({ worktreePath: entry.path, branch }, repo.name, repo.path, this.baseOf(branch), false);
 		if (this.stageEl) tile.render(this.stageEl);
 		this.tiles.push(tile);

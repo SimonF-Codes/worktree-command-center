@@ -51,7 +51,13 @@ export function parseUsage(text: string): UsageReadout {
 	const t = stripAnsi(text);
 	const sess = sectionAfter(t, /current\s*session/i);
 	const week = sectionAfter(t, /current\s*week\s*\(?\s*all\s*models\)?/i);
-	const fable = sectionAfter(t, /current\s*week\s*\(\s*fable\s*\)/i);
+	// Anchored on the bare "Fable)" tail, not the full "Current week (Fable)" label: since the
+	// CLI moved /usage into the tabbed Settings view (2.1.211), the label's "Current week ("
+	// prefix is painted as a separate TUI cell run, so the stripped stream reads e.g.
+	// "…clau.de/cc-50-promoFable)███ 13% used" and the full-label anchor can never match.
+	// No \b before "fable": in the concatenated stream the promo URL runs straight into the
+	// label ("…cc-50-promoFable)"), so a word boundary would reject the very case this fixes.
+	const fable = sectionAfter(t, /fable\s*\)/i);
 	const credits = sectionAfter(t, /usage\s*credits/i);
 	return {
 		sessionPct: pctIn(sess),

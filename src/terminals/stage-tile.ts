@@ -1,3 +1,5 @@
+import type { AttentionKind } from './attention';
+
 /** The structural contract the terminal grid relies on for any tile it places in the stage —
  *  satisfied by both TerminalTile (a Claude session) and JournalTile (a notes editor). */
 export interface StageTile {
@@ -15,6 +17,7 @@ export interface StageTile {
   setDimmed(on: boolean): void;
   setSelected(on: boolean): void;
   setBadge(text: string | null): void;
+  setAttention(kind: AttentionKind | null): void;
   focus(): void;
   blur(): void;
   kill(): void;

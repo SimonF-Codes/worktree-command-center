@@ -1,5 +1,5 @@
 import * as path from 'path';
-import * as fsp from 'fs/promises';
+import * as fs from 'fs';
 import { runCommand } from '../command-runner';
 import { isParkCommitSubject, parkCommitSubject } from './worktree-registry';
 
@@ -52,6 +52,28 @@ export function terminalSystemPrompt(repoName: string, branch: string, worktreeP
 	].join('\n');
 }
 
+/** System-prompt text for a FOLDER target — a plain directory with no git repo, so there is no
+ *  worktree, no branch, and no "your own isolated copy" guarantee. The isolation paragraph from
+ *  terminalSystemPrompt would be an outright lie here, so this says the opposite: you are in the
+ *  real directory and other terminals may be in it too. The coordination paragraph is kept
+ *  verbatim — locks matter MORE without worktree isolation, not less. */
+export function folderSystemPrompt(folderName: string, folderPath: string): string {
+	return [
+		'You are a Claude Code session running inside a plain FOLDER target of the Worktree Command Center app. Keep these facts in mind for the whole session:',
+		'',
+		`- Identity: you are working in the folder "${folderName}", whose working directory is "${folderPath}".`,
+		'- This is NOT a git worktree. It may not be a git repository at all, so do not assume `git` commands work here, and do not expect a branch of your own. There is no isolated copy and no cheap undo — every edit lands directly on the real files.',
+		`- Parallelism: other Claude Code terminals may be open AT THE SAME TIME in this same folder, working on the SAME files (there are no per-terminal worktrees to separate you). Re-read a file before editing it, keep your edits narrow, and never assume you are the only writer.`,
+		'- Cross-repo rule: if your task requires changing a git REPOSITORY, do NOT edit that repo\'s primary checkout directly. Create a new git worktree in it (e.g. `git worktree add -b <branch> <path> <base>`) and make the changes there. One worktree per repo you touch.',
+		'',
+		'Coordinating with the other terminals (they share resources with you):',
+		'- A `cos-coord` command is on your PATH. Before any DESTRUCTIVE or EXCLUSIVE operation on a shared resource (a DB reset, a backtest/replay, an A/B run, a migration), first run `cos-coord status` to see what is active.',
+		'- Then wrap the operation in a lock: `cos-coord acquire <area>:<thing> --reason "..." [--ttl <seconds>] && <your command> ; cos-coord release <area>:<thing>`. Resource names are lowercase `<area>:<thing>`, e.g. `db:reset`. If acquire fails, another terminal holds it — wait and retry, do not force it.',
+		'- When a long task finishes, run `cos-coord note "..."` so other terminals stop waiting.',
+		'- Because this folder has no worktree isolation, treat a batch of edits to shared files here as an exclusive operation and take a lock for it.',
+	].join('\n');
+}
+
 /** Branch names from `git branch`, current-branch marker and whitespace stripped. */
 export async function listBranches(repoPath: string): Promise<string[]> {
 	const r = await runCommand('git', ['branch', '--format=%(refname:short)'], { cwd: repoPath, timeoutMs: 8000 });
@@ -59,12 +81,12 @@ export async function listBranches(repoPath: string): Promise<string[]> {
 	return r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
 }
 
-/** The .claude/settings.local.json content: the .cos-ready marker hook (Stop/Notification),
- *  the coordination hooks (PreToolUse acquire / PostToolUse release) on Bash, a Task-matcher
- *  hook that logs background Task/Agent runs to the board (for the Coordination panel's
+/** The session settings content: the .cos-ready marker hook (Stop/Notification), the
+ *  coordination hooks (PreToolUse acquire / PostToolUse release) on Bash, a Task-matcher hook
+ *  that logs background Task/Agent runs to the board (for the Coordination panel's
  *  background-tasks list), and a pre-approval of `cos-coord` so agents chat/coordinate with
  *  each other without prompting. */
-export function settingsLocalJson(notifyScriptAbsPath: string, coordHookAbsPath: string): string {
+export function worktreeSettingsJson(notifyScriptAbsPath: string, coordHookAbsPath: string): string {
 	const ready = [{ hooks: [{ type: 'command', command: `node "${notifyScriptAbsPath}"` }] }];
 	const coord = (extra: string) => ({ matcher: 'Bash', hooks: [{ type: 'command', command: `node "${coordHookAbsPath}"${extra}` }] });
 	const task = (extra: string) => ({ matcher: 'Task', hooks: [{ type: 'command', command: `node "${coordHookAbsPath}" --task${extra}` }] });
@@ -74,20 +96,34 @@ export function settingsLocalJson(notifyScriptAbsPath: string, coordHookAbsPath:
 	}, null, 2);
 }
 
-/** Write the scoped hooks (ready marker + coordination) into a worktree. */
-export async function writeReadyHook(worktreePath: string, notifyScriptAbsPath: string, coordHookAbsPath: string): Promise<void> {
-	const dir = path.join(worktreePath, '.claude');
-	await fsp.mkdir(dir, { recursive: true });
-	await fsp.writeFile(path.join(dir, 'settings.local.json'), settingsLocalJson(notifyScriptAbsPath, coordHookAbsPath), 'utf8');
+/** Where the shared settings file lives: beside the sidecar, NEVER inside a worktree.
+ *  The content is identical for every terminal (it depends only on the two script paths),
+ *  so one file serves them all and is passed to each session via `claude --settings`. */
+export function worktreeSettingsPath(sidecarDir: string): string {
+	return path.join(sidecarDir, 'settings', 'worktree-settings.json');
 }
 
-/** Keep `.claude/settings.local.json` — the file WE write into every worktree via
- *  writeReadyHook — out of `git status`, the same way writeContextFile keeps its file outside
- *  the worktree entirely: it's our own bookkeeping, not the user's work, so it shouldn't make a
- *  freshly-created, untouched worktree read as "dirty". Uses `.git/info/exclude` (shared across
- *  all worktrees of a repo, local-only, never committed) rather than the repo's own .gitignore,
- *  so this never touches a tracked file. Idempotent — checked before appending. Best-effort:
- *  a failure here just means the worktree shows as dirty until fixed, never blocks creation. */
+/** Write the shared settings file. Writing it OUTSIDE the worktree is the point: a repo may
+ *  legitimately TRACK its own `.claude/settings.local.json`, and writing ours on top of that
+ *  clobbered the repo's shared config, left every worktree permanently dirty with that one
+ *  file, and let parkWorktree(`git add -A`) commit the deletion onto the branch. Mirrors
+ *  writeContextFile's "never dirty the worktree" rule. Synchronous so the file is guaranteed
+ *  present before any session spawns. */
+export function writeWorktreeSettings(sidecarDir: string, notifyScriptAbsPath: string, coordHookAbsPath: string): string {
+	const file = worktreeSettingsPath(sidecarDir);
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(file, worktreeSettingsJson(notifyScriptAbsPath, coordHookAbsPath), 'utf8');
+	return file;
+}
+
+/** Keep `.claude/settings.local.json` out of `git status`. Nothing writes that file into a
+ *  worktree any more (writeWorktreeSettings puts one shared copy beside the sidecar instead),
+ *  but worktrees created by earlier builds still carry one, and it's our own bookkeeping, not
+ *  the user's work — it shouldn't make an untouched worktree read as "dirty". Uses
+ *  `.git/info/exclude` (shared across all worktrees of a repo, local-only, never committed)
+ *  rather than the repo's own .gitignore, so this never touches a tracked file. Idempotent —
+ *  checked before appending. Best-effort: a failure here just means those older worktrees show
+ *  as dirty until fixed, never blocks anything. */
 export async function ensureClaudeSettingsIgnored(repoPath: string): Promise<void> {
 	try {
 		const gitDir = await runCommand('git', ['rev-parse', '--git-common-dir'], { cwd: repoPath, timeoutMs: 8000 });
@@ -95,27 +131,23 @@ export async function ensureClaudeSettingsIgnored(repoPath: string): Promise<voi
 		const excludePath = path.join(path.resolve(repoPath, gitDir.stdout.trim()), 'info', 'exclude');
 		const entry = '.claude/settings.local.json';
 		let existing = '';
-		try { existing = await fsp.readFile(excludePath, 'utf8'); } catch { /* doesn't exist yet */ }
+		try { existing = fs.readFileSync(excludePath, 'utf8'); } catch { /* doesn't exist yet */ }
 		if (existing.split('\n').some((l) => l.trim() === entry)) return;
-		await fsp.mkdir(path.dirname(excludePath), { recursive: true });
+		fs.mkdirSync(path.dirname(excludePath), { recursive: true });
 		const sep = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-		await fsp.appendFile(excludePath, `${sep}${entry}\n`, 'utf8');
+		fs.appendFileSync(excludePath, `${sep}${entry}\n`, 'utf8');
 	} catch { /* best effort */ }
 }
 
 /** Create a fresh worktree on a NEW branch based on baseBranch. Throws on git failure. */
 export async function createWorktree(
-	repoPath: string, repoName: string, baseBranch: string, branch: string, notifyScriptAbsPath?: string, coordHookAbsPath?: string,
+	repoPath: string, repoName: string, baseBranch: string, branch: string,
 ): Promise<WorktreeInfo> {
 	const worktreePath = worktreePathFor(repoPath, repoName, branch);
 	const r = await runCommand('git', ['worktree', 'add', worktreePath, '-b', branch, baseBranch], { cwd: repoPath, timeoutMs: 20000 });
 	if (r.code !== 0) {
 		throw new Error((r.error ?? r.stderr).split('\n')[0] || 'git worktree add failed');
 	}
-	if (notifyScriptAbsPath && coordHookAbsPath) {
-		try { await writeReadyHook(worktreePath, notifyScriptAbsPath, coordHookAbsPath); } catch { /* hooks are best-effort */ }
-	}
-	await ensureClaudeSettingsIgnored(repoPath);
 	return { worktreePath, branch };
 }
 

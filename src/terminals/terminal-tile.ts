@@ -1,16 +1,22 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SessionBridge, safeSessionEnv } from './session-bridge';
-import { removeWorktreeAndBranch, terminalSystemPrompt, type WorktreeInfo } from './worktree-manager';
+import { readClipboardText, writeClipboardText } from './clipboard';
+import { removeWorktreeAndBranch, terminalSystemPrompt, folderSystemPrompt, worktreeSettingsPath, type WorktreeInfo } from './worktree-manager';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { FitThrottle } from './fit-throttle';
+import { HiddenOutputBuffer } from './hidden-buffer';
+import { isUserInput } from './ready-queue';
+import { activeTerminalPalette, activeTerminalFont, type TerminalPalette } from './theme-store';
 import { ctrlClickActivator, openExternalUrl } from './links';
 import { promptForConfirm } from '../ui/prompt-dialog';
 import { stripAnsi } from './usage-parse';
 import type { StageTile } from './stage-tile';
+import type { AttentionKind } from './attention';
 
 export interface TerminalTileOpts {
 	tileId: number;
@@ -18,6 +24,10 @@ export interface TerminalTileOpts {
 	repoPath: string;
 	baseBranch: string;
 	worktree: WorktreeInfo;
+	/** FOLDER target: `worktree.worktreePath` is the user's real folder, not a worktree we made,
+	 *  and `worktree.branch` is ''. Everything that would DELETE or COMMIT on our behalf is
+	 *  skipped for these — see close() and the grid's parkAll/scanWorktrees. */
+	folder?: boolean;
 	sidecarPath: string;
 	coordDir: string;
 	sessionEnv?: () => Record<string, string>;
@@ -29,6 +39,9 @@ export interface TerminalTileOpts {
 	onEnter?: (tile: TerminalTile) => void;
 	onFocusChange?: (tile: TerminalTile, focused: boolean) => void;
 	onReady?: (tile: TerminalTile) => void;
+	/** Fired when a resume found no conversation and the tile fell back to a fresh session.
+	 *  Reported OUTSIDE the terminal — see startSession's fallback branch for why. */
+	onFreshFallback?: (tile: TerminalTile) => void;
 	resume?: boolean;
 	bypassPermissions?: boolean;
 	model?: string;
@@ -47,6 +60,7 @@ export class TerminalTile implements StageTile {
 	private resizeObs: ResizeObserver | null = null;
 	private fitThrottle: FitThrottle | null = null;
 	private badgeEl: HTMLElement | null = null;
+	private attnEl: HTMLElement | null = null;
 	private lockBtnEl: HTMLButtonElement | null = null;
 	private remoteBtnEl: HTMLButtonElement | null = null;
 	private remoteOn = false;
@@ -58,10 +72,20 @@ export class TerminalTile implements StageTile {
 	private selected = false;
 	private idle = false; // false = busy/starting; true once the session goes ready (refresh confirms only when busy)
 	private ended = false; // true once the claude process has exited and nothing is listening on the pty
+	// Output pacing: only the CENTERED tile parses PTY output in true real time. Visible
+	// satellites batch on a 300ms cadence and hidden/workspace-detached tiles on 2s —
+	// several sessions streaming at once otherwise starve the renderer's event loop in
+	// sub-250ms increments (measured as continuous heartbeat 'gap' stalls, 2026-07-22).
+	private minimized = false;
+	private detachedFromStage = false;
+	private currentMode: 'live' | 'visible' | 'suspended' = 'live';
+	private hiddenBuf = new HiddenOutputBuffer();
+	private flushTimer: number | null = null;
 	readonly isJournal = false;
 
 	constructor(private opts: TerminalTileOpts) {
-		this.displayName = opts.name ?? `${opts.repoName} · ${opts.worktree.branch}`;
+		// Folder targets have no branch, so "name · " with nothing after it would be the label.
+		this.displayName = opts.name ?? (opts.folder ? opts.repoName : `${opts.repoName} · ${opts.worktree.branch}`);
 	}
 
 	get tileId(): number { return this.opts.tileId; }
@@ -70,6 +94,8 @@ export class TerminalTile implements StageTile {
 		this.el = parent.createDiv({ cls: 'cos-term-tile' });
 		const head = this.el.createDiv({ cls: 'cos-term-head' });
 		this.badgeEl = head.createSpan({ cls: 'cos-term-badge' });
+		this.attnEl = head.createSpan({ cls: 'cos-term-attn' });
+		this.attnEl.style.display = 'none';
 		this.nameEl = head.createSpan({ cls: 'cos-term-name', text: this.displayName, attr: { title: 'Double-click to rename' } });
 		this.nameEl.addEventListener('dblclick', (e) => { e.stopPropagation(); this.opts.onRequestRename?.(this, this.displayName); });
 		// Right-clustered controls: remote, lock, minimize (hide), close.
@@ -82,7 +108,9 @@ export class TerminalTile implements StageTile {
 		this.lockBtnEl.addEventListener('click', (e) => { e.stopPropagation(); this.opts.onLock?.(this); });
 		const hide = btns.createEl('button', { text: '–', cls: 'cos-term-hide', attr: { title: 'Hide — keeps the session running; resurface from Coordination' } });
 		hide.addEventListener('click', (e) => { e.stopPropagation(); this.opts.onHide?.(this); });
-		const close = btns.createEl('button', { text: '×', attr: { title: 'Close — deletes this worktree + its branch' } });
+		const close = btns.createEl('button', { text: '×', attr: { title: this.opts.folder
+			? 'Close — ends this session. The folder and its files are left alone.'
+			: 'Close — deletes this worktree + its branch' } });
 		close.addEventListener('click', (e) => { e.stopPropagation(); void this.close(); });
 		// Click anywhere in the tile (header or terminal body, except the × button) centers it.
 		this.el.addEventListener('click', () => this.opts.onCenter?.(this));
@@ -104,7 +132,7 @@ export class TerminalTile implements StageTile {
 		}, true);
 		body.addEventListener('mouseup', (e) => { if (swallowingClick) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
 		body.addEventListener('click', (e) => { if (swallowingClick) { e.preventDefault(); e.stopImmediatePropagation(); swallowingClick = false; } }, true);
-		this.term = new Terminal({ fontSize: 12, convertEol: false, cursorBlink: true, scrollback: 5000, theme: { background: '#0e0f17' },
+		this.term = new Terminal({ fontSize: 12, convertEol: false, cursorBlink: false, scrollback: 5000, theme: activeTerminalPalette(), ...activeTerminalFont(),
 			// OSC 8 terminal hyperlinks (the new Claude TUI emits links this way) — open them in the
 			// real browser on Ctrl/Cmd+click. WITHOUT this, xterm's OscLinkProvider falls back to its
 			// built-in "Do you want to navigate… could be dangerous" confirm instead of opening.
@@ -113,6 +141,14 @@ export class TerminalTile implements StageTile {
 		this.fit = new FitAddon();
 		this.term.loadAddon(this.fit);
 		this.term.open(body);
+		// GPU-accelerated rendering: the DOM renderer chokes with many tiles. Must load after
+		// open(); on WebGL context loss (too many contexts / driver reset) dispose the addon —
+		// xterm then falls back to the DOM renderer for this tile only.
+		try {
+			const gl = new WebglAddon();
+			gl.onContextLoss(() => gl.dispose());
+			this.term.loadAddon(gl);
+		} catch { /* no GPU/context available — DOM renderer remains */ }
 		// Ctrl/Cmd+click a URL (e.g. http://localhost:5173) to open it in the real browser.
 		this.term.loadAddon(new WebLinksAddon(ctrlClickActivator(openExternalUrl)));
 		// Ctrl/Cmd+C copies the selection if there is one (otherwise ^C falls through as an
@@ -178,11 +214,19 @@ export class TerminalTile implements StageTile {
 
 		this.term.onData((d) => {
 			// The pty is dead (claude exited) — nothing is listening, so forwarding keystrokes would
-			// silently vanish. Instead, ANY key revives the session in place (--continue, falling back
-			// to fresh if there's no conversation to resume), matching what ⟳ does.
-			if (this.ended) { this.ended = false; this.term?.reset(); this.startSession(true, true); return; }
-			this.bridge?.write(d);
+			// silently vanish. Instead, any real keystroke revives the session in place (--continue,
+			// falling back to fresh if there's no conversation to resume), matching what ⟳ does.
+			// Gated on isUserInput for the same reason as the idle flag below: xterm answers Claude's
+			// focus reporting on this channel, and the focus/blur WE cause by centering a tile must
+			// not revive a dead session with nobody at the keyboard.
+			if (this.ended && isUserInput(d)) { this.ended = false; this.term?.reset(); this.startSession(true, true); return; }
+			this.bridge?.write(d); // always forwarded — Claude asked for these reports
 			if (this.pasting) return; // pasted content (incl. its newlines) is NOT a submit
+			// Only a HUMAN keystroke means "this session is being worked on". xterm answers
+			// Claude's focus reporting (DECSET 1004) on the same channel, so the focus/blur
+			// WE cause by centering a tile would otherwise clear its idle flag and bounce the
+			// spotlight to the next tile — forever, with nobody at the keyboard (2026-07-28).
+			if (!isUserInput(d)) return;
 			if (d.includes('\r')) { this.idle = false; this.opts.onEnter?.(this); }
 			else this.opts.onInput?.(this, d);
 		});
@@ -208,6 +252,9 @@ export class TerminalTile implements StageTile {
 				}
 			});
 		} catch { /* worktree gone / watch unsupported */ }
+
+		// Tiles render uncentered: start on the satellite cadence until setCentered says otherwise.
+		this.updateSuspension();
 	}
 
 	/** Position/size the tile (absolute, in stage coords). Refits the terminal after the move. */
@@ -232,9 +279,27 @@ export class TerminalTile implements StageTile {
 		this.badgeEl.style.display = label ? 'inline-block' : 'none';
 	}
 
+	/** Show a distinct persistent marker in the header when this tile needs the user:
+	 *  ⏳ needs input · 🆘 needs help · ✓ done. Cleared (hidden) while it's still working. */
+	setAttention(kind: AttentionKind | null): void {
+		if (!this.attnEl) return;
+		const M: Record<AttentionKind, { icon: string; title: string }> = {
+			input: { icon: '⏳', title: 'Waiting for you — a prompt or menu needs an answer' },
+			help: { icon: '🆘', title: 'Needs help — this session looks stuck or errored' },
+			done: { icon: '✓', title: 'Done — finished its turn and idle' },
+		};
+		if (!kind) { this.attnEl.style.display = 'none'; this.attnEl.className = 'cos-term-attn'; return; }
+		const m = M[kind];
+		this.attnEl.setText(m.icon);
+		this.attnEl.setAttribute('title', m.title);
+		this.attnEl.className = `cos-term-attn attn-${kind}`;
+		this.attnEl.style.display = 'inline-block';
+	}
+
 	setCentered(on: boolean): void {
 		this.centered = on;
 		this.el?.toggleClass('centered', on);
+		this.updateSuspension(); // centered = live output; satellites batch (300ms)
 		if (on) this.fitSoon(); // fit the PTY to the centered size (after the size animation settles)
 		else this.term?.scrollToBottom(); // leaving center: snap the (un-refit) satellite to its latest line
 	}
@@ -267,7 +332,68 @@ export class TerminalTile implements StageTile {
 	setHidden(on: boolean): void {
 		if (!this.el) return;
 		this.el.style.display = on ? 'none' : '';
+		this.minimized = on;
+		this.updateSuspension();
 		if (!on) this.fitSoon(); // re-show: the term was display:none, so refit to the stage
+	}
+
+	/** Workspace switched away/back: the stage DOM is detached but the session keeps running.
+	 *  Suspends live xterm parsing exactly like minimize does. */
+	setDetached(on: boolean): void {
+		this.detachedFromStage = on;
+		this.updateSuspension();
+	}
+
+	private outputMode(): 'live' | 'visible' | 'suspended' {
+		if (this.minimized || this.detachedFromStage) return 'suspended';
+		return this.centered ? 'live' : 'visible';
+	}
+
+	/** Re-pace output on state edges only. Entering 'live' (centered) drains immediately so
+	 *  the reveal shows the current screen; batching modes install their cadence timer. */
+	private updateSuspension(): void {
+		const mode = this.outputMode();
+		if (mode === this.currentMode) return;
+		this.currentMode = mode;
+		if (this.flushTimer !== null) { window.clearInterval(this.flushTimer); this.flushTimer = null; }
+		this.flushSuspended(); // mode boundary: drain what the old cadence left pending
+		if (mode !== 'live') this.flushTimer = window.setInterval(() => this.flushSuspended(), mode === 'visible' ? 300 : 2000);
+	}
+
+	/** Drain the pending window into xterm. A dropped window means the tile flooded past the
+	 *  cap — its bytes are stale alternate-screen frames, so instead of parsing a partial tail
+	 *  we ask ConPTY to re-emit the CURRENT screen via a resize nudge. */
+	private flushSuspended(): void {
+		const { data, dropped } = this.hiddenBuf.takeAll();
+		if (dropped) this.nudgeRepaint();
+		else if (data) this.term?.write(data);
+	}
+
+	/** Bounce the PTY one row and back: each real resize makes ConPTY re-emit the full screen,
+	 *  restoring an accurate display after dropped output. */
+	private nudgeRepaint(): void {
+		const t = this.term;
+		if (!t || !this.bridge) return;
+		const { cols, rows } = t;
+		this.bridge.resize(cols, rows + 1);
+		window.setTimeout(() => this.bridge?.resize(cols, rows), 50);
+	}
+
+	/** Route session output to xterm — or, in a batching mode, into the pending buffer. */
+	private writeOut(d: string): void {
+		if (this.currentMode !== 'live') this.hiddenBuf.push(d);
+		else this.term?.write(d);
+	}
+
+	/** Re-tint the terminal well live (theme switch — see theme-store). Font weight and the
+	 *  contrast floor travel with the palette: light wells need both to read well. */
+	setTerminalPalette(p: TerminalPalette): void {
+		if (!this.term) return;
+		this.term.options.theme = p;
+		const f = activeTerminalFont();
+		this.term.options.fontWeight = f.fontWeight as never;
+		this.term.options.fontWeightBold = f.fontWeightBold as never;
+		this.term.options.minimumContrastRatio = f.minimumContrastRatio;
 	}
 
 	/** Give this terminal keyboard focus so typing goes here. */
@@ -289,7 +415,14 @@ export class TerminalTile implements StageTile {
 		// the text registers as a real Enter (the same reason the Approve button's lone
 		// sendKeys("\r") submits a prompt). The delay forces a separate PTY read so ConPTY
 		// can't coalesce the two writes back into one chunk.
-		window.setTimeout(() => this.bridge?.write('\r'), 40);
+		// 250ms: the 2026-07 Claude TUI widened its paste-coalescing window — a \r landing
+		// ~40ms after the text now reads as a pasted newline (sits in the box, unsent).
+		window.setTimeout(() => this.bridge?.write('\r'), 250);
+		// Belt-and-braces second Enter: on a FRESH session the TUI can still be booting (or a
+		// long task string still coalescing) when the first \r lands, leaving the message in
+		// the box (Kane spawn, 2026-07-24). If the first Enter submitted, this one lands on an
+		// empty input box and is a no-op.
+		window.setTimeout(() => this.bridge?.write('\r'), 900);
 	}
 
 	/** Send raw keystrokes verbatim (no auto-Enter) — used to answer prompts from the
@@ -321,6 +454,8 @@ export class TerminalTile implements StageTile {
 
 	get worktreePath(): string { return this.opts.worktree.worktreePath; }
 	get branch(): string { return this.opts.worktree.branch; }
+	/** True for a plain-folder target — the grid uses this to skip git-only bookkeeping. */
+	get isFolder(): boolean { return this.opts.folder === true; }
 	get baseBranch(): string { return this.opts.baseBranch; }
 	get repoName(): string { return this.opts.repoName; }
 
@@ -358,24 +493,9 @@ export class TerminalTile implements StageTile {
 		this.bridge?.write(seq);
 	}
 
-	/** Electron's clipboard (reliable & synchronous in Obsidian), or null outside Electron. */
-	private electronClipboard(): { readText?: () => string; writeText?: (t: string) => void } | null {
-		try {
-			const req = (window as unknown as { require?: (m: string) => unknown }).require;
-			if (!req) return null;
-			const mod = req('electron') as { clipboard?: { readText?: () => string; writeText?: (t: string) => void } };
-			return mod.clipboard ?? null;
-		} catch { return null; }
-	}
-
 	/** Paste clipboard text into the terminal (honors bracketed-paste via term.paste). */
 	private pasteFromClipboard(): void {
-		const t = this.term;
-		if (!t) return;
-		const sync = this.electronClipboard()?.readText?.();
-		if (typeof sync === 'string') { this.pasteText(sync); return; }
-		// Fallback for non-Electron runtimes: the async Clipboard API.
-		navigator.clipboard?.readText?.().then((txt) => this.pasteText(txt)).catch(() => { /* denied / empty */ });
+		void readClipboardText().then((txt) => this.pasteText(txt));
 	}
 
 	/** Paste text without it counting as Enter, and mark the input box non-empty. */
@@ -392,9 +512,7 @@ export class TerminalTile implements StageTile {
 
 	/** Copy text to the clipboard (used by right-click when there's a selection). */
 	private writeClipboard(text: string): void {
-		const clip = this.electronClipboard();
-		if (clip?.writeText) { clip.writeText(text); return; }
-		navigator.clipboard?.writeText?.(text).catch(() => { /* denied */ });
+		writeClipboardText(text);
 	}
 
 	/** Write this session's awareness context to a file (outside the worktree, so it
@@ -404,7 +522,10 @@ export class TerminalTile implements StageTile {
 			const dir = path.join(path.dirname(this.opts.sidecarPath), 'contexts');
 			fs.mkdirSync(dir, { recursive: true });
 			const file = path.join(dir, `tile-${this.opts.tileId}.md`);
-			fs.writeFileSync(file, terminalSystemPrompt(this.opts.repoName, this.opts.worktree.branch, this.opts.worktree.worktreePath), 'utf8');
+			const prompt = this.opts.folder
+				? folderSystemPrompt(this.opts.repoName, this.opts.worktree.worktreePath)
+				: terminalSystemPrompt(this.opts.repoName, this.opts.worktree.branch, this.opts.worktree.worktreePath);
+			fs.writeFileSync(file, prompt, 'utf8');
 			return file;
 		} catch {
 			return null;
@@ -419,7 +540,7 @@ export class TerminalTile implements StageTile {
 	}
 
 	/** Serializable record for persistence. */
-	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; model?: string; effort?: string } {
+	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; folder?: boolean; model?: string; effort?: string } {
 		return {
 			worktreePath: this.opts.worktree.worktreePath,
 			branch: this.opts.worktree.branch,
@@ -427,6 +548,7 @@ export class TerminalTile implements StageTile {
 			repoPath: this.opts.repoPath,
 			baseBranch: this.opts.baseBranch,
 			name: this.displayName,
+			...(this.opts.folder ? { folder: true } : {}),
 			...(this.opts.model ? { model: this.opts.model } : {}),
 			...(this.opts.effort ? { effort: this.opts.effort } : {}),
 		};
@@ -439,6 +561,8 @@ export class TerminalTile implements StageTile {
 
 	/** Tear down the session + DOM WITHOUT touching the worktree (used on page switch). */
 	kill(): void {
+		if (this.flushTimer !== null) { window.clearInterval(this.flushTimer); this.flushTimer = null; }
+		this.hiddenBuf.clear();
 		this.readyWatcher?.close();
 		this.readyWatcher = null;
 		this.resizeObs?.disconnect();
@@ -451,12 +575,18 @@ export class TerminalTile implements StageTile {
 
 	/** Close from the × button: tear down AND delete the worktree + its branch IMMEDIATELY —
 	 *  no confirmation, dirty or not. × means "throw this away"; use Minimize (hide) to keep a
-	 *  session you care about. The branch dies with it. */
+	 *  session you care about. The branch dies with it.
+	 *
+	 *  FOLDER targets are the exception: that directory is the user's own, not a scratch copy we
+	 *  created, so × only ends the session. Deleting it (or a branch of whatever repo happens to
+	 *  contain it) would destroy real work. */
 	async close(): Promise<void> {
 		this.kill();
-		try {
-			await removeWorktreeAndBranch(this.opts.repoPath, this.opts.worktree.worktreePath, this.opts.worktree.branch);
-		} catch { /* best effort */ }
+		if (!this.opts.folder) {
+			try {
+				await removeWorktreeAndBranch(this.opts.repoPath, this.opts.worktree.worktreePath, this.opts.worktree.branch);
+			} catch { /* best effort */ }
+		}
 		this.opts.onClosed(this);
 	}
 
@@ -473,6 +603,9 @@ export class TerminalTile implements StageTile {
 		const ctxFile = this.writeContextFile();
 		if (ctxFile) args.push('--append-system-prompt-file', ctxFile);
 		const sidecarDir = path.dirname(this.opts.sidecarPath);
+		// Hooks + cos-coord pre-approval come from a shared file outside the worktree (written by
+		// the grid), so we never write into the repo's own .claude/ — see writeWorktreeSettings.
+		args.push('--settings', worktreeSettingsPath(sidecarDir));
 		const env: Record<string, string> = {
 			...safeSessionEnv(this.opts.sessionEnv),
 			COS_COORD_DIR: this.opts.coordDir,
@@ -482,7 +615,7 @@ export class TerminalTile implements StageTile {
 		};
 		let probe = ''; // first bytes only (capped) — used to detect the --continue "no conversation" exit
 		this.bridge = new SessionBridge(this.opts.sidecarPath, this.opts.worktree.worktreePath, 'claude', args, env);
-		this.bridge.onData((d) => { if (fallbackFresh && probe.length < 4096) probe += d; this.term?.write(d); });
+		this.bridge.onData((d) => { if (fallbackFresh && probe.length < 4096) probe += d; this.writeOut(d); });
 		this.bridge.onExit((code) => {
 			// Claude's TUI often justifies/wraps text with absolute cursor-position escapes
 			// (ESC[<N>G) INSTEAD of literal spaces between words — stripping the ANSI out then
@@ -490,13 +623,21 @@ export class TerminalTile implements StageTile {
 			// with no whitespace at all. Strip ANSI first, then allow \s* (not a literal space)
 			// between each word so the match survives either rendering.
 			if (fallbackFresh && /no\s*conversation\s*found\s*to\s*continue/i.test(stripAnsi(probe))) {
+				this.hiddenBuf.clear();      // stale pre-reset output must not replay after the reset
 				this.term?.reset();          // --continue had nothing to resume → start fresh in place
+				// ...and SAY so, but NOT into the terminal. Writing the notice here looked right and
+				// did nothing: the fresh `claude` starting immediately below repaints the whole
+				// screen over it, so the line was gone before anyone could read it (the floor
+				// snapshot caught it mid-collision). Anything written into a tile is the running
+				// TUI's to overwrite. Report it on a surface the session cannot repaint — the grid
+				// raises a toast — and leave the terminal to claude.
+				this.opts.onFreshFallback?.(this);
 				this.startSession(false);
 				return;
 			}
 			this.ended = true;
 			this.idle = true; // nothing running — a ⟳/keypress revival shouldn't ask "still working?"
-			this.term?.write(`\r\n[session ended (code ${code ?? '?'}) — press any key, or ⟳ above, to start a new one]\r\n`);
+			this.writeOut(`\r\n[session ended (code ${code ?? '?'}) — press any key, or ⟳ above, to start a new one]\r\n`);
 		});
 		this.bridge.onReady(() => { this.idle = true; this.opts.onReady?.(this); });
 		this.bridge.start();
@@ -522,6 +663,7 @@ export class TerminalTile implements StageTile {
 	 *  the new session env at once; the env is re-read inside startSession. */
 	restartInPlace(): void {
 		this.bridge?.kill();
+		this.hiddenBuf.clear(); // old-session output must not replay into the fresh screen
 		this.term?.reset();
 		this.idle = false;
 		this.startSession(true, true);

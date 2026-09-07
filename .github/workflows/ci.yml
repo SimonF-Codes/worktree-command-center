@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Only the newest run per branch/PR survives — older in-flight runs are cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # esbuild marks electron + node-pty as `external`, and nothing under test needs the
+  # Electron runtime, so skip the ~150 MB binary download — it only makes `npm ci` slow
+  # and flaky. node-pty still loads via its checked-in prebuilds.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+jobs:
+  verify:
+    name: Typecheck · Test · Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # `npm ci` fails if package-lock.json is out of sync with package.json, so this
+      # doubles as a lockfile-drift check.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc -noEmit -skipLibCheck
+
+      - name: Unit tests
+        run: npm test
+
+      # tsc already ran above; this is the esbuild bundle step of `npm run build`, kept
+      # separate so a bundling failure is attributed clearly rather than hiding behind tsc.
+      - name: Build renderer + main bundles
+        run: node esbuild.config.mjs
+
+      - name: Guard against committed build artifacts
+        run: |
+          for dir in dist release release-private node_modules; do
+            if git ls-files --error-unmatch "$dir" >/dev/null 2>&1; then
+              echo "::error::$dir/ is tracked in git but must stay gitignored (build/output only)."
+              exit 1
+            fi
+          done
+
+  changelog:
+    name: CHANGELOG updated
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Every user-facing PR must document itself. Trivial/internal PRs can opt out with a
+      # `skip-changelog` label instead of inventing a fake entry.
+      - name: Require a CHANGELOG.md entry (or skip-changelog label)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          if printf ',%s,' "$LABELS" | grep -q ',skip-changelog,'; then
+            echo "skip-changelog label present — CHANGELOG check skipped."
+            exit 0
+          fi
+          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -qx 'CHANGELOG.md'; then
+            echo "CHANGELOG.md updated ✔"
+            exit 0
+          fi
+          echo "::error::CHANGELOG.md was not updated. Add an entry under '## Unreleased' (see the format in the file), or apply the 'skip-changelog' label for internal-only changes."
+          exit 1

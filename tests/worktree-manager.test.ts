@@ -39,7 +39,10 @@ describe('shouldRemoveWorktree', () => {
 	});
 });
 
-import { settingsLocalJson, terminalSystemPrompt } from '../src/terminals/worktree-manager';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as nodePath from 'path';
+import { worktreeSettingsJson, worktreeSettingsPath, writeWorktreeSettings, terminalSystemPrompt, folderSystemPrompt } from '../src/terminals/worktree-manager';
 
 describe('terminalSystemPrompt', () => {
 	it('states identity, parallelism, and the cross-repo worktree rule', () => {
@@ -63,9 +66,9 @@ describe('terminalSystemPrompt', () => {
 	});
 });
 
-describe('settingsLocalJson', () => {
+describe('worktreeSettingsJson', () => {
 	it('registers ready hooks AND Pre/PostToolUse Bash coord hooks', () => {
-		const cfg = JSON.parse(settingsLocalJson('C:/p/notify-ready.cjs', 'C:/p/coord-hook.cjs')) as {
+		const cfg = JSON.parse(worktreeSettingsJson('C:/p/notify-ready.cjs', 'C:/p/coord-hook.cjs')) as {
 			hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
 		};
 		expect(Object.keys(cfg.hooks).sort()).toEqual(['Notification', 'PostToolUse', 'PreToolUse', 'Stop']);
@@ -74,13 +77,13 @@ describe('settingsLocalJson', () => {
 		expect(cfg.hooks.PostToolUse[0]!.hooks[0]!.command).toContain('--release');
 	});
 	it('pre-approves cos-coord so agents chat without approval', () => {
-		const cfg = JSON.parse(settingsLocalJson('C:/p/notify-ready.cjs', 'C:/p/coord-hook.cjs')) as {
+		const cfg = JSON.parse(worktreeSettingsJson('C:/p/notify-ready.cjs', 'C:/p/coord-hook.cjs')) as {
 			permissions: { allow: string[] };
 		};
 		expect(cfg.permissions.allow).toContain('Bash(cos-coord:*)');
 	});
 	it('also registers a Task-matcher hook that logs background task events', () => {
-		const cfg = JSON.parse(settingsLocalJson('C:/p/notify-ready.cjs', 'C:/p/coord-hook.cjs')) as {
+		const cfg = JSON.parse(worktreeSettingsJson('C:/p/notify-ready.cjs', 'C:/p/coord-hook.cjs')) as {
 			hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
 		};
 		const preTask = cfg.hooks.PreToolUse.find((g) => g.matcher === 'Task');
@@ -90,4 +93,65 @@ describe('settingsLocalJson', () => {
 		expect(postTask?.hooks[0]!.command).toContain('--task');
 		expect(postTask?.hooks[0]!.command).toContain('--release');
 	});
+});
+
+describe('worktreeSettingsPath', () => {
+	it('lives beside the sidecar, never inside a worktree', () => {
+		const p = worktreeSettingsPath('C:/app/pty-sidecar');
+		expect(nodePath.resolve(p)).toBe(nodePath.resolve('C:/app/pty-sidecar/settings/worktree-settings.json'));
+		// The whole point of the fix: it must not be the repo-local settings file.
+		expect(p).not.toContain('.claude');
+		expect(p).not.toContain('settings.local.json');
+	});
+});
+
+describe('writeWorktreeSettings', () => {
+	it('writes the settings file under the sidecar dir and leaves the worktree untouched', () => {
+		const tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wcc-settings-'));
+		const sidecarDir = nodePath.join(tmp, 'pty-sidecar');
+		const worktree = nodePath.join(tmp, 'worktree');
+		fs.mkdirSync(worktree, { recursive: true });
+
+		const written = writeWorktreeSettings(sidecarDir, 'C:/p/notify-ready.cjs', 'C:/p/coord-hook.cjs');
+
+		expect(written).toBe(worktreeSettingsPath(sidecarDir));
+		expect(fs.existsSync(written)).toBe(true);
+		const cfg = JSON.parse(fs.readFileSync(written, 'utf8')) as { permissions: { allow: string[] } };
+		expect(cfg.permissions.allow).toContain('Bash(cos-coord:*)');
+		// Regression guard: a repo may TRACK .claude/settings.local.json — we must never write it.
+		expect(fs.existsSync(nodePath.join(worktree, '.claude'))).toBe(false);
+	});
+
+	it('is idempotent — rewriting does not accumulate or corrupt', () => {
+		const tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wcc-settings-'));
+		const sidecarDir = nodePath.join(tmp, 'pty-sidecar');
+		const first = fs.readFileSync(writeWorktreeSettings(sidecarDir, 'C:/p/n.cjs', 'C:/p/c.cjs'), 'utf8');
+		const second = fs.readFileSync(writeWorktreeSettings(sidecarDir, 'C:/p/n.cjs', 'C:/p/c.cjs'), 'utf8');
+		expect(second).toBe(first);
+	});
+});
+
+describe('folderSystemPrompt', () => {
+  it('states the folder name and working directory', () => {
+    const p = folderSystemPrompt('notes', 'C:/Users/me/notes');
+    expect(p).toContain('"notes"');
+    expect(p).toContain('C:/Users/me/notes');
+  });
+
+  it('does not claim a worktree or a branch the session does not have', () => {
+    const p = folderSystemPrompt('notes', 'C:/Users/me/notes');
+    expect(p).toContain('NOT a git worktree');
+    expect(p).not.toMatch(/on branch/i);
+  });
+
+  it('warns that other terminals may be editing the SAME files (no isolation)', () => {
+    const p = folderSystemPrompt('notes', 'C:/Users/me/notes');
+    expect(p).toContain('SAME files');
+  });
+
+  it('still carries the cos-coord locking protocol', () => {
+    const p = folderSystemPrompt('notes', 'C:/Users/me/notes');
+    expect(p).toContain('cos-coord status');
+    expect(p).toContain('cos-coord acquire');
+  });
 });

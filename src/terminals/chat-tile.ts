@@ -1,5 +1,6 @@
 import { isChatPost, CHAT_POLL_MS, type ChatRaw } from './coordination';
 import { ChatRoom } from './chat-room';
+import { InputHistory } from './input-history';
 
 /** A stage tile rendered as an iMessage-style group chat. The bottom box always
  *  broadcasts to the room. When an agent needs input (e.g. a bash-command approval),
@@ -13,6 +14,7 @@ export class ChatTile {
 	private pauseBtn: HTMLButtonElement | null = null;
 	private timer: number | null = null;
 	private lastSig = ''; // skip body rebuilds when nothing changed (so typing in a card reply isn't wiped)
+	private history = new InputHistory(); // Up/Down recalls messages you've sent to the room
 
 	constructor(public readonly tileId: number, private room: ChatRoom, private onClose: () => void, private onCenter: () => void = () => {}) {}
 
@@ -31,11 +33,19 @@ export class ChatTile {
 		const inputWrap = this.el.createDiv({ cls: 'cos-chat-inputrow' });
 		this.input = inputWrap.createEl('input', { attr: { type: 'text', placeholder: 'message the room…' } });
 		this.input.addEventListener('keydown', (e) => {
+			// Up/Down recall previously sent messages so you can edit-and-resend, like a shell.
+			if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+				const next = e.key === 'ArrowUp' ? this.history.up(this.input!.value) : this.history.down();
+				if (next === null) return; // nothing to recall — leave the caret alone
+				e.preventDefault();
+				this.setInputValue(next);
+				return;
+			}
 			if (e.key !== 'Enter') return;
 			e.preventDefault();
 			const v = this.input!.value.trim();
 			this.input!.value = '';
-			if (v) this.room.broadcast(v); // the box ALWAYS broadcasts; input requests are answered in the cards
+			if (v) { this.history.record(v); this.room.broadcast(v); } // the box ALWAYS broadcasts; input requests are answered in the cards
 		});
 
 		this.room.setOnChange(() => this.refresh());
@@ -121,6 +131,15 @@ export class ChatTile {
 		this.el.style.top = `${r.y}px`;
 		this.el.style.width = `${r.w}px`;
 		this.el.style.height = `${r.h}px`;
+	}
+
+	/** Replace the message box's text and park the caret at the end — so a recalled message
+	 *  is ready to edit or resend, not selected or with the caret mid-string. */
+	private setInputValue(v: string): void {
+		if (!this.input) return;
+		this.input.value = v;
+		const end = v.length;
+		try { this.input.setSelectionRange(end, end); } catch { /* older engines — value is still set */ }
 	}
 
 	setCentered(on: boolean): void { this.el?.toggleClass('centered', on); }

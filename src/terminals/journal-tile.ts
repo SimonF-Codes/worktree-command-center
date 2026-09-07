@@ -1,4 +1,5 @@
 import { JournalStore } from './journal-store';
+import type { ToastVariant } from '../ui/toast-queue';
 import { promptForConfirm, promptForChoice } from '../ui/prompt-dialog';
 import type { StageTile } from './stage-tile';
 import { openExternalUrl } from './links';
@@ -17,7 +18,7 @@ export interface JournalTileOpts {
   onCenter: (tile: JournalTile) => void;
   onRequestRename: (tile: JournalTile, current: string) => void;
   onRename: () => void;
-  toast: (msg: string) => void;
+  toast: (msg: string, variant?: ToastVariant) => void;
   onFormat: (text: string) => Promise<string>;
   onGetDestinations: () => Promise<ConvertDestination[]>;
   onConvertPropose: (text: string) => Promise<ProposedIssue[]>;
@@ -147,7 +148,7 @@ export class JournalTile implements StageTile {
     this.opts.store.save(slug, this.displayName, this.currentText, Date.now());
     this.dirty = false;
     this.opts.onRename();
-    this.opts.toast(`Saved "${this.displayName}"`);
+    this.opts.toast(`Saved "${this.displayName}"`, 'success');
   }
 
   private setFooterDisabled(on: boolean): void {
@@ -156,13 +157,13 @@ export class JournalTile implements StageTile {
 
   private async format(): Promise<void> {
     const before = this.textarea?.value ?? this.currentText;
-    if (before.trim() === '') { this.opts.toast('Nothing to format'); return; }
+    if (before.trim() === '') { this.opts.toast('Nothing to format — the journal is empty', 'warn'); return; }
     this.currentText = before;
     this.setFooterDisabled(true);
     if (this.bodyEl) { this.bodyEl.empty(); this.bodyEl.createDiv({ cls: 'cos-journal-formatting', text: 'Formatting…' }); }
     let after: string;
     try { after = await this.opts.onFormat(before); }
-    catch { this.opts.toast('Format failed'); this.renderEditor(); this.setFooterDisabled(false); return; }
+    catch { this.opts.toast('Format failed — the journal is unchanged', 'error'); this.renderEditor(); this.setFooterDisabled(false); return; }
     this.renderFormatPreview(before, after);
   }
 
@@ -187,12 +188,12 @@ export class JournalTile implements StageTile {
 
   private async convertTo(): Promise<void> {
     const text = this.textarea?.value ?? this.currentText;
-    if (text.trim() === '') { this.opts.toast('Nothing to convert'); return; }
+    if (text.trim() === '') { this.opts.toast('Nothing to convert — the journal is empty', 'warn'); return; }
     this.currentText = text;
 
     const destinations = await this.opts.onGetDestinations();
     if (!destinations.length) {
-      this.opts.toast('No destinations configured yet — opening Settings…');
+      this.opts.toast('No destinations configured yet — opening Settings…', 'warn');
       this.opts.onOpenSettings();
       return;
     }
@@ -216,8 +217,8 @@ export class JournalTile implements StageTile {
     this.setFooterDisabled(true);
     const res = await this.opts.onConvertSaveToVault(dest, this.displayName, text);
     this.setFooterDisabled(false);
-    if (res.ok) this.opts.toast(`Saved to ${dest.label}${res.path ? ` — ${res.path}` : ''}`);
-    else this.opts.toast(`Couldn't save to ${dest.label}${res.error ? `: ${res.error}` : ''}`);
+    if (res.ok) this.opts.toast(`Saved to ${dest.label}${res.path ? ` — ${res.path}` : ''}`, 'success');
+    else this.opts.toast(`Couldn't save to ${dest.label}${res.error ? `: ${res.error}` : ''}`, 'error');
   }
 
   private async convertToTracker(dest: TrackerDestination, text: string): Promise<void> {
@@ -225,8 +226,8 @@ export class JournalTile implements StageTile {
     if (this.bodyEl) { this.bodyEl.empty(); this.bodyEl.createDiv({ cls: 'cos-journal-formatting', text: 'Analyzing note…' }); }
     let proposed: ProposedIssue[];
     try { proposed = await this.opts.onConvertPropose(text); }
-    catch { this.opts.toast('Convert failed'); this.renderEditor(); this.setFooterDisabled(false); return; }
-    if (!proposed.length) { this.opts.toast("Couldn't read a proposed split"); this.renderEditor(); this.setFooterDisabled(false); return; }
+    catch { this.opts.toast('Convert failed — the journal is unchanged', 'error'); this.renderEditor(); this.setFooterDisabled(false); return; }
+    if (!proposed.length) { this.opts.toast("Couldn't read a proposed split — nothing was created", 'error'); this.renderEditor(); this.setFooterDisabled(false); return; }
     this.renderConvertPreview(proposed, dest);
   }
 
@@ -261,7 +262,7 @@ export class JournalTile implements StageTile {
     if (this.bodyEl) { this.bodyEl.empty(); this.bodyEl.createDiv({ cls: 'cos-journal-formatting', text: `Creating in ${dest.label}…` }); }
     let results: CreatedIssue[];
     try { results = await this.opts.onConvertCreate(issues, dest); }
-    catch { this.opts.toast(`Create timed out — check ${dest.label}`); this.renderEditor(); this.setFooterDisabled(false); return; }
+    catch { this.opts.toast(`Create timed out — check ${dest.label}; some issues may already exist`, 'error'); this.renderEditor(); this.setFooterDisabled(false); return; }
     this.renderConvertResult(results);
   }
 
@@ -308,6 +309,7 @@ export class JournalTile implements StageTile {
   setDimmed(on: boolean): void { this.el?.toggleClass('cos-term-dim', on); }
   setSelected(_on: boolean): void { /* journals are never chat members */ }
   setBadge(_text: string | null): void { /* no keyboard-shortcut badge for journals */ }
+  setAttention(_kind: unknown): void { /* journals have no session state to flag */ }
   focus(): void { this.textarea?.focus(); }
   blur(): void { this.textarea?.blur(); }
   recentOutput(): string { return this.textarea?.value ?? this.currentText; }

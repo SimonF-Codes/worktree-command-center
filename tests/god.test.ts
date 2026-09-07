@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseOutboxMessage, resolveTellTarget, slug,
-  formatFloorSnapshot, formatFloorIndex, godSystemPrompt, EFFORT_LEVELS, remapWatchers,
+  formatFloorSnapshot, formatFloorIndex, godSystemPrompt, EFFORT_LEVELS, remapWatchers, parseGodSelfImprove,
 } from '../src/terminals/god';
 
 describe('parseOutboxMessage', () => {
@@ -112,6 +112,39 @@ describe('godSystemPrompt', () => {
   });
 });
 
+describe('godSystemPrompt self-improvement', () => {
+  const repos = [{ name: 'app', path: '/repos/app' }];
+  const si = { sourceRepo: 'C:\\dev\\wcc', toolsDir: 'C:\\dev\\kane-tools' };
+  it('is absent when not configured', () => {
+    expect(godSystemPrompt(repos, '/coord')).not.toContain('SELF-IMPROVEMENT');
+  });
+  it('names the source repo + tools dir and the guardrails when configured', () => {
+    const p = godSystemPrompt(repos, '/coord', 'Kane', si);
+    expect(p).toContain('SELF-IMPROVEMENT');
+    expect(p).toContain('C:\\dev\\wcc');
+    expect(p).toContain('C:\\dev\\kane-tools');
+    expect(p).toMatch(/never `git push`/i);
+    expect(p).toContain('install-local');
+    expect(p).toMatch(/stance is UNCHANGED/);
+  });
+  it('keeps the overseer stance either way', () => {
+    expect(godSystemPrompt(repos, '/coord', 'Kane', si)).toMatch(/do not run the floor/i);
+  });
+});
+
+describe('parseGodSelfImprove', () => {
+  it('accepts sourceRepo with optional toolsDir', () => {
+    expect(parseGodSelfImprove({ sourceRepo: 'C:\\x' })).toEqual({ sourceRepo: 'C:\\x', toolsDir: null });
+    expect(parseGodSelfImprove({ sourceRepo: 'C:\\x', toolsDir: 'C:\\t' })).toEqual({ sourceRepo: 'C:\\x', toolsDir: 'C:\\t' });
+  });
+  it('rejects junk without throwing', () => {
+    expect(parseGodSelfImprove(undefined)).toBeUndefined();
+    expect(parseGodSelfImprove('yes')).toBeUndefined();
+    expect(parseGodSelfImprove({ toolsDir: 'C:\\t' })).toBeUndefined();
+    expect(parseGodSelfImprove({ sourceRepo: '   ' })).toBeUndefined();
+  });
+});
+
 describe('EFFORT_LEVELS', () => {
   it('lists the six claude CLI effort levels, ultracode last', () => {
     expect(EFFORT_LEVELS).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
@@ -123,5 +156,17 @@ describe('remapWatchers', () => {
     const ws = [{ target: 'A', note: 'x' }, { target: 'B', note: 'y' }];
     expect(remapWatchers(ws, 'A', 'C')).toEqual([{ target: 'C', note: 'x' }, { target: 'B', note: 'y' }]);
     expect(remapWatchers(ws, 'Z', 'C')).toEqual(ws);
+  });
+});
+
+describe('godSystemPrompt folder targets', () => {
+  it('marks plain-folder targets in the roster so Kane does not offer them a --base', () => {
+    const p = godSystemPrompt([
+      { name: 'app', path: '/repos/app' },
+      { name: 'notes', path: '/notes', folder: true },
+    ], '/coord');
+    expect(p).toContain('- notes → /notes   [plain folder — no git]');
+    expect(p).toContain('- app → /repos/app\n'); // git repos stay unmarked
+    expect(p).toContain('--base is ignored');
   });
 });
