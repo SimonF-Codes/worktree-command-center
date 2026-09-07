@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
-import { pickRepos, mergeRepos, repoOptionLabel, reposForWorkspace, type DirEntry } from '../src/workspace';
+import * as fs from 'fs';
+import * as os from 'os';
+import { pickRepos, mergeRepos, repoOptionLabel, reposForWorkspace, discoverRepos, type DirEntry } from '../src/workspace';
 import type { RepoConfig } from '../src/terminals/terminals-grid';
 
 describe('pickRepos', () => {
@@ -143,5 +145,38 @@ describe('reposForWorkspace', () => {
   it('is a no-op for configs where nothing is grouped (every existing config)', () => {
     const plain: RepoConfig[] = [{ name: 'X', path: '/x' }, { name: 'Y', path: '/y' }];
     expect(reposForWorkspace(plain, 'anything')).toEqual(plain);
+  });
+});
+
+describe('discoverRepos (IO wrapper)', () => {
+  let tmp: string;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-discover-')); });
+  afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  it('returns just the folder when it is itself a git repo', () => {
+    fs.mkdirSync(path.join(tmp, '.git'));
+    expect(discoverRepos(tmp)).toEqual([{ name: path.basename(tmp), path: tmp }]);
+  });
+
+  it('returns the git subdirs when the folder holds repos', () => {
+    for (const name of ['alpha', 'beta']) {
+      fs.mkdirSync(path.join(tmp, name, '.git'), { recursive: true });
+    }
+    fs.mkdirSync(path.join(tmp, 'plain-dir')); // no .git → excluded
+    const got = discoverRepos(tmp).sort((a, b) => a.name.localeCompare(b.name));
+    expect(got).toEqual([
+      { name: 'alpha', path: path.join(tmp, 'alpha') },
+      { name: 'beta', path: path.join(tmp, 'beta') },
+    ]);
+  });
+
+  it('returns the folder itself as a plain FOLDER target when neither it nor its subdirs are repos', () => {
+    fs.mkdirSync(path.join(tmp, 'notes'));
+    expect(discoverRepos(tmp)).toEqual([{ name: path.basename(tmp), path: tmp, folder: true }]);
+  });
+
+  it('never throws on an unreadable path — falls back to a folder target', () => {
+    const missing = path.join(tmp, 'does-not-exist');
+    expect(discoverRepos(missing)).toEqual([{ name: 'does-not-exist', path: missing, folder: true }]);
   });
 });
