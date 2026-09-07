@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseUsage } from '../src/terminals/usage-parse';
+import { parseUsage, stripAnsi } from '../src/terminals/usage-parse';
 
 // Spaced form, close to how /usage renders.
 const SPACED = [
@@ -87,5 +87,35 @@ describe('parseUsage', () => {
     const empty = { sessionPct: null, sessionReset: null, weekPct: null, weekReset: null, fablePct: null, fableReset: null, creditsPct: null, creditsSpent: null, creditsReset: null };
     expect(parseUsage('nothing useful here')).toEqual(empty);
     expect(parseUsage('')).toEqual(empty);
+  });
+});
+
+describe('stripAnsi', () => {
+  it('removes CSI colour/style sequences but keeps the visible text', () => {
+    expect(stripAnsi('\x1b[31mred\x1b[0m')).toBe('red');
+    expect(stripAnsi('\x1b[1;38;5;204mbold pink\x1b[0m')).toBe('bold pink');
+  });
+  it('removes CSI cursor/erase sequences (e.g. clear screen, move cursor)', () => {
+    expect(stripAnsi('\x1b[2Jcleared')).toBe('cleared');
+    expect(stripAnsi('before\x1b[10;20Hafter')).toBe('beforeafter');
+  });
+  it('removes OSC sequences terminated by BEL or ST', () => {
+    expect(stripAnsi('\x1b]0;window title\x07visible')).toBe('visible');
+    expect(stripAnsi('\x1b]0;window title\x1b\\visible')).toBe('visible');
+  });
+  it('removes charset-select escapes', () => {
+    expect(stripAnsi('\x1b(Bplain\x1b)0')).toBe('plain');
+  });
+  it('leaves box-drawing glyphs and percentages intact', () => {
+    expect(stripAnsi('██████▍ 28% used')).toBe('██████▍ 28% used');
+    expect(stripAnsi('\x1b[32m███▌\x1b[0m 12% used')).toBe('███▌ 12% used');
+  });
+  it('is idempotent on already-clean text', () => {
+    const clean = stripAnsi('\x1b[31mCurrent session 79% used\x1b[0m');
+    expect(stripAnsi(clean)).toBe(clean);
+  });
+  it('coerces non-string input via String() instead of throwing', () => {
+    expect(stripAnsi(42 as unknown as string)).toBe('42');
+    expect(stripAnsi(null as unknown as string)).toBe('null');
   });
 });
