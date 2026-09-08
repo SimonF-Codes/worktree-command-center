@@ -361,7 +361,11 @@ async function main(): Promise<void> {
 			const persisted = await TerminalsGrid.readGroupRecords(sessionsFile, id);
 			const picked = pickCloseRecords(live, persisted);
 			const summary = summarizeClose(picked.records, picked.source);
-			const risks = await probeWorktreeRisks(riskProbeTargets(summary));
+			// Two git commands per worktree, and a busy tab has eighteen of them — enough of a pause
+			// before the dialog opens that a silent one reads as a dead button. Say what it is doing.
+			const targets = riskProbeTargets(summary);
+			if (targets.length > 4) toast(`Checking ${targets.length} worktrees for unsaved work…`, 'info');
+			const risks = await probeWorktreeRisks(targets);
 			const dlg = buildCloseConfirm(ws?.name ?? id, summary, risks);
 			if (!await promptForConfirm(dlg.title, dlg.message, dlg.okLabel)) return;
 			// State can have moved while the dialog was open (a spawn, another close).
