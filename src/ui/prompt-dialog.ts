@@ -101,7 +101,9 @@ export function promptForConfirm(title: string, message: string, okLabel = 'Conf
 
 		const msg = document.createElement('div');
 		msg.textContent = message;
-		msg.style.cssText = 'color:#b8bccb;margin-bottom:14px;line-height:1.45';
+		// pre-wrap: confirm bodies list what is at stake one item per line (see close-summary.ts),
+		// and without this the whole list collapses into one run-on paragraph.
+		msg.style.cssText = 'color:#b8bccb;margin-bottom:14px;line-height:1.45;white-space:pre-wrap;max-height:50vh;overflow:auto';
 
 		const row = document.createElement('div');
 		row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';

@@ -28,6 +28,7 @@ import type { RoleLibraryConfig } from './role-library';
 import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
 import { looksLikePrompt } from './chat-room';
 import { classifyAttention, classifyOne, attentionKind, type AttentionItem, type AttentionKind } from './attention';
+import type { CloseRecord } from './close-summary';
 import type { ToastVariant } from '../ui/toast';
 import { JournalTile } from './journal-tile';
 import { JournalStore } from './journal-store';
@@ -70,7 +71,7 @@ export interface GridDeps {
 	/** Called when the user changes a toolbar dropdown, so the app can persist it per workspace. */
 	onToolbarChange?: (state: ToolbarState) => void;
 }
-interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string; }
+export interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string; }
 
 // Effort options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
 const SPAWN_EFFORTS: { label: string; value: string }[] = [
@@ -343,6 +344,7 @@ export class TerminalsGrid {
 			this.stageResizeObs.observe(this.stageEl);
 			await this.refreshBranches();
 			await this.restoreSessions();
+			this.sessionsRestored = true;
 		} else {
 			// Re-mount (tab switch back): re-attach the live dock row — sessions kept running.
 			this.stageEl.toggleClass('cos-terminals-max', this.maximized);
@@ -817,8 +819,47 @@ export class TerminalsGrid {
 	/** Every live session GOD should see / be able to message (foreground + hidden background). */
 	private allSessions(): StageTile[] { return [...this.tiles, ...this.hidden]; }
 
-	/** Number of live terminals (foreground + hidden) — for the close-workspace confirm. */
+	/** Number of live terminals (foreground + hidden). NOT a safe basis for "does this workspace
+	 *  hold anything" — see sessionsAreLive(). */
 	terminalCount(): number { return this.tiles.length + this.hidden.length; }
+
+	private sessionsRestored = false;
+
+	/** True once this grid has mounted and restored its persisted sessions, i.e. once the live
+	 *  tile list actually reflects what is on disk. A grid that has only been CONSTRUCTED (app.ts
+	 *  does that for every workspace at startup) reports zero tiles for a tab holding eighteen
+	 *  saved terminals, which is how the close confirm went blind. */
+	sessionsAreLive(): boolean { return this.sessionsRestored; }
+
+	/** What closing this workspace would destroy, from LIVE state. Only meaningful when
+	 *  sessionsAreLive(); callers read the persisted records otherwise. */
+	closeRecords(): CloseRecord[] {
+		const out: CloseRecord[] = [...this.tiles, ...this.hidden].map((t) => t.isJournal
+			? { kind: 'journal' as const, name: t.name }
+			: {
+				kind: 'terminal' as const, name: t.name,
+				repoName: this.repoNameFor(t), branch: (t as TerminalTile).branch,
+				worktreePath: (t as TerminalTile).worktreePath,
+				baseBranch: (t as TerminalTile).baseBranch, folder: (t as TerminalTile).isFolder,
+			});
+		for (let i = 0; i < (this.godConsole ? 1 : 0) + this.extraKanes.length; i++) out.push({ kind: 'god' });
+		return out;
+	}
+
+	/** A group's persisted records, straight off disk — the honest answer for a workspace whose
+	 *  grid has never been mounted. Queued on the same chain as every other sessions-file access
+	 *  so it can never read the file mid-persist. */
+	static readGroupRecords(sessionsFile: string, group: string): Promise<SessionRecord[]> {
+		const run = TerminalsGrid.persistChain.then(async () => {
+			try {
+				const all = JSON.parse(await fs.readFile(sessionsFile, 'utf8')) as Record<string, SessionRecord[]>;
+				const recs = all[group];
+				return Array.isArray(recs) ? recs : [];
+			} catch { return []; }
+		});
+		TerminalsGrid.persistChain = run.then(() => undefined, () => undefined);
+		return run;
+	}
 
 	/** Snapshot of which terminals need attention, for the topbar queue. */
 	attentionItems(): AttentionItem[] {

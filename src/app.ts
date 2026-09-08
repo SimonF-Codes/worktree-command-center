@@ -20,6 +20,8 @@ import { ChangelogPanel } from './ui/changelog-panel';
 import { RolesView } from './ui/roles-view';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
 import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, type Workspace } from './terminals/workspace-store';
+import { pickCloseRecords, summarizeClose, riskProbeTargets, buildCloseConfirm } from './terminals/close-summary';
+import { probeWorktreeRisks } from './terminals/close-risk';
 import { THEMES, normalizeTheme, setActiveTheme, activeTerminalPalette } from './terminals/theme-store';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -162,6 +164,7 @@ async function main(): Promise<void> {
 		// compiled-in builder. Absent key = built-ins, which is every existing config.
 		const roleLibrary = parseRoleLibrary(cfg.roleLibrary);
 
+		const sessionsFile = path.join(userData, '.terminal-sessions.json');
 		const depsFor = (id: string): GridDeps => ({
 			// Scoped, not the whole list: a repo tagged with a `group` belongs to that workspace
 			// alone. Untagged repos (every existing config) still appear everywhere.
@@ -173,7 +176,7 @@ async function main(): Promise<void> {
 			sidecarPath: path.join(sidecarDir, 'sidecar.cjs'),
 			notifyScriptPath: path.join(sidecarDir, 'notify-ready.cjs'),
 			coordHookPath: path.join(sidecarDir, 'coord-hook.cjs'),
-			sessionsFile: path.join(userData, '.terminal-sessions.json'),
+			sessionsFile,
 			bypassPermissions: true,
 			godSelfImprove,
 			roleLibrary,
@@ -242,7 +245,7 @@ async function main(): Promise<void> {
 			activeId: () => activeId,
 			onSwitch: (id) => void switchTo(id),
 			onAdd: () => void onAdd(),
-			onClose: (id) => onClose(id),
+			onClose: (id) => void onClose(id),
 		});
 		bar.render(terminalRoot);
 
@@ -330,12 +333,24 @@ async function main(): Promise<void> {
 			await switchTo(r.id);
 		}
 
-		function onClose(id: string): void {
+		/** ALWAYS confirms — an empty tab gets one line, a tab with dirty worktrees gets a warning.
+		 *  The count comes from the PERSISTED sessions file unless the grid has actually restored
+		 *  its sessions: the old guard asked the live grid, which reports zero tiles for any tab
+		 *  not visited this launch, so the confirm never fired for exactly the tabs most at risk
+		 *  (that is how the QMK-Flasher tab was lost). */
+		async function onClose(id: string): Promise<void> {
 			if (workspaces.length <= 1) return;
 			const ws = workspaces.find((w) => w.id === id);
 			const g = grids.get(id);
-			const count = g ? g.terminalCount() : 0;
-			if (count > 0 && !window.confirm(`Close workspace "${ws?.name ?? id}"? Its ${count} terminal(s) will be stopped.`)) return;
+			const live = g && g.sessionsAreLive() ? g.closeRecords() : null;
+			const persisted = await TerminalsGrid.readGroupRecords(sessionsFile, id);
+			const picked = pickCloseRecords(live, persisted);
+			const summary = summarizeClose(picked.records, picked.source);
+			const risks = await probeWorktreeRisks(riskProbeTargets(summary));
+			const dlg = buildCloseConfirm(ws?.name ?? id, summary, risks);
+			if (!await promptForConfirm(dlg.title, dlg.message, dlg.okLabel)) return;
+			// State can have moved while the dialog was open (a spawn, another close).
+			if (!workspaces.some((w) => w.id === id) || workspaces.length <= 1) return;
 			const target = nextActiveAfter(workspaces, id, activeId);
 			g?.dispose();
 			grids.delete(id);
@@ -343,7 +358,7 @@ async function main(): Promise<void> {
 			// Closing a tab used to leave its sessions bucket and its toolbar state behind for
 			// good — the live sessions file still carries a `test-2` bucket for a tab deleted
 			// weeks ago. Clean up both now that the workspace is really gone.
-			void TerminalsGrid.forgetGroup(path.join(userData, '.terminal-sessions.json'), id);
+			void TerminalsGrid.forgetGroup(sessionsFile, id);
 			workspaceToolbars = pruneToolbars(workspaceToolbars, workspaces.map((w) => w.id));
 			if (id === activeId) { void switchTo(target); } else { persist(); bar.refresh(); }
 		}
