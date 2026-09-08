@@ -1695,10 +1695,34 @@ export class TerminalsGrid {
 		return run;
 	}
 
-	/** Drop a workspace's session bucket when its tab is closed. Closing a workspace removed the
-	 *  tab but left its records in the sessions file forever — the live file still carries a
-	 *  `test-2` bucket for a tab deleted weeks ago. Goes through the same chain as every other
-	 *  write so it can never race a grid's persist. */
+	/** Rename a group's session bucket in place — how a closed tab's tiles are TOMBSTONED rather
+	 *  than deleted (`closed:<id>:<ts>`), and how a restore moves them back. The records never
+	 *  leave the file the serializer already writes, so config.json stays a pointer and the same
+	 *  persist chain keeps protecting them. Returns whether the source key existed.
+	 *
+	 *  An empty bucket is still moved: "this tab held nothing" is a fact worth keeping, and the
+	 *  caller's archive entry would otherwise point at nothing. */
+	static renameGroup(sessionsFile: string, from: string, to: string): Promise<boolean> {
+		const run = TerminalsGrid.persistChain.then(async () => {
+			if (from === to) return false;
+			let all: Record<string, unknown>;
+			try { all = JSON.parse(await fs.readFile(sessionsFile, 'utf8')) as Record<string, unknown>; } catch { return false; }
+			if (!(from in all)) return false;
+			all[to] = all[from];
+			delete all[from];
+			try { await fs.writeFile(sessionsFile, JSON.stringify(all, null, 2), 'utf8'); } catch { return false; }
+			return true;
+		}).catch(() => false);
+		TerminalsGrid.persistChain = run.then(() => undefined, () => undefined);
+		return run;
+	}
+
+	/** Drop a workspace's session bucket outright. Still the right thing for an EVICTED tombstone
+	 *  (the archive is capped, and an evicted entry that kept its records would be the old leak
+	 *  under a new name) and for a bucket no archive entry points at. Closing a workspace used to
+	 *  leave its records in the file forever — the live file still carries a `test-2` bucket for a
+	 *  tab deleted weeks ago. Goes through the same chain as every other write so it can never
+	 *  race a grid's persist. */
 	static forgetGroup(sessionsFile: string, group: string): Promise<void> {
 		const run = TerminalsGrid.persistChain.then(async () => {
 			let all: Record<string, unknown>;

@@ -22,6 +22,10 @@ import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
 import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, type Workspace } from './terminals/workspace-store';
 import { pickCloseRecords, summarizeClose, riskProbeTargets, buildCloseConfirm } from './terminals/close-summary';
 import { probeWorktreeRisks } from './terminals/close-risk';
+import {
+	normalizeClosedWorkspaces, archiveWorkspace, archiveSessionsKey,
+	type ClosedWorkspace,
+} from './terminals/closed-workspaces';
 import { THEMES, normalizeTheme, setActiveTheme, activeTerminalPalette } from './terminals/theme-store';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -120,6 +124,9 @@ async function main(): Promise<void> {
 		// Per-tab spawn-toolbar selection (toolbar-state.ts). Pruned to live workspaces on load so
 		// a config that accumulated entries for deleted tabs cleans itself up.
 		let workspaceToolbars: WorkspaceToolbars = pruneToolbars(normalizeToolbars(cfg.workspaceToolbars), workspaces.map((w) => w.id));
+		// Tombstones for closed tabs (closed-workspaces.ts). Capped, most recent first; each one
+		// points at the tiles it left behind in .terminal-sessions.json under a `closed:` key.
+		let closedWorkspaces: ClosedWorkspace[] = normalizeClosedWorkspaces(cfg.closedWorkspaces);
 		let activeId = workspaces.some((w) => w.id === cfg.activeWorkspace) ? (cfg.activeWorkspace as string) : workspaces[0]!.id;
 		const grids = new Map<string, TerminalsGrid>();
 
@@ -211,7 +218,7 @@ async function main(): Promise<void> {
 		const configWriter = new SerialWriter();
 		const persist = (): void => void configWriter.push(async () => {
 			const fresh = await window.wcc.getConfig();
-			await window.wcc.setConfig({ ...fresh, repos, workspaces, activeWorkspace: activeId, theme: themeId, workspaceToolbars });
+			await window.wcc.setConfig({ ...fresh, repos, workspaces, activeWorkspace: activeId, theme: themeId, workspaceToolbars, closedWorkspaces });
 		});
 
 		// Attention queue reads whichever grid is ACTIVE (closures over the mutable activeGrid).
@@ -352,15 +359,33 @@ async function main(): Promise<void> {
 			// State can have moved while the dialog was open (a spawn, another close).
 			if (!workspaces.some((w) => w.id === id) || workspaces.length <= 1) return;
 			const target = nextActiveAfter(workspaces, id, activeId);
+			const closedAt = Date.now();
+			const entry: ClosedWorkspace = {
+				id, name: ws?.name ?? id, closedAt,
+				sessionsKey: archiveSessionsKey(id, closedAt),
+				index: Math.max(0, workspaces.findIndex((w) => w.id === id)),
+				tileCount: summary.total,
+				...(workspaceToolbars[id] ? { toolbar: workspaceToolbars[id] } : {}),
+			};
+			// Queue the rename BEFORE tearing the grid down: everything here shares one persist
+			// chain, so archiving first guarantees the tombstone captures the real records rather
+			// than whatever an emptied grid might write afterwards.
+			void TerminalsGrid.renameGroup(sessionsFile, id, entry.sessionsKey);
+			const archived = archiveWorkspace(closedWorkspaces, entry);
+			closedWorkspaces = archived.list;
+			// The archive is capped, so something eventually falls off the end — and an evicted
+			// tombstone MUST take its sessions key with it. Closing a tab used to leak its bucket
+			// forever (the live file still carries a `test-2` bucket for a tab deleted weeks ago);
+			// that cleanup was right, and keeping records nothing can reach would restore the leak.
+			for (const e of archived.evicted) void TerminalsGrid.forgetGroup(sessionsFile, e.sessionsKey);
 			g?.dispose();
 			grids.delete(id);
 			workspaces = closeWorkspace(workspaces, id);
-			// Closing a tab used to leave its sessions bucket and its toolbar state behind for
-			// good — the live sessions file still carries a `test-2` bucket for a tab deleted
-			// weeks ago. Clean up both now that the workspace is really gone.
-			void TerminalsGrid.forgetGroup(sessionsFile, id);
+			// The toolbar state rides on the tombstone, so pruning the live map still just drops a
+			// dead id rather than throwing the selection away.
 			workspaceToolbars = pruneToolbars(workspaceToolbars, workspaces.map((w) => w.id));
 			if (id === activeId) { void switchTo(target); } else { persist(); bar.refresh(); }
+			toast(`Closed "${entry.name}" — archived, not deleted`, 'info');
 		}
 
 		// Private overlay (see README "Private extensions"): must never take down the app.
