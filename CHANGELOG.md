@@ -5,6 +5,25 @@ landed on `main`.
 
 ## Unreleased
 
+**Closing a workspace tab asks first, and can be taken back**
+- Closing a tab could destroy every terminal it had saved without asking. The confirm counted
+  LIVE MOUNTED tiles, and every workspace's grid is constructed at startup but only mounted when
+  you switch to it — so a tab you had not opened this launch reported zero terminals however many
+  it held on disk, and closed on a single click. The QMK-Flasher tab went that way.
+- The confirm now counts from the saved sessions file, falls back to the live grid only when that
+  grid has actually restored its sessions, and **always** opens. An empty tab gets one line; a tab
+  with saved work gets its terminals listed by repo and branch, plus a warning naming exactly which
+  worktrees have uncommitted files or unmerged commits — the only work git could not hand back.
+  It is the app's own dialog now, not the native `window.confirm` that froze the renderer.
+- Closing **archives** instead of deleting. The workspace entry and its repo/branch/model/effort
+  selection go to a `closedWorkspaces` list in `config.json`; the tiles stay in
+  `.terminal-sessions.json` under a `closed:<id>:<timestamp>` key. The last 10 closes are kept,
+  and evicting an old one still deletes its tiles, so this does not bring back the leak the
+  original deletes were added to fix.
+- Two ways back: an **Undo** button on the toast right after the close, and **↩ Recently closed**
+  in the tab bar for anything still archived. A restored tab comes back exactly as it would after
+  an app restart — tiles present, sessions **not started** until you switch to it.
+
 **A handoff to a worker terminal fails loud now, at every step, instead of quietly going nowhere**
 - `cos-coord tell/watch/spawn/rename`, called as GOD but missing a required argument (an empty
   target, message, task, or `--to`), used to do nothing and exit 0 — the same silent-success shape

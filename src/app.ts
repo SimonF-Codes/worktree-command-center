@@ -1,6 +1,6 @@
 import { installDomShim } from './ui/dom-shim';
 import { toast } from './ui/toast';
-import { promptForTopic, promptForConfirm } from './ui/prompt-dialog';
+import { promptForTopic, promptForConfirm, promptForChoice } from './ui/prompt-dialog';
 import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/terminals-grid';
 import { parseGodSelfImprove } from './terminals/god';
 import { parseRoleLibrary } from './terminals/role-library';
@@ -23,9 +23,11 @@ import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, typ
 import { pickCloseRecords, summarizeClose, riskProbeTargets, buildCloseConfirm } from './terminals/close-summary';
 import { probeWorktreeRisks } from './terminals/close-risk';
 import {
-	normalizeClosedWorkspaces, archiveWorkspace, archiveSessionsKey,
+	normalizeClosedWorkspaces, archiveWorkspace, archiveSessionsKey, takeClosedWorkspace, insertAt,
 	type ClosedWorkspace,
 } from './terminals/closed-workspaces';
+import { uniqueId } from './terminals/workspace-store';
+import { relAge } from './terminals/worktree-registry';
 import { THEMES, normalizeTheme, setActiveTheme, activeTerminalPalette } from './terminals/theme-store';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -53,6 +55,10 @@ declare global {
 }
 
 let repos: RepoConfig[] = [];
+
+/** How long the close toast keeps its Undo on screen. Longer than an info toast: the offer has
+ *  to survive noticing it and reaching for the mouse. Hovering holds it open indefinitely. */
+const UNDO_TOAST_MS = 9000;
 
 async function main(): Promise<void> {
 	try {
@@ -253,6 +259,8 @@ async function main(): Promise<void> {
 			onSwitch: (id) => void switchTo(id),
 			onAdd: () => void onAdd(),
 			onClose: (id) => void onClose(id),
+			closedCount: () => closedWorkspaces.length,
+			onRecentlyClosed: () => void onRecentlyClosed(),
 		});
 		bar.render(terminalRoot);
 
@@ -385,7 +393,55 @@ async function main(): Promise<void> {
 			// dead id rather than throwing the selection away.
 			workspaceToolbars = pruneToolbars(workspaceToolbars, workspaces.map((w) => w.id));
 			if (id === activeId) { void switchTo(target); } else { persist(); bar.refresh(); }
-			toast(`Closed "${entry.name}" — archived, not deleted`, 'info');
+			// The near-range half of restore: an Undo right where the misclick happened. Hovering
+			// holds the toast open, and clicking Undo twice is a no-op (takeClosedWorkspace).
+			toast(`Closed "${entry.name}"`, 'info', {
+				durationMs: UNDO_TOAST_MS,
+				action: { label: 'Undo', run: () => void restoreWorkspace(entry.sessionsKey) },
+			});
+		}
+
+		/** Bring a closed tab back: its entry (at the index it sat at), its toolbar state and its
+		 *  tiles, which move back out of the `closed:` bucket under the tab's id.
+		 *
+		 *  It does NOT start its sessions. The grid is CONSTRUCTED and not mounted, which is
+		 *  exactly how every workspace comes back after an app restart — tiles present, sessions
+		 *  unrestored until you switch to the tab. Eighteen claude processes launching because
+		 *  someone clicked Restore would be a worse surprise than the bug this fixes. */
+		async function restoreWorkspace(sessionsKey: string): Promise<void> {
+			const taken = takeClosedWorkspace(closedWorkspaces, sessionsKey);
+			if (!taken) { toast('That workspace has already been restored', 'warn'); return; }
+			closedWorkspaces = taken.list;
+			const entry = taken.entry;
+			// A new tab may have claimed the old id in the meantime; the tiles follow the new one.
+			const id = uniqueId(entry.id, workspaces.map((w) => w.id));
+			const movedTiles = await TerminalsGrid.renameGroup(sessionsFile, entry.sessionsKey, id);
+			workspaces = insertAt(workspaces, { id, name: entry.name }, entry.index);
+			// Before gridFor: depsFor reads initialToolbar when it constructs the grid.
+			if (entry.toolbar) workspaceToolbars = setToolbarState(workspaceToolbars, id, entry.toolbar);
+			gridFor(id);
+			persist();
+			bar.refresh();
+			toast(movedTiles
+				? `Restored "${entry.name}" — its terminals are saved, not started. Open the tab to resume them.`
+				: `Restored "${entry.name}" — it had no saved terminals.`, 'success');
+		}
+
+		/** The far-range half: pick any tab still in the archive. promptForChoice is the app's own
+		 *  list dialog, so this needs no popup of its own. */
+		async function onRecentlyClosed(): Promise<void> {
+			if (!closedWorkspaces.length) { toast('Nothing has been closed yet', 'info'); return; }
+			const now = Date.now();
+			const chosen = await promptForChoice(
+				'Recently closed',
+				'Reopen a closed workspace. Its terminals come back saved but not started — switch to the tab to resume them.',
+				closedWorkspaces.map((e) => ({
+					id: e.sessionsKey,
+					label: e.name,
+					sublabel: `${e.tileCount} session${e.tileCount === 1 ? '' : 's'} · closed ${relAge(Math.max(0, now - e.closedAt))} ago`,
+				})),
+			);
+			if (chosen) await restoreWorkspace(chosen);
 		}
 
 		// Private overlay (see README "Private extensions"): must never take down the app.

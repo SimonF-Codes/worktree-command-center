@@ -3,6 +3,7 @@ import {
 	pickCloseRecords, summarizeClose, riskProbeTargets, riskReason,
 	closeConfirmMessage, buildCloseConfirm, MAX_LISTED, type CloseRecord,
 } from '../src/terminals/close-summary';
+import { CLOSED_WORKSPACES_CAP } from '../src/terminals/closed-workspaces';
 
 const term = (name: string, branch: string, extra: Partial<CloseRecord> = {}): CloseRecord => ({
 	kind: 'terminal', name, branch, repoName: 'QMK-Flasher',
@@ -82,14 +83,15 @@ describe('riskReason', () => {
 describe('closeConfirmMessage', () => {
 	it('still confirms an empty tab, with one line', () => {
 		const msg = closeConfirmMessage('scratch', summarizeClose([], 'persisted'));
-		expect(msg).toBe('"scratch" has no saved terminals. Closing removes the tab.');
+		expect(msg).toBe(`"scratch" has no saved terminals. Closing removes the tab. Recently closed keeps the last ${CLOSED_WORKSPACES_CAP}, so the tab can be reopened.`);
+		expect(msg.split('\n')).toHaveLength(1);
 	});
 
 	// ACCEPTANCE: the tab that was lost — never visited this launch, so the live grid says 0.
 	it('describes an unmounted workspace from its persisted tiles', () => {
 		const picked = pickCloseRecords(null, [term('Flash', 'wt/main-1'), term('Layout', 'wt/main-2')]);
 		const msg = closeConfirmMessage('QMK-Flasher', summarizeClose(picked.records, picked.source));
-		expect(msg).toContain('"QMK-Flasher" has 2 terminals saved');
+		expect(msg).toContain('"QMK-Flasher" has 2 terminals saved:');
 		expect(msg).toContain('• Flash — QMK-Flasher / wt/main-1');
 		expect(msg).toContain('• Layout — QMK-Flasher / wt/main-2');
 	});
@@ -100,7 +102,7 @@ describe('closeConfirmMessage', () => {
 			'C:/wt/wt/main-1': { dirtyFiles: 3, unpushed: 0 },
 			'C:/wt/wt/main-2': { dirtyFiles: 0, unpushed: 0 },
 		});
-		expect(msg).toContain('⚠ 1 worktree has work git cannot give back');
+		expect(msg).toContain('⚠ 1 worktree holds work git could not give back');
 		expect(msg).toContain('• Flash — 3 uncommitted files');
 		expect(msg).not.toContain('• Layout — 0');
 	});
@@ -121,6 +123,14 @@ describe('closeConfirmMessage', () => {
 	it('names journals and consoles alongside the terminals', () => {
 		const s = summarizeClose([term('Flash', 'wt/main-1'), { kind: 'journal' }, { kind: 'god' }], 'persisted');
 		expect(closeConfirmMessage('mix', s)).toContain('1 terminal, 1 journal and a workspace console');
+	});
+
+	// The close is recoverable now, and the dialog says so — but bounded, not "undo anything".
+	it('says the tab can be reopened, and how bounded that promise is', () => {
+		const s = summarizeClose([term('Flash', 'wt/main-1')], 'persisted');
+		const msg = closeConfirmMessage('QMK-Flasher', s);
+		expect(msg).toContain('The worktree folders stay on disk.');
+		expect(msg).toContain(`Recently closed keeps the last ${CLOSED_WORKSPACES_CAP}, so the tab can be reopened.`);
 	});
 });
 

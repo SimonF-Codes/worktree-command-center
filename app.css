@@ -593,6 +593,23 @@ html, body {
 
 .wcc-toast-msg { flex: 1 1 auto; }
 
+/* The one action a toast may carry (Undo on a closed workspace). Sits inside the toast, so
+   the toast's own click-to-dismiss must not swallow it — see the stopPropagation in toast.ts. */
+.wcc-toast-action {
+	flex: 0 0 auto;
+	align-self: center;
+	background: transparent;
+	border: 1px solid var(--text-muted);
+	border-radius: 5px;
+	color: var(--text-normal);
+	cursor: pointer;
+	font: inherit;
+	font-size: 12px;
+	padding: 2px 10px;
+	white-space: nowrap;
+}
+.wcc-toast-action:hover { background: var(--background-modifier-border); border-color: var(--text-normal); }
+
 /* The ×N dedupe counter — present only when the same message arrived more than once. */
 .wcc-toast-count {
 	flex: 0 0 auto;

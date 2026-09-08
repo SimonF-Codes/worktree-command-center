@@ -12,6 +12,8 @@
 //   many times in a row, and three slots of the same sentence is three wasted slots.
 // - Lifetime scales with severity: you need longer to read (and act on) a failure than to
 //   register "Saved". Nothing is permanent; the renderer also allows click-to-dismiss.
+// - A toast may carry ONE action (an Undo button). Those never dedupe and never share a
+//   lifetime with a plain message: an Undo you cannot reach before it expires is not an Undo.
 
 /** Severity of a toast. The first four are the real vocabulary; `done`/`help`/`input` are
  *  kept as aliases because the per-tile attention markers already speak in those terms
@@ -35,10 +37,24 @@ export const DURATION: Record<Severity, number> = {
 /** Promotion order when a slot frees. Lower sorts first. */
 const PRIORITY: Record<Severity, number> = { error: 0, warn: 1, success: 2, info: 3 };
 
+/** A single button on a toast. `run` fires once, and the toast is dismissed with it. */
+export interface ToastAction { label: string; run: () => void; }
+
+export interface ToastPushOptions {
+	action?: ToastAction;
+	/** Overrides the severity's lifetime — used to give an action time to be clicked. */
+	durationMs?: number;
+}
+
 export interface ToastItem {
 	id: number;
 	msg: string;
 	severity: Severity;
+	/** Offered as a button; the toast never dedupes while it has one. */
+	action?: ToastAction;
+	/** This toast's own lifetime, so a promotion or a hover-hold re-uses the SAME clock rather
+	 *  than silently demoting an 8s Undo back to its severity's 3s. */
+	durationMs: number;
 	/** How many times this same message arrived — rendered as "×N" when >1. */
 	count: number;
 	/** ms epoch at which the renderer should drop this toast. */
@@ -84,22 +100,25 @@ function promote(s: ToastState, now: number): ToastState {
 		...s,
 		// A promoted toast starts its clock NOW — it was not readable while it waited, so
 		// counting that wait against its lifetime would flash it for whatever time was left.
-		visible: [...s.visible, ...moving.map((t) => ({ ...t, expiresAt: now + DURATION[t.severity] }))],
+		visible: [...s.visible, ...moving.map((t) => ({ ...t, expiresAt: now + t.durationMs }))],
 		queued: s.queued.filter((t) => !movingIds.has(t.id)),
 	};
 }
 
 /** Add a message. Identical text+severity already on screen or queued bumps that toast's
  *  count and restarts its clock instead of adding a second copy. */
-export function pushToast(s: ToastState, msg: string, variant: ToastVariant | undefined, now: number): ToastState {
+export function pushToast(s: ToastState, msg: string, variant: ToastVariant | undefined, now: number, opts: ToastPushOptions = {}): ToastState {
 	const severity = toSeverity(variant);
-	const same = (t: ToastItem): boolean => t.msg === msg && t.severity === severity;
+	const durationMs = opts.durationMs && opts.durationMs > 0 ? opts.durationMs : DURATION[severity];
+	// An actionable toast is a distinct offer, not a repeat: collapsing two of them would hand
+	// the second close's Undo the FIRST close's action, which would restore the wrong workspace.
+	const same = (t: ToastItem): boolean => !opts.action && !t.action && t.msg === msg && t.severity === severity;
 
 	const vIdx = s.visible.findIndex(same);
 	if (vIdx >= 0) {
 		const hit = s.visible[vIdx]!;
 		const visible = [...s.visible];
-		visible[vIdx] = { ...hit, count: hit.count + 1, expiresAt: now + DURATION[severity] };
+		visible[vIdx] = { ...hit, count: hit.count + 1, expiresAt: now + hit.durationMs };
 		return { ...s, visible };
 	}
 	const qIdx = s.queued.findIndex(same);
@@ -111,8 +130,9 @@ export function pushToast(s: ToastState, msg: string, variant: ToastVariant | un
 	}
 
 	const item: ToastItem = {
-		id: s.nextId, msg, severity, count: 1,
-		createdAt: now, expiresAt: now + DURATION[severity],
+		id: s.nextId, msg, severity, count: 1, durationMs,
+		createdAt: now, expiresAt: now + durationMs,
+		...(opts.action ? { action: opts.action } : {}),
 	};
 	const next: ToastState = { ...s, nextId: s.nextId + 1 };
 	return s.visible.length < MAX_VISIBLE
@@ -140,6 +160,6 @@ export function dismissToast(s: ToastState, id: number, now: number): ToastState
 export function holdToast(s: ToastState, id: number, now: number): ToastState {
 	return {
 		...s,
-		visible: s.visible.map((t) => t.id === id ? { ...t, expiresAt: now + DURATION[t.severity] } : t),
+		visible: s.visible.map((t) => t.id === id ? { ...t, expiresAt: now + t.durationMs } : t),
 	};
 }

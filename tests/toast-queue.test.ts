@@ -160,3 +160,52 @@ describe('state is not mutated in place', () => {
     expect(b.visible).toHaveLength(2);
   });
 });
+
+describe('actionable toasts', () => {
+  it('carries one action and an explicit lifetime', () => {
+    const run = (): void => {};
+    const s = pushToast(emptyToasts(), 'Closed "QMK-Flasher"', 'info', T0, { action: { label: 'Undo', run }, durationMs: 9000 });
+    expect(s.visible[0]!.action).toEqual({ label: 'Undo', run });
+    expect(s.visible[0]!.expiresAt).toBe(T0 + 9000);
+  });
+
+  // Two closes in a row must offer two Undos: dedupe would hand the second one the first
+  // close's action, which restores the wrong workspace.
+  it('never dedupes an actionable toast, even with identical text', () => {
+    const mk = (n: number) => ({ label: 'Undo', run: () => { calls.push(n); } });
+    const calls: number[] = [];
+    let s = pushToast(emptyToasts(), 'Closed "scratch"', 'info', T0, { action: mk(1) });
+    s = pushToast(s, 'Closed "scratch"', 'info', T0, { action: mk(2) });
+    expect(s.visible).toHaveLength(2);
+    expect(s.visible.every((t) => t.count === 1)).toBe(true);
+    s.visible[0]!.action!.run();
+    s.visible[1]!.action!.run();
+    expect(calls).toEqual([1, 2]);
+  });
+
+  it('does not merge a plain message into an actionable one of the same text', () => {
+    let s = pushToast(emptyToasts(), 'same', 'info', T0, { action: { label: 'Undo', run: () => {} } });
+    s = pushToast(s, 'same', 'info', T0);
+    expect(s.visible).toHaveLength(2);
+  });
+
+  it('keeps its own lifetime through a hold and a promotion', () => {
+    const long = { durationMs: 9000, action: { label: 'Undo', run: () => {} } };
+    // Fill every visible slot so the actionable toast has to wait for one.
+    let s = pushAll(emptyToasts(), [['a', 'info'], ['b', 'info'], ['c', 'info']]);
+    s = pushToast(s, 'Closed "x"', 'info', T0, long);
+    expect(overflowCount(s)).toBe(1);
+    const promotedAt = T0 + DURATION.info + 1;
+    s = expireToasts(s, promotedAt);
+    const item = s.visible.find((t) => t.action)!;
+    expect(item.expiresAt).toBe(promotedAt + 9000); // NOT demoted to DURATION.info
+    s = holdToast(s, item.id, promotedAt + 100);
+    expect(s.visible.find((t) => t.action)!.expiresAt).toBe(promotedAt + 100 + 9000);
+  });
+
+  it(`leaves plain toasts on their severity's clock`, () => {
+    const s = pushToast(emptyToasts(), 'plain', 'warn', T0);
+    expect(s.visible[0]!.durationMs).toBe(DURATION.warn);
+    expect(s.visible[0]!.action).toBeUndefined();
+  });
+});

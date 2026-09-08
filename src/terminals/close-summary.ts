@@ -7,6 +7,8 @@
  *  was lost that way. Everything here counts from PERSISTED records; live records are used only
  *  when the caller says the grid has restored its sessions and is therefore authoritative. */
 
+import { CLOSED_WORKSPACES_CAP } from './closed-workspaces';
+
 /** The fields of a persisted session record this module needs. Structural on purpose: the
  *  grid's SessionRecord satisfies it, and so does a live tile's descriptor. */
 export interface CloseRecord {
@@ -130,6 +132,13 @@ export function riskReason(risk: WorktreeRisk | undefined): string {
 	return bits.join(', ');
 }
 
+/** The line both bodies end on. Closing is recoverable now (closed-workspaces.ts) and saying so
+ *  is part of being honest — but it is a bounded archive, not an undo stack, so it says how
+ *  bounded rather than implying the close can always be taken back. */
+function reopenNote(): string {
+	return `Recently closed keeps the last ${CLOSED_WORKSPACES_CAP}, so the tab can be reopened.`;
+}
+
 /** The confirm body. Always says something — an empty tab gets one line, a tab with dirty
  *  worktrees gets the warning — because "looks empty, skip the dialog" is the bug itself. */
 export function closeConfirmMessage(
@@ -138,11 +147,11 @@ export function closeConfirmMessage(
 	risks: Record<string, WorktreeRisk> = {},
 ): string {
 	if (summary.total === 0) {
-		return `"${name}" has no saved terminals. Closing removes the tab.`;
+		return `"${name}" has no saved terminals. Closing removes the tab. ${reopenNote()}`;
 	}
 
 	const out: string[] = [];
-	out.push(`"${name}" has ${describeContents(summary)} saved. Closing stops them and removes the tab.`);
+	out.push(`"${name}" has ${describeContents(summary)} saved:`);
 	out.push('');
 	out.push(...listLines(summary.terminals));
 
@@ -151,12 +160,16 @@ export function closeConfirmMessage(
 		.filter((r) => r.reason);
 	if (risky.length) {
 		out.push('');
-		out.push(`⚠ ${plural(risky.length, 'worktree has', 'worktrees have')} work git cannot give back:`);
+		// The sentence meant to stop a click: uncommitted files and unmerged commits are the only
+		// things here that no git command would hand back once you stop pointing at the worktree.
+		out.push(`⚠ ${plural(risky.length, 'worktree holds', 'worktrees hold')} work git could not give back:`);
 		out.push(...listLines(risky.map((r) => ({ label: r.item.label, detail: r.reason }))));
 	} else if (summary.terminals.length) {
 		out.push('');
 		out.push('Every worktree is clean — nothing uncommitted or unmerged.');
 	}
+	out.push('');
+	out.push(`Closing stops these sessions. The worktree folders stay on disk. ${reopenNote()}`);
 	return out.join('\n');
 }
 
