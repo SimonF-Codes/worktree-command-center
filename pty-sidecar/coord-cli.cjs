@@ -5,6 +5,10 @@
 // GOD-only: called without COS_ROLE=god they exit 2 (a refusal is a failure, not a silent no-op).
 // The same commands also exit 2 when called AS god but missing a required argument (empty
 // target/message/task/etc.) — a malformed handoff must fail loud too, not just an unauthorized one.
+// `tell` additionally BLOCKS for the app's delivery receipt before reporting success (see
+// store.waitForTellReceipt) — dropping the outbox file was never proof the message was typed
+// into anything, let alone submitted.
+const path = require('path');
 const core = require('./coord-core.cjs');
 const store = require('./coord-store.cjs');
 
@@ -63,8 +67,13 @@ function main() {
     const target = resource;
     const message = rest.join(' ');
     requireArgs('tell', Boolean(target && message), '<target> "<message>"');
-    store.tell(dir, target, message);
-    process.exit(0);
+    const file = store.tell(dir, target, message);
+    const id = path.basename(file, '.json');
+    const waitMs = Number(env('COS_COORD_TELL_WAIT_MS', String(core.TELL_WAIT_MS)));
+    const r = store.waitForTellReceipt(dir, id, { waitMs });
+    if (r.ok) { console.log(`coord: delivered to "${target}"`); process.exit(0); }
+    console.error(`coord: tell to "${target}" was NOT delivered — ${r.reason || 'unknown reason'}`);
+    process.exit(2);
   }
 
   if (cmd === 'watch') {

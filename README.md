@@ -156,6 +156,17 @@ technically stops a local process from writing the same shapes into `god-outbox/
 means impersonating the overseer's full authority over the floor, not requesting work — treat that
 as unsupported, not as a shortcut.
 
+`cos-coord tell` itself additionally **blocks and reports honestly**: it doesn't return until the
+app confirms the message actually landed on the target's screen (retried for up to
+`COS_COORD_TELL_WAIT_MS`, default 45s — override for scripting/tests), then exits 0 only if it
+did. Anything else — the target name didn't resolve, the session couldn't take input for the whole
+retry window (e.g. mid-`/compact`), it closed while the message was queued, or the app never
+answered at all — exits non-zero with the reason on stderr; dropping the outbox file was never
+proof of delivery, only proof the file was written. A `watch`/`rename`/`spawn` that fails after
+`cos-coord` already returned (an unresolved target name, an unknown repo) writes the same kind of
+note to `<coordDir>/god-inbox/` and pings Kane directly, rather than leaving him to discover it by
+reading an undocumented file.
+
 ### Agent role files
 
 The system prompt each session starts with — the worker terminal's, the folder terminal's, and

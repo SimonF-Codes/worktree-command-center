@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -7,6 +7,29 @@ import * as path from 'node:path';
 const CLI = path.join(__dirname, '..', 'pty-sidecar', 'coord-cli.cjs');
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-')); });
+
+/** Poll `cond` until it's true or `timeoutMs` elapses (throws). Used to wait for `tell`'s
+ *  outbox drop from a concurrently-running child before this test plays the app's part. */
+async function waitFor(cond: () => boolean, timeoutMs = 3000): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) throw new Error('timed out waiting for condition');
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+/** The id `tell` uses to name its receipt file: the outbox request's own filename, minus '.json'. */
+function outboxIdFor(coordDir: string): string {
+  const files = fs.readdirSync(path.join(coordDir, 'god-outbox')).filter((f) => f.endsWith('.json'));
+  if (files.length !== 1) throw new Error(`expected exactly one dropped outbox file, found ${files.length}`);
+  return files[0].replace(/\.json$/, '');
+}
+
+function writeTellReceipt(coordDir: string, id: string, receipt: { ok: boolean; reason?: string }): void {
+  const receiptsDir = path.join(coordDir, 'god-outbox', '.receipts');
+  fs.mkdirSync(receiptsDir, { recursive: true });
+  fs.writeFileSync(path.join(receiptsDir, `${id}.json`), JSON.stringify(receipt), 'utf8');
+}
 
 function run(args: string[], id = '1', name = 'termA') {
   try {
@@ -55,13 +78,49 @@ describe('cos-coord CLI', () => {
     expect(fs.existsSync(path.join(dir, 'god-outbox'))).toBe(false);
   });
   it('tell from GOD drops a message file', () => {
-    execFileSync('node', [CLI, 'tell', 'A', 'hello'], {
-      env: { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god' }, encoding: 'utf8',
-    });
+    // Nothing plays the app's part here, so with a short wait `tell` gives up honestly (exit 2)
+    // instead of the old exit-0-on-drop behavior — dropping the file was never proof of delivery.
+    const env = { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god', COS_COORD_TELL_WAIT_MS: '80' };
+    try {
+      execFileSync('node', [CLI, 'tell', 'A', 'hello'], { env, encoding: 'utf8' });
+      throw new Error('expected tell to exit non-zero when nothing confirms delivery');
+    } catch (e: unknown) {
+      const err = e as { status: number; stderr: string };
+      expect(err.status).toBe(2);
+      expect(err.stderr).toContain('NOT delivered');
+    }
     const files = fs.readdirSync(path.join(dir, 'god-outbox')).filter((f) => f.endsWith('.json'));
     expect(files).toHaveLength(1);
     const msg = JSON.parse(fs.readFileSync(path.join(dir, 'god-outbox', files[0]), 'utf8'));
     expect(msg).toMatchObject({ target: 'A', message: 'hello' });
+  });
+
+  it('tell reports success (exit 0) once the app confirms delivery via a receipt', async () => {
+    const env = { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god', COS_COORD_TELL_WAIT_MS: '3000' };
+    const child = execFile('node', [CLI, 'tell', 'A', 'hello'], { env, encoding: 'utf8' });
+    await waitFor(() => fs.existsSync(path.join(dir, 'god-outbox')) && fs.readdirSync(path.join(dir, 'god-outbox')).some((f) => f.endsWith('.json')));
+    writeTellReceipt(dir, outboxIdFor(dir), { ok: true });
+    const result = await new Promise<{ code: number | null; stdout: string }>((resolve) => {
+      let out = '';
+      child.stdout?.on('data', (d) => { out += d; });
+      child.on('exit', (code) => resolve({ code, stdout: out }));
+    });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('delivered');
+  });
+
+  it('tell reports failure (exit 2) with the app\'s own reason when the receipt says it was NOT delivered', async () => {
+    const env = { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god', COS_COORD_TELL_WAIT_MS: '3000' };
+    const child = execFile('node', [CLI, 'tell', 'A', 'hello'], { env, encoding: 'utf8' });
+    await waitFor(() => fs.existsSync(path.join(dir, 'god-outbox')) && fs.readdirSync(path.join(dir, 'god-outbox')).some((f) => f.endsWith('.json')));
+    writeTellReceipt(dir, outboxIdFor(dir), { ok: false, reason: 'not accepted within 40s — mid-/compact' });
+    const result = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+      let err = '';
+      child.stderr?.on('data', (d) => { err += d; });
+      child.on('exit', (code) => resolve({ code, stderr: err }));
+    });
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('mid-/compact');
   });
   it('watch/spawn are god-only and drop tagged files', () => {
     // No role → refused (exit 2), nothing written
