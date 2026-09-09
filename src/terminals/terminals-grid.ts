@@ -1241,8 +1241,19 @@ export class TerminalsGrid {
 			// a Claude Code session queues input typed while it's mid-task, it doesn't drop it.
 			const tile = this.allSessions().find((t) => t.name === request.terminal);
 			if (tile && !tile.isJournal) {
-				(tile as TerminalTile).sendLine(request.message);
-				this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'accepted', terminalName: tile.name, handledMs: Date.now() });
+				// Same seam Kane's own `tell` uses (deliverTellQueued → attemptTellDelivery →
+				// TerminalTile.deliverLine), not a second one: a connector `tell` and a Kane `tell`
+				// landing on the same terminal close together still deliver in order, and this
+				// receipt is written no sooner than Kane's own is — only once delivery is actually
+				// confirmed (or the retry window gives up), not the moment sendLine was called. Until
+				// then the receipt file simply doesn't exist yet; Brain 2.0's parser already reads a
+				// missing receipt as "unanswered", so there's no need for a third status value here.
+				const r = await this.deliverTellQueued(tile as TerminalTile, request.message);
+				if (r.ok) {
+					this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'accepted', terminalName: tile.name, handledMs: Date.now() });
+				} else {
+					this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'rejected', reason: r.reason ?? 'delivery failed', handledMs: Date.now() });
+				}
 			} else {
 				this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'rejected', reason: `"${request.terminal}" is no longer a live terminal`, handledMs: Date.now() });
 			}
