@@ -17,8 +17,13 @@ import { activeTerminalPalette, activeTerminalFont, type TerminalPalette } from 
 import { ctrlClickActivator, openExternalUrl } from './links';
 import { promptForConfirm } from '../ui/prompt-dialog';
 import { stripAnsi } from './usage-parse';
+import { looksDelivered } from './prompt-detect';
 import type { StageTile } from './stage-tile';
 import type { AttentionKind } from './attention';
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 export interface TerminalTileOpts {
 	tileId: number;
@@ -434,6 +439,36 @@ export class TerminalTile implements StageTile {
 		// empty input box and is a no-op.
 		window.setTimeout(() => this.bridge?.write('\r'), 900);
 	}
+
+	/** Like sendLine, but VERIFIES the text actually landed on screen instead of firing and
+	 *  hoping — used by Kane's own `cos-coord tell` (terminals-grid.ts deliverTellQueued), so
+	 *  the CLI call blocked waiting on it is told whether delivery actually worked. The
+	 *  connector channel's `tell` (connectors.ts / handleConnectorRequest) does NOT go through
+	 *  this yet — it still fires sendLine and reports accepted immediately; same bug, a
+	 *  different door. `clearFirst` sends Ctrl+U before typing, to wipe out whatever a previous
+	 *  failed retry may have left sitting in the input box unsubmitted.
+	 *
+	 *  Trust boundary: this confirms the text reached the screen SOMEWHERE (input box or
+	 *  submitted transcript), not that it was specifically submitted — recentOutput() can't
+	 *  cheaply tell those apart. That's fine for the one failure this exists to catch (a
+	 *  compacting/booting/otherwise-unresponsive TUI that swallows keystrokes and shows no
+	 *  trace of them at all); it does not further prove the message was ACTED on, same as
+	 *  the sendLine dance it replaces never did either. */
+	async deliverLine(text: string, clearFirst = false): Promise<boolean> {
+		if (clearFirst) this.bridge?.write('\x15'); // Ctrl+U: clear a stale unsubmitted retry
+		this.bridge?.write(text);
+		await delay(250);
+		this.bridge?.write('\r'); // see sendLine's comment: a separate write, not bundled with the text
+		await delay(650); // 250 + 650 = 900, matching sendLine's belt-and-braces second Enter
+		this.bridge?.write('\r');
+		await delay(500); // let the TUI redraw before reading the screen
+		return looksDelivered(this.recentOutput(), text);
+	}
+
+	/** True once the underlying claude process has exited — deliverLine's retry loop uses this
+	 *  to give up immediately on a session that plainly isn't coming back, instead of burning
+	 *  its whole retry window on it. */
+	get isEnded(): boolean { return this.ended; }
 
 	/** Send raw keystrokes verbatim (no auto-Enter) — used to answer prompts from the
 	 *  chat (Approve = Enter "\r", Deny = Escape "\x1b"). */

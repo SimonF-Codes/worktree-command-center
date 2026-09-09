@@ -119,4 +119,35 @@ function spawn(dir, repo, base, task, model, effort, name) { return dropOutbox(d
 function rename(dir, target, to) { return dropOutbox(dir, { kind: 'rename', target, name: to }); }
 function personality(dir) { return dropOutbox(dir, { kind: 'personality' }); }
 
-module.exports = { acquire, release, readLocks, readHolder, appendBoard, note, taskEvent, appendChat, tell, watch, spawn, rename, personality, dropOutbox, sleepSync };
+// A `tell`'s receipt: the app writes one of these to god-outbox/.receipts/<id>.json once it
+// KNOWS whether the message actually landed on the target's screen (see terminals-grid.ts
+// dispatchOutbox/writeTellReceipt) — not just once it has dropped the request file, which is
+// all `dropOutbox` above ever guaranteed. This is new: no receipt existed for any command
+// before this, so there is no prior shape to preserve; the outbox REQUEST shape tell() writes
+// above is untouched.
+function receiptPath(dir, id) { return path.join(dir, 'god-outbox', '.receipts', `${id}.json`); }
+
+// Block (synchronously — this runs inside a one-shot CLI process, same shape as acquire()'s
+// wait/poll) until that receipt shows up, or waitMs elapses. No receipt within the window is
+// reported the same as an explicit failure: a CLI caller must never read silence as success.
+function waitForTellReceipt(dir, id, opts = {}) {
+  const waitMs = opts.waitMs != null ? opts.waitMs : core.TELL_WAIT_MS;
+  const pollMs = opts.pollMs != null ? opts.pollMs : core.POLL_MS;
+  const file = receiptPath(dir, id);
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      const r = JSON.parse(fs.readFileSync(file, 'utf8'));
+      try { fs.unlinkSync(file); } catch { /* best-effort cleanup */ }
+      return r;
+    } catch { /* not written yet, or unreadable mid-write — keep polling */ }
+    if (Date.now() >= deadline) return { ok: false, reason: 'timed out waiting for the app to confirm delivery — is it running?' };
+    sleepSync(pollMs);
+  }
+}
+
+module.exports = {
+  acquire, release, readLocks, readHolder, appendBoard, note, taskEvent, appendChat,
+  tell, watch, spawn, rename, personality, dropOutbox, sleepSync,
+  receiptPath, waitForTellReceipt,
+};

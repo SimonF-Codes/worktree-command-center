@@ -5,6 +5,25 @@ landed on `main`.
 
 ## Unreleased
 
+**`cos-coord tell` no longer reports success for a message that was never delivered**
+- `sendLine` typed the text into the target's PTY, fired two timed Enters, and returned — it never
+  checked anything actually landed. Observed losing three messages in one session: each target had
+  just hit `/compact`, and the message vanished into the compacting TUI while `tell` still reported
+  success and the file drop still exited 0. The fix so far (an extra timed Enter, twice before this)
+  was fire-and-hope for a different class of the same bug; this one gets a real feedback path
+  instead of a third guess.
+- Delivery is now VERIFIED: after sending, the tile checks its own recent output for the sent text
+  before believing it landed (`TerminalTile.deliverLine`, `looksDelivered` in `prompt-detect.ts`).
+  A message that doesn't land is held and retried (clearing any stray unsubmitted text first) every
+  5s for up to 40s — long enough for a typical compact to clear — rather than typed once into a
+  session that can't hear it. Two tells queued for the same terminal are delivered in order.
+- `cos-coord tell` now blocks on the app's delivery receipt (new — no receipt existed for any
+  command before this; the outbox request format Brain 2.0 depends on is unchanged) and exits non-
+  zero with the real reason whenever delivery didn't happen: an unresolved target, the retry window
+  running out, or the terminal closing while the message was still queued. Exit 0 now means the
+  message was actually seen on screen, not just that a file was written. See README "External
+  dispatch" and `COS_COORD_TELL_WAIT_MS`.
+
 **A handoff to a worker terminal fails loud now, at every step, instead of quietly going nowhere**
 - `cos-coord tell/watch/spawn/rename`, called as GOD but missing a required argument (an empty
   target, message, task, or `--to`), used to do nothing and exit 0 — the same silent-success shape

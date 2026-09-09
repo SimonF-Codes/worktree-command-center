@@ -44,6 +44,20 @@ export interface RepoConfig { name: string; path: string; remote?: string; group
 
 export interface RemoteTerminal { id: number; name: string; repo: string; branch: string; state: string; output: string; remoteOn: boolean; }
 
+interface TellResult { ok: boolean; reason?: string; }
+// A tell that doesn't land gets retried on this cadence — not because we expect it to land
+// mid-retry-wait, but because the thing eating it (a /compact, a slow boot) is usually done
+// within a few of these. Bounded total so a target that's genuinely never coming back doesn't
+// hold a `cos-coord tell` process (and whoever is waiting on it) open indefinitely — see the
+// brief this answers, "fix-tell-swallowing". Kept comfortably under coord-core's TELL_WAIT_MS
+// (the CLI's own give-up bound) so the CLI gets an honest receipt instead of its generic timeout.
+const TELL_RETRY_INTERVAL_MS = 5000;
+const TELL_MAX_WAIT_MS = 40000;
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 export interface GridDeps {
 	repos: RepoConfig[];
 	coordDir: string;
@@ -141,6 +155,10 @@ export class TerminalsGrid {
 	private pulseTimer: number | null = null;
 	private readonly pulseMs = 12 * 60 * 1000; // proactive floor-pulse cadence while personality is on
 	private watchers: Array<{ target: string; note: string }> = [];
+	// One `tell` at a time per target, delivered in the order they arrived (see runTellQueue) —
+	// two tells landing while a session is unresponsive must not race each other in on the retry.
+	private tellQueues = new Map<number, Array<{ message: string; resolve: (r: TellResult) => void }>>();
+	private tellInFlight = new Set<number>();
 	private pendingTask = new Map<number, string>();
 	private idleTiles = new Set<number>();
 	// Per-tab (+ Alpha, keyed -1) last attention bucket — so the per-tab markers update and a pop-up
@@ -1114,7 +1132,10 @@ export class TerminalsGrid {
 			let text = '';
 			try { text = fsSync.readFileSync(full, 'utf8'); } catch { continue; }
 			const msg = parseOutboxMessage(text);
-			if (msg) this.dispatchOutbox(msg, names);
+			// The id a `tell`'s receipt is filed under (see writeTellReceipt) — the request file's
+			// own name, which `cos-coord tell` already knows because store.tell() returned it.
+			const id = f.replace(/\.json$/, '');
+			if (msg) this.dispatchOutbox(msg, names, id);
 			// A message that fails to parse (bad JSON, unknown/missing required fields — e.g. a
 			// hand-written external drop) used to just get archived, indistinguishable from one
 			// that dispatched fine. That's the same silent-no-op shape as an unresolved tell/watch
@@ -1124,13 +1145,22 @@ export class TerminalsGrid {
 		}
 	}
 
-	/** Act on one parsed Kane command (tell a worker / register a watch / spawn a terminal). */
-	private dispatchOutbox(msg: OutboxMessage, liveNames: string[]): void {
+	/** Act on one parsed Kane command (tell a worker / register a watch / spawn a terminal).
+	 *  `id` names the receipt a `tell` writes once delivery is verified — see deliverTellQueued. */
+	private dispatchOutbox(msg: OutboxMessage, liveNames: string[], id: string): void {
 		if (msg.kind === 'tell') {
 			const name = resolveTellTarget(msg.target, liveNames);
 			const tile = name ? this.allSessions().find((t) => t.name === name) : undefined;
-			if (tile && !tile.isJournal) (tile as TerminalTile).sendLine(msg.message);
-			else this.writeGodInbox(`could not deliver to "${msg.target}" — not a live terminal. Live: ${liveNames.join(', ') || '(none)'}`);
+			if (tile && !tile.isJournal) {
+				void this.deliverTellQueued(tile as TerminalTile, msg.message).then((r) => {
+					this.writeTellReceipt(id, r);
+					if (!r.ok) this.writeGodInbox(`tell to "${name}" was NOT delivered — ${r.reason}`);
+				});
+			} else {
+				const reason = `could not deliver to "${msg.target}" — not a live terminal. Live: ${liveNames.join(', ') || '(none)'}`;
+				this.writeGodInbox(reason);
+				this.writeTellReceipt(id, { ok: false, reason });
+			}
 		} else if (msg.kind === 'watch') {
 			const name = resolveTellTarget(msg.target, liveNames);
 			if (name) this.watchers.push({ target: name, note: msg.note });
@@ -1293,6 +1323,67 @@ export class TerminalsGrid {
 			fsSync.writeFileSync(path.join(inbox, `${Date.now()}-error.md`), message + '\n', 'utf8');
 		} catch { /* best effort */ }
 		this.notifyKanes(`[error] ${message}`);
+	}
+
+	/** Queue a `tell` for delivery to `tile`, FIFO per tile so two tells arriving close together
+	 *  can't race each other's retries and land out of order. Resolves once delivery is confirmed
+	 *  or the retry window (attemptTellDelivery) gives up. */
+	private deliverTellQueued(tile: TerminalTile, message: string): Promise<TellResult> {
+		return new Promise((resolve) => {
+			const q = this.tellQueues.get(tile.tileId) ?? [];
+			q.push({ message, resolve });
+			this.tellQueues.set(tile.tileId, q);
+			void this.runTellQueue(tile.tileId);
+		});
+	}
+
+	/** Drain one tile's tell queue in order, one at a time. Re-resolves the *current* live tile
+	 *  by id on every entry (not the `tile` object captured at enqueue time) so a queued entry
+	 *  outlasting the terminal it was addressed to sees it's gone rather than delivering into a
+	 *  stale reference. */
+	private async runTellQueue(tileId: number): Promise<void> {
+		if (this.tellInFlight.has(tileId)) return; // already draining this tile's queue
+		this.tellInFlight.add(tileId);
+		try {
+			let entry: { message: string; resolve: (r: TellResult) => void } | undefined;
+			while ((entry = this.tellQueues.get(tileId)?.shift())) {
+				const tile = this.allSessions().find((t) => t.tileId === tileId && !t.isJournal) as TerminalTile | undefined;
+				if (!tile) { entry.resolve({ ok: false, reason: 'the terminal closed before this message could be delivered' }); continue; }
+				entry.resolve(await this.attemptTellDelivery(tile, entry.message));
+			}
+		} finally {
+			this.tellInFlight.delete(tileId);
+			this.tellQueues.delete(tileId);
+		}
+	}
+
+	/** Try to land `message` on `tile`, retrying on a fixed cadence until it's confirmed
+	 *  (TerminalTile.deliverLine) or TELL_MAX_WAIT_MS runs out — bounded so a target that's
+	 *  genuinely never coming back doesn't hold this open forever. Gives up immediately, without
+	 *  waiting out the rest of the window, once the tile has plainly ended or been closed. */
+	private async attemptTellDelivery(tile: TerminalTile, message: string): Promise<TellResult> {
+		const deadline = Date.now() + TELL_MAX_WAIT_MS;
+		for (let attempt = 1; ; attempt++) {
+			if (tile.isEnded || !this.allSessions().includes(tile)) {
+				return { ok: false, reason: 'the terminal is not running' };
+			}
+			if (await tile.deliverLine(message, attempt > 1)) return { ok: true };
+			if (Date.now() >= deadline) {
+				return { ok: false, reason: `not accepted within ${Math.round(TELL_MAX_WAIT_MS / 1000)}s — the session may be unable to take input right now (e.g. mid-/compact)` };
+			}
+			await delay(TELL_RETRY_INTERVAL_MS);
+		}
+	}
+
+	/** File the outcome of one `tell` so the CLI process blocked waiting on it (coord-cli.cjs
+	 *  `waitForTellReceipt`) can report it honestly instead of assuming the outbox drop succeeded.
+	 *  New: no receipt existed for any command before this — see coord-store.cjs's comment. */
+	private writeTellReceipt(id: string, r: TellResult): void {
+		try {
+			const dir = path.join(this.outboxDir(), '.receipts');
+			fsSync.mkdirSync(dir, { recursive: true });
+			fsSync.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify(r), 'utf8');
+		} catch { /* best effort — the CLI falls back to its own timeout */ }
 	}
 
 	/** Center a tile AND give its terminal keyboard focus (so typing goes there). */
