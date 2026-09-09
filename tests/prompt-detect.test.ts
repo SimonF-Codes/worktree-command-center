@@ -56,8 +56,36 @@ describe('looksDelivered', () => {
   it('finds the sent text sitting plainly in recent output', () => {
     expect(looksDelivered('some earlier line\n> please run the tests\nworking…', 'please run the tests')).toBe(true);
   });
-  it('finds it even when the terminal line-wrapped it across rows', () => {
+  it('finds it even when the terminal wraps at a space boundary', () => {
     expect(looksDelivered('> please run the\ntests and report back', 'please run the tests and report back')).toBe(true);
+  });
+  // Regression (2026-09-09): every `tell` was reporting failure while actually delivering.
+  // Root cause was here — Claude Code's real TUI hard-wraps a long line MID-WORD, with no space
+  // or hyphen at the break, just a two-space-indented continuation row. The old check collapsed
+  // whitespace to a single space, which turns a mid-word break into a phantom space that was
+  // never in the sent text ("coordi" + "nation" -> "coordi nation" != "coordination").
+  it('finds it when the terminal hard-wraps MID-WORD, with no space at the break', () => {
+    expect(looksDelivered('> abc\n  def and the rest', 'abcdef and the rest')).toBe(true);
+  });
+  it('reproduces the exact regression: a real captured Claude Code transcript, mid-task', () => {
+    // Verbatim from a live floor snapshot (brain-2-0/floor/2-b2-news.md, 2026-09-09) for the
+    // exact terminal the bug report named — a busy session ("esc to interrupt"), input box empty
+    // (the message already queued/echoed above), the sent line wrapped mid-word twice (Kane's
+    // retry after the false failure duplicated it, which is its own part of this incident).
+    const recentOutput = [
+      '> New task. Read C:\\Users\\fridl\\AppData\\Roaming\\worktree-command-center\\.coordi',
+      '  nation\\brain-2-0\\briefs\\mail-backend.md and do it.',
+      '● Wired task dispatch for unstamped tasks; test suite added',
+      '  ⎿  $ cd "C:\\dev\\.claude-worktrees\\Brain_2.0\\wt-master-6" && sed -n \'495,535p\'',
+      '     node_modules/imapflow/dist/cjs/types.d.ts',
+      '· Smooshing… (7m 24s · almost done thinking with high effort)',
+      '────────────────────────────────────────────────────────────────',
+      '>',
+      '────────────────────────────────────────────────────────────────',
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for ag…',
+    ].join('\n');
+    const sent = 'New task. Read C:\\Users\\fridl\\AppData\\Roaming\\worktree-command-center\\.coordination\\brain-2-0\\briefs\\mail-backend.md and do it.';
+    expect(looksDelivered(recentOutput, sent)).toBe(true);
   });
   it('reports NOT delivered when the screen shows no trace of it at all (e.g. eaten by a compact)', () => {
     expect(looksDelivered('✻ Compacting conversation… (esc to interrupt)', 'please run the tests')).toBe(false);

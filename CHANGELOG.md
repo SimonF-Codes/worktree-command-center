@@ -5,6 +5,26 @@ landed on `main`.
 
 ## Unreleased
 
+**Fixed a regression in the delivery check above: every `tell` was reporting failure while actually delivering**
+- Shipped in 0.6.0 (2026-09-08) and caught the next day against real running terminals — five
+  sends in a row all reported `NOT delivered` / `timed out waiting for the app to confirm delivery`
+  while every single one had actually arrived. Worse than the bug it replaced in one way: silent
+  success cost nothing, this cost a duplicated task after the overseer believed the false failure
+  and retried into the same terminal.
+- Root cause: `looksDelivered` collapsed the on-screen output's whitespace to a single space before
+  comparing. Claude Code's real TUI hard-wraps a long submitted line **mid-word**, with no space or
+  hyphen at the break — just a two-space-indented continuation row (confirmed against live floor
+  snapshots: `...worktree-command-center\.coordi` / `  nation\brain-2-0\briefs\...`). Collapsing
+  that wrap to a single space turns "coordi" + "nation" into "coordi nation" — a space that was
+  never in the sent text — so the substring match failed for any message long enough to wrap
+  mid-word, which is most real task instructions. The "timed out waiting for the app" variant was
+  the same bug compounding: a retried tell queues behind the first one's full 40s of futile
+  retrying, pushing its own receipt past the CLI's 45s wait.
+- Fixed by stripping whitespace entirely instead of collapsing it (`prompt-detect.ts`), so the wrap
+  point is invisible on both sides of the comparison rather than guessed at. Not a timeout change —
+  the diagnosis ruled that out first (a longer wait on the same wrong check gives the same wrong
+  answer, slower).
+
 **The connector channel's `tell` had the same swallowing bug as `cos-coord tell` — closed the same way**
 - `handleConnectorRequest` typed the message in and wrote an `accepted` receipt immediately,
   unconditionally — the same fire-and-hope `sendLine` call the CLI `tell` fix above replaced, just

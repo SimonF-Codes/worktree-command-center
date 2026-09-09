@@ -50,14 +50,34 @@ export function normalizeForMatch(s: string): string {
 	return String(s).replace(/\s+/g, ' ').trim();
 }
 
+/** Strip ALL whitespace rather than collapsing it to a single space. Confirmed against the real
+ *  Claude Code TUI (captured floor snapshots, 2026-09-09): a submitted line that's too long for
+ *  one row hard-wraps at the column width, mid-word, with no space or hyphen at the break — just a
+ *  continuation row indented two spaces:
+ *
+ *    > New task. Read C:\Users\...\worktree-command-center\.coordi
+ *      nation\brain-2-0\briefs\mail-backend.md and do it.
+ *
+ *  normalizeForMatch's single-space collapse is wrong for exactly this case: joining those two rows
+ *  with a space turns "coordi" + "nation" into "coordi nation" — a space that was never in the sent
+ *  text ("coordination"). For any message long enough to wrap mid-word (most real task
+ *  instructions, at typical terminal widths), that phantom space breaks the match — which is the
+ *  false-negative regression this exists to fix, not a hypothetical. Stripping whitespace entirely
+ *  makes the wrap point invisible on both sides of the comparison instead of guessing which kind of
+ *  break it was. */
+function stripWhitespace(s: string): string {
+	return String(s).replace(/\s+/g, '');
+}
+
 /** Did a line we just typed actually land on screen, submitted or not? We don't try to tell those
  *  two apart (see TerminalTile.deliverLine) — we only need to rule out the one failure this exists
  *  for: the TUI was in a state (mid-/compact, still booting, …) that ate the keystrokes entirely,
  *  leaving no trace anywhere. Matches on a bounded prefix (not the whole string) so a long message
- *  that got line-wrapped mid-word still matches, and an empty/whitespace-only line — which leaves no
- *  trace to look for by definition — is trivially "landed" rather than reported as a false failure. */
+ *  that got line-wrapped still matches without needing the tail of a very long instruction, and an
+ *  empty/whitespace-only line — which leaves no trace to look for by definition — is trivially
+ *  "landed" rather than reported as a false failure. */
 export function looksDelivered(recentOutput: string, sentText: string): boolean {
-	const needle = normalizeForMatch(sentText).slice(0, 80);
+	const needle = stripWhitespace(sentText).slice(0, 80);
 	if (!needle) return true;
-	return normalizeForMatch(recentOutput).includes(needle);
+	return stripWhitespace(recentOutput).includes(needle);
 }
