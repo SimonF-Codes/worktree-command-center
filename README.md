@@ -67,7 +67,12 @@ that; `spawn` has never had one either, and adding one only for `tell` would be 
 inconsistent mechanism for the same risk the receipt trail already surfaces. A `tell` into a
 terminal that's mid-task is still accepted and delivered — the message is typed into that
 terminal exactly like Kane's own `tell`, which a running Claude Code session queues rather than
-drops; "accepted" means "typed and submitted," not "acted on immediately."
+drops; "accepted" means "typed and submitted," not "acted on immediately." That's now a promise,
+not a hope: `accepted` is written only once the app has confirmed the text actually landed on the
+target's screen (routed through the same delivery-verification seam as Kane's own `tell` —
+`TerminalTile.deliverLine`), retrying for up to ~40s against a target that can't take input right
+now (e.g. mid-`/compact`). Until then no receipt file exists yet for that `id` — poll for it rather
+than assuming absence means failure.
 
 Write a request atomically — a temp file in `requests/`, then `rename()` over the final name —
 and give it a v1 envelope with an id you choose (the receipt refers back to it, so you can

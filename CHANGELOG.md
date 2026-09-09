@@ -5,6 +5,28 @@ landed on `main`.
 
 ## Unreleased
 
+**The connector channel's `tell` had the same swallowing bug as `cos-coord tell` — closed the same way**
+- `handleConnectorRequest` typed the message in and wrote an `accepted` receipt immediately,
+  unconditionally — the same fire-and-hope `sendLine` call the CLI `tell` fix above replaced, just
+  behind a second door. This one is the door Brain 2.0's butler actually uses, and its documented
+  contract ("accepted" = "typed and submitted, not acted on") was false until now: four messages
+  were lost to `/compact` in one session through paths shaped exactly like this one, each reported
+  as delivered.
+- A connector `tell` now routes through the same seam Kane's own `tell` uses
+  (`deliverTellQueued`/`TerminalTile.deliverLine`) rather than a second mechanism — the two even
+  queue against the same terminal in arrival order. The receipt is written only once delivery is
+  confirmed or the ~40s retry window gives up: `accepted` only when the text actually landed,
+  `rejected` with the real reason otherwise (an unresolved target, the retry window running out, the
+  terminal closing mid-delivery).
+- No wire-shape change: Brain 2.0's `parseReceipt` already reads an absent receipt file as
+  "unanswered", so the window before delivery resolves (now up to ~40s instead of instant) needs no
+  new status value — it's just what "unanswered" already meant.
+- `spawn`'s `accepted` receipt is unaffected by this pass — it fires once the terminal itself is
+  created, which is true the moment it's written. Its *initial task* is a separate, later delivery
+  (queued, sent on first ready) with the same unverified `sendLine` shape, but spawning a terminal
+  first gates on an explicit ready signal rather than typing into a session of unknown state — a
+  narrower window than `tell`'s, and not the one this pass targeted.
+
 **`cos-coord tell` no longer reports success for a message that was never delivered**
 - `sendLine` typed the text into the target's PTY, fired two timed Enters, and returned — it never
   checked anything actually landed. Observed losing three messages in one session: each target had
