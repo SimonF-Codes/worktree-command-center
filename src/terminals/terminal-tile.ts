@@ -441,9 +441,12 @@ export class TerminalTile implements StageTile {
 	}
 
 	/** Like sendLine, but VERIFIES the text actually landed on screen instead of firing and
-	 *  hoping — used by cos-coord `tell`, where a caller (Kane, or an external connector) is
-	 *  told whether delivery worked. `clearFirst` sends Ctrl+U before typing, to wipe out
-	 *  whatever a previous failed retry may have left sitting in the input box unsubmitted.
+	 *  hoping — used by Kane's own `cos-coord tell` (terminals-grid.ts deliverTellQueued), so
+	 *  the CLI call blocked waiting on it is told whether delivery actually worked. The
+	 *  connector channel's `tell` (connectors.ts / handleConnectorRequest) does NOT go through
+	 *  this yet — it still fires sendLine and reports accepted immediately; same bug, a
+	 *  different door. `clearFirst` sends Ctrl+U before typing, to wipe out whatever a previous
+	 *  failed retry may have left sitting in the input box unsubmitted.
 	 *
 	 *  Trust boundary: this confirms the text reached the screen SOMEWHERE (input box or
 	 *  submitted transcript), not that it was specifically submitted — recentOutput() can't

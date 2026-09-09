@@ -122,6 +122,7 @@ describe('cos-coord CLI', () => {
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('mid-/compact');
   });
+
   it('watch/spawn are god-only and drop tagged files', () => {
     // No role → refused (exit 2), nothing written
     const denied = run(['watch', 'A', '--note', 'x'], '1', 'x');
