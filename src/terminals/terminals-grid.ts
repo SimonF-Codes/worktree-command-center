@@ -1380,7 +1380,13 @@ export class TerminalsGrid {
 			}
 			if (await tile.deliverLine(message, attempt > 1)) return { ok: true };
 			if (Date.now() >= deadline) {
-				return { ok: false, reason: `not accepted within ${Math.round(TELL_MAX_WAIT_MS / 1000)}s — the session may be unable to take input right now (e.g. mid-/compact)` };
+				// Name the draft case specifically: "held back because someone is typing in that
+				// terminal" is a different thing to act on than a compacting TUI, and the sender
+				// can see the "N waiting" badge on the tile for the rest.
+				const why = tile.isDrafting
+					? 'someone has unsubmitted typing in its input box — it was NOT typed over'
+					: 'the session may be unable to take input right now (e.g. mid-/compact)';
+				return { ok: false, reason: `not accepted within ${Math.round(TELL_MAX_WAIT_MS / 1000)}s — ${why}` };
 			}
 			await delay(TELL_RETRY_INTERVAL_MS);
 		}
