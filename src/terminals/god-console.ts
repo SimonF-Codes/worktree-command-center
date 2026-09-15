@@ -14,6 +14,11 @@ import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { FitThrottle } from './fit-throttle';
 import { ctrlClickActivator, openExternalUrl } from './links';
 import { promptForConfirm } from '../ui/prompt-dialog';
+import { NoticeGate } from './notice-gate';
+
+/** How long a released backlog waits before being typed in, so the keystroke that emptied the box
+ *  lands first. Nothing to do with the 250/900ms Enter pair in writeNotice. */
+const FLUSH_SETTLE_MS = 250;
 
 export interface GodConsoleOpts {
 	repos: GodRepo[];
@@ -45,6 +50,24 @@ export class GodConsole {
 	private fitThrottle: FitThrottle | null = null;
 	private busy = false;            // approximate: true while output is actively streaming
 	private busyTimer: number | null = null;
+	private queueEl: HTMLElement | null = null;
+	private readyWatcher: fs.FSWatcher | null = null;
+	private pasting = false;         // true only while term.paste() is feeding onData (never a submit)
+	/** Holds notifications back while the user is mid-sentence in this console, and releases them
+	 *  when the input box goes empty — see notice-gate.ts. Before this, notify() typed straight
+	 *  into the PTY and pressed Enter, merging the notice with whatever was already in the box. */
+	private gate = new NoticeGate({
+		deliver: (text, kind) => {
+			if (kind === 'immediate') { this.writeNotice(text); return; }
+			// A release is triggered BY the user's own keystroke (their Enter / Ctrl+U), which we
+			// have just forwarded. Let it reach the TUI first: ConPTY would otherwise coalesce the
+			// two writes into one chunk and the TUI would read their Enter as a pasted newline —
+			// the same hazard sendLine's 250ms comment describes. This delays the TEXT, not the
+			// Enter timing below, which is unchanged.
+			window.setTimeout(() => this.writeNotice(text), FLUSH_SETTLE_MS);
+		},
+		onQueueChange: (n) => this.renderQueueBadge(n),
+	});
 
 	constructor(private opts: GodConsoleOpts, private onHide: () => void) {}
 
@@ -87,6 +110,12 @@ export class GodConsole {
 		});
 		const head = this.el.createDiv({ cls: 'cos-god-head' });
 		this.nameSpan = head.createSpan({ text: `🜲 ${this.opts.instanceName ?? 'Kane'}` });
+		// Out-of-band queue badge: while notices are held back, SAY so somewhere other than the
+		// terminal. A notice that silently never arrives is indistinguishable from no notice at
+		// all — that exact failure shipped here once already, in the fresh-session fallback.
+		this.queueEl = head.createSpan({ cls: 'cos-notice-queue' });
+		this.queueEl.style.display = 'none';
+		this.queueEl.addEventListener('click', (e) => { e.stopPropagation(); this.gate.flushNow(); });
 		const refreshBtn = head.createEl('button', { text: '⟳', cls: 'cos-term-refresh', attr: { title: 'Refresh Kane — reload with --continue (keeps the conversation)' } });
 		refreshBtn.addEventListener('click', (e) => { e.stopPropagation(); void this.refresh(); });
 		const hide = head.createEl('button', { text: '×', attr: { title: 'Hide Kane (session keeps running)' } });
@@ -167,13 +196,28 @@ export class GodConsole {
 		});
 		this.fitSoon();
 
-		this.term.onData((d) => this.bridge?.write(d));
+		// Forward FIRST, then track: a notice released by this very keystroke (his Enter) must
+		// reach the PTY after it, never before.
+		this.term.onData((d) => { this.bridge?.write(d); this.gate.input(d, this.pasting); });
 		// resume → Kane picks his conversation back up across app restarts, exactly like the
 		// tiles (fresh fallback if no transcript). /clear inside the session starts a new one.
 		this.startSession(this.opts.resume ?? false, this.opts.resume ?? false);
 
 		this.resizeObs = new ResizeObserver(() => this.fitSoon());
 		this.resizeObs.observe(this.bodyEl);
+
+		// The same Claude-hook ready marker the tiles watch for, in this console's home dir (its
+		// cwd, so the Stop hook's `node notify-ready.cjs` writes it there — see writeKaneCommands).
+		// Its only job here is to resync the draft tracker: a turn ending bounds how long a
+		// mis-tracked draft can hold the queue. It does NOT mean "flush anyway" — the gate
+		// decides, and refuses while the keyboard is demonstrably busy.
+		try {
+			this.readyWatcher = fs.watch(this.opts.godHomeDir, (_evt, file) => {
+				if (file !== '.cos-ready') return;
+				try { fs.unlinkSync(path.join(this.opts.godHomeDir, '.cos-ready')); } catch { /* ignore */ }
+				this.gate.ready();
+			});
+		} catch { /* home dir gone / watch unsupported — the badge still offers a way through */ }
 	}
 
 	/** Build args/env, create Kane's session bridge, wire it, and start it. Called from render()
@@ -244,6 +288,9 @@ export class GodConsole {
 		this.busy = false;
 		this.bridge?.kill();
 		this.term?.reset();
+		// New TUI, empty input box — but anything queued is KEPT and goes out on the next ready
+		// marker, rather than being typed into a session that is still booting.
+		this.gate.reset();
 		this.startSession(true, true); // try --continue; if no conversation, fall back to a fresh session
 	}
 
@@ -277,14 +324,34 @@ export class GodConsole {
 		return lines.join('\n');
 	}
 
-	/** Inject a line into Kane's session (text + a separated Enter so ConPTY can't coalesce
-	 *  them) — used to ping him when a watch fires. */
+	/** Inject a line into Kane's session — used to ping him when a watch fires.
+	 *
+	 *  Goes through the gate: if the user has unsubmitted text in Kane's input box, the notice
+	 *  WAITS (and the header badge says so) instead of being typed into the middle of his
+	 *  sentence and submitted with it. An empty box delivers immediately, as it always did. */
 	notify(text: string): void {
+		this.gate.notify(text);
+	}
+
+	/** The actual injection: text + a separated Enter so ConPTY can't coalesce them. Only the
+	 *  gate calls this. */
+	private writeNotice(text: string): void {
 		this.bridge?.write(text);
 		// 250ms + a 900ms retry: match TerminalTile.sendLine — the new TUI's wider paste
 		// window eats a fast \r; the second Enter is a no-op on an already-submitted box.
 		window.setTimeout(() => this.bridge?.write('\r'), 250);
 		window.setTimeout(() => this.bridge?.write('\r'), 900);
+	}
+
+	/** Show/hide the "N waiting" badge in the header. */
+	private renderQueueBadge(n: number): void {
+		const el = this.queueEl;
+		if (!el) return;
+		el.style.display = n > 0 ? '' : 'none';
+		if (n === 0) return;
+		const who = this.opts.instanceName ?? 'Kane';
+		el.setText(`⏳ ${n} waiting`);
+		el.setAttr('title', `${n} notice${n === 1 ? '' : 's'} waiting for ${who} — press Enter or clear the line (Esc / Ctrl+U) and ${n === 1 ? 'it' : 'they'} will be delivered. Click to deliver now (into whatever is in the box).`);
 	}
 
 	/** Scroll this terminal's scrollback buffer per a keyboard scroll intent. */
@@ -311,7 +378,13 @@ export class GodConsole {
 
 	/** Paste clipboard text into the terminal (honors bracketed-paste via term.paste). */
 	private pasteFromClipboard(): void {
-		void readClipboardText().then((txt) => { if (txt) this.term?.paste(txt); });
+		void readClipboardText().then((txt) => {
+			if (!txt) return;
+			// Flag the paste so the draft tracker counts it as typing rather than reading the
+			// newlines inside it as submits (they land in the box; they don't send).
+			this.pasting = true;
+			try { this.term?.paste(txt); } finally { this.pasting = false; }
+		});
 	}
 
 	/** Copy text to the clipboard (used by right-click when there's a selection). */
@@ -351,13 +424,20 @@ export class GodConsole {
 			// board (feeds the Coordination panel's background-tasks list), same as worker terminals.
 			const coordHookAbsPath = path.join(path.dirname(this.opts.sidecarPath), 'coord-hook.cjs');
 			const task = (extra: string) => ({ matcher: 'Task', hooks: [{ type: 'command', command: `node "${coordHookAbsPath}" --task${extra}` }] });
+			// Stop hook → the .cos-ready marker in this console's cwd, watched in render(). The
+			// tiles use Stop AND Notification; this console takes Stop only, on purpose: the
+			// marker's one job here is to resync the draft tracker, and Notification also fires
+			// when Claude has been idle waiting for input — precisely when an untouched draft is
+			// most likely to be sitting in the box.
+			const notifyReadyAbsPath = path.join(path.dirname(this.opts.sidecarPath), 'notify-ready.cjs');
+			const ready = [{ hooks: [{ type: 'command', command: `node "${notifyReadyAbsPath}"` }] }];
 			// With self-improvement enabled, the overseer also gets prompt-free file edits +
 			// git/npm/node, or "builds it and lets you know" would stall on a permission prompt
 			// per edit.
 			const allow = ['Bash(cos-coord:*)', ...(this.opts.selfImprove ? ['Edit', 'Write', 'Bash(git:*)', 'Bash(npm:*)', 'Bash(node:*)'] : [])];
 			fs.writeFileSync(settingsFile, JSON.stringify({
 				permissions: { allow },
-				hooks: { PreToolUse: [task('')], PostToolUse: [task(' --release')] },
+				hooks: { Stop: ready, PreToolUse: [task('')], PostToolUse: [task(' --release')] },
 			}, null, 2), 'utf8');
 		} catch { /* best effort — /personality still works, just with a permission prompt */ }
 	}
@@ -402,6 +482,7 @@ export class GodConsole {
 		// Removing a focused element fires no focusout — clear the grid's focus flag manually.
 		if (this.el?.contains(document.activeElement)) this.opts.onFocusChange?.(false);
 		this.resizeObs?.disconnect(); this.resizeObs = null;
+		this.readyWatcher?.close(); this.readyWatcher = null;
 		this.fitThrottle?.dispose(); this.fitThrottle = null;
 		this.bridge?.kill(); this.bridge = null;
 		this.term?.dispose(); this.term = null;
