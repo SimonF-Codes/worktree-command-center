@@ -878,8 +878,9 @@
 .cos-term-attn.attn-done { background:#123122; color:#5fd07f; }
 /* "N notices waiting" — held back because someone is typing into that session's input box.
    Lives OUTSIDE the terminal on purpose: a queued notice that says nothing reads as no notice.
-   margin-right:auto keeps it beside the name in the space-between headers. */
-.cos-notice-queue { margin-right:auto; font-size:11px; font-weight:700; padding:1px 7px; border-radius:5px; background:#3a2f12; color:#f2cd54; cursor:pointer; white-space:nowrap; }
+   Sized and spaced like the attention marker next to it, so a header gains a chip rather than
+   re-flowing when one appears. */
+.cos-notice-queue { margin-right:6px; font-size:11px; font-weight:700; padding:1px 7px; border-radius:5px; background:#3a2f12; color:#f2cd54; cursor:pointer; white-space:nowrap; }
 .cos-notice-queue:hover { background:#4d3d15; }
 .cos-maximize-btn { background:var(--background-modifier-border); border:none; border-radius:6px; padding:6px 12px; cursor:pointer; color:var(--text-normal); }
 .cos-lock-btn { background:var(--background-modifier-border); border:none; border-radius:6px; padding:6px 12px; cursor:pointer; color:var(--text-normal); }
