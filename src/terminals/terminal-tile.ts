@@ -20,10 +20,15 @@ import { stripAnsi } from './usage-parse';
 import { looksDelivered } from './prompt-detect';
 import type { StageTile } from './stage-tile';
 import type { AttentionKind } from './attention';
+import { NoticeGate } from './notice-gate';
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
+
+/** How long a released backlog waits so the keystroke that emptied the box lands first. Nothing
+ *  to do with sendLine's 250/900ms Enter pair. */
+const FLUSH_SETTLE_MS = 250;
 
 export interface TerminalTileOpts {
 	tileId: number;
@@ -76,6 +81,17 @@ export class TerminalTile implements StageTile {
 	private fitThrottle: FitThrottle | null = null;
 	private badgeEl: HTMLElement | null = null;
 	private attnEl: HTMLElement | null = null;
+	private queueEl: HTMLElement | null = null;
+	/** Same gate as Kane's console (notice-gate.ts): a message typed into this session waits
+	 *  while someone is typing into it, instead of landing inside their half-written line. */
+	private gate = new NoticeGate({
+		deliver: (text, kind) => {
+			if (kind === 'immediate') { this.writeLine(text); return; }
+			// Let the keystroke that emptied the box reach the TUI first — see god-console.ts.
+			window.setTimeout(() => this.writeLine(text), FLUSH_SETTLE_MS);
+		},
+		onQueueChange: (n) => this.renderQueueBadge(n),
+	});
 	private lockBtnEl: HTMLButtonElement | null = null;
 	private remoteBtnEl: HTMLButtonElement | null = null;
 	private remoteOn = false;
@@ -111,6 +127,10 @@ export class TerminalTile implements StageTile {
 		this.badgeEl = head.createSpan({ cls: 'cos-term-badge' });
 		this.attnEl = head.createSpan({ cls: 'cos-term-attn' });
 		this.attnEl.style.display = 'none';
+		// Out-of-band "N waiting" badge for messages held back while someone types here.
+		this.queueEl = head.createSpan({ cls: 'cos-notice-queue' });
+		this.queueEl.style.display = 'none';
+		this.queueEl.addEventListener('click', (e) => { e.stopPropagation(); this.gate.flushNow(); });
 		this.nameEl = head.createSpan({ cls: 'cos-term-name', text: this.displayName, attr: { title: 'Double-click to rename' } });
 		this.nameEl.addEventListener('dblclick', (e) => { e.stopPropagation(); this.opts.onRequestRename?.(this, this.displayName); });
 		// Right-clustered controls: remote, lock, minimize (hide), close.
@@ -236,6 +256,9 @@ export class TerminalTile implements StageTile {
 			// not revive a dead session with nobody at the keyboard.
 			if (this.ended && isUserInput(d)) { this.ended = false; this.term?.reset(); this.startSession(true, true); return; }
 			this.bridge?.write(d); // always forwarded — Claude asked for these reports
+			// Track the input box AFTER forwarding, so a message released by this very keystroke
+			// (their Enter) reaches the PTY behind it, never in front of it.
+			this.gate.input(d, this.pasting);
 			if (this.pasting) return; // pasted content (incl. its newlines) is NOT a submit
 			// Only a HUMAN keystroke means "this session is being worked on". xterm answers
 			// Claude's focus reporting (DECSET 1004) on the same channel, so the focus/blur
@@ -263,6 +286,7 @@ export class TerminalTile implements StageTile {
 				if (file === '.cos-ready') {
 					try { fs.unlinkSync(path.join(this.opts.worktree.worktreePath, '.cos-ready')); } catch { /* ignore */ }
 					this.idle = true;
+					this.gate.ready();   // bound draft-tracker drift to one turn (see notice-gate.ts)
 					this.opts.onReady?.(this);
 				}
 			});
@@ -421,8 +445,32 @@ export class TerminalTile implements StageTile {
 		this.term?.blur();
 	}
 
-	/** Type a line into the session (text + Enter) — used by the chat broadcast/relay. */
+	/** Type a line into the session (text + Enter) — used by the chat broadcast/relay and by an
+	 *  overseer-spawned terminal's initial task.
+	 *
+	 *  Gated: if someone has unsubmitted text in THIS terminal's input box, the line waits (the
+	 *  header shows "N waiting") instead of being typed into the middle of their sentence and
+	 *  submitted with it. An empty box behaves exactly as it always did. */
 	sendLine(text: string): void {
+		this.gate.notify(text);
+	}
+
+	/** True while this terminal's input box appears to hold unsubmitted typing. deliverLine uses
+	 *  it to refuse rather than type over someone. */
+	get isDrafting(): boolean { return this.gate.drafting; }
+
+	/** Show/hide the "N waiting" badge in this tile's header. */
+	private renderQueueBadge(n: number): void {
+		const el = this.queueEl;
+		if (!el) return;
+		el.style.display = n > 0 ? '' : 'none';
+		if (n === 0) return;
+		el.setText(`⏳ ${n} waiting`);
+		el.setAttr('title', `${n} message${n === 1 ? '' : 's'} waiting for ${this.displayName} — press Enter or clear the line (Esc / Ctrl+U) and ${n === 1 ? 'it' : 'they'} will be delivered. Click to deliver now (into whatever is in the box).`);
+	}
+
+	/** The actual injection. Only the gate calls this. */
+	private writeLine(text: string): void {
 		this.bridge?.write(text);
 		// Submit Enter as a SEPARATE write on a later tick. Bundling "text\r" into one PTY
 		// write makes Claude's input treat the trailing \r as a pasted newline — it lands in
@@ -455,6 +503,12 @@ export class TerminalTile implements StageTile {
 	 *  trace of them at all); it does not further prove the message was ACTED on, same as
 	 *  the sendLine dance it replaces never did either. */
 	async deliverLine(text: string, clearFirst = false): Promise<boolean> {
+		// Someone is typing in here. Do not type over them, and do NOT clear the box either --
+		// `clearFirst` would wipe their draft outright. Report "not delivered" so the caller's
+		// retry loop comes back in a few seconds; if the window runs out, the tell is reported
+		// as undelivered, which is the truth. Queuing it instead would be wrong here: this path
+		// exists to tell the sender whether the message actually landed.
+		if (this.gate.drafting) return false;
 		if (clearFirst) this.bridge?.write('\x15'); // Ctrl+U: clear a stale unsubmitted retry
 		this.bridge?.write(text);
 		await delay(250);
@@ -727,6 +781,7 @@ export class TerminalTile implements StageTile {
 		this.hiddenBuf.clear(); // old-session output must not replay into the fresh screen
 		this.term?.reset();
 		this.idle = false;
+		this.gate.reset(); // fresh TUI, empty box — anything queued waits for the next ready marker
 		this.startSession(true, true);
 	}
 }
