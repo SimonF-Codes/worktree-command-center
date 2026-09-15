@@ -5,6 +5,34 @@ landed on `main`.
 
 ## Unreleased
 
+**A notification never types into a line you are still writing**
+- A watch firing while you were mid-sentence in Kane's console did not overwrite your draft — it
+  MERGED with it and pressed Enter, submitting the mixture as if you had written it. `notify()`
+  wrote the notice into the PTY as keystrokes and pressed Enter 250ms later, without ever looking
+  at what was already in the input box. `TerminalTile.sendLine` (chat broadcasts, relays, an
+  overseer-spawned terminal's initial task) had the identical shape and the identical bug.
+- Both now go through one shared gate (`notice-gate.ts`), which tracks the input box from the
+  keystrokes the app already sees on their way to the PTY — no screen scraping of the TUI's prompt
+  line, which changes too often to depend on. An empty box behaves exactly as before, including
+  the 250/900ms Enter pair, which is unchanged and still load-bearing. A non-empty box queues, and
+  the queue is released on the transition back to empty: your Enter, Ctrl+U, Esc, or backspacing
+  the line away.
+- Nothing is ever dropped. Exact duplicates coalesce and the entry count is capped, but overflow
+  merges rather than discarding, and a release delivers everything pending as one message — a
+  watch notice is the only thing that tells the overseer a worker finished.
+- While anything is held, the session's header says `⏳ N waiting`, with the way out in its
+  tooltip; clicking it delivers immediately, draft and all, for when you want it anyway. A queued
+  notice that said nothing would read exactly like no notice at all.
+- The tracker is a heuristic, so a session's `.cos-ready` marker resyncs it (Kane's console now
+  gets a `Stop` hook to produce one). There is deliberately no timer that delivers anyway after N
+  seconds — that is the original bug with a delay. The resync also waits for a moment's quiet at
+  the keyboard first: a turn ending does not prove the box is empty, because you can type while
+  Claude works.
+- `cos-coord tell` doesn't queue — delivery there is verified, and a queued message hasn't been
+  delivered. It now refuses while someone is typing in the target and retries on its existing 5s
+  cadence. This also stops a retry's `Ctrl+U` (meant for a stale unsubmitted retry) from wiping a
+  real draft, and an exhausted retry window now says so specifically instead of blaming a compact.
+
 **The connector channel's `tell` had the same swallowing bug as `cos-coord tell` — closed the same way**
 - `handleConnectorRequest` typed the message in and wrote an `accepted` receipt immediately,
   unconditionally — the same fire-and-hope `sendLine` call the CLI `tell` fix above replaced, just
