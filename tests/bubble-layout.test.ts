@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight, bestFitShape, cellsInTile, minTileSize, DEFAULT_CELL_METRICS, rawBand, autoBand, shapeForBand, isLayoutMode, type CellMetrics } from '../src/terminals/bubble-layout';
+import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight, bestFitShape, cellsInTile, minTileSize, DEFAULT_CELL_METRICS, rawBand, autoBand, shapeForBand, autoShape, shapeFits, isLayoutMode, type CellMetrics } from '../src/terminals/bubble-layout';
 
 /** A deliberately round cell so the arithmetic in these tests is checkable by hand:
  *  10px per column, 20px per row, 80x20 minimum ⇒ a usable tile is 800x400 + chrome. */
@@ -86,12 +86,20 @@ describe('settledLayout', () => {
 		expect(r[0]!.h).toBe(900 - 16);
 	});
 	it('honours the minimum and overflows the stage rather than shrinking below it', () => {
-		// Four tiles on a box that cannot give any of them 80x20: tiles stay at the minimum and
-		// the layout runs off the stage, which then scrolls.
+		// Four tiles on a box that cannot give any of them 80x20: no tile goes below the minimum,
+		// and the layout runs off the stage, which then scrolls.
 		const r = settledLayout([1, 2, 3, 4], 900, 500, 8, { metrics: M });
 		const min = minTileSize(M);
-		for (const t of r) { expect(t.w).toBe(min.w); expect(t.h).toBe(min.h); }
-		expect(Math.max(...r.map((t) => t.x + t.w))).toBeGreaterThan(900); // scrolls, by design
+		for (const t of r) { expect(t.w).toBeGreaterThanOrEqual(min.w); expect(t.h).toBeGreaterThanOrEqual(min.h); }
+		expect(Math.max(...r.map((t) => t.y + t.h))).toBeGreaterThan(500);        // scrolls, by design
+	});
+	it('when it must overflow, it overflows DOWNWARDS and keeps the tiles full-width', () => {
+		// Scrolling down past full-width tiles beats scrolling sideways past half-width ones, and
+		// once tiles are pinned at the minimum the scroll direction is all there is left to choose.
+		const r = settledLayout([1, 2, 3, 4, 5, 6], 900, 800, 8, { metrics: M });
+		expect(new Set(r.map((t) => t.x)).size).toBe(1);                          // one column
+		expect(Math.max(...r.map((t) => t.x + t.w))).toBeLessThanOrEqual(900);    // …so no sideways scroll
+		expect(Math.max(...r.map((t) => t.y + t.h))).toBeGreaterThan(800);
 	});
 	it('an explicit shape overrides the search (Columns / Rows modes)', () => {
 		const r = settledLayout([1, 2, 3], 2400, 1400, 8, { metrics: M, shape: { cols: 3, rows: 1 } });
@@ -361,5 +369,30 @@ describe('centeredLayout — the satellite edges come from the stage shape', () 
 				sane(centeredLayout(ids, W, H, 8, 1), W, H);
 			}
 		}
+	});
+});
+
+describe('autoShape — Auto does not scroll when it does not have to', () => {
+	it("falls back to the grid when the band's own shape cannot seat the tiles", () => {
+		// Six terminals on an ultrawide stage: the Columns band would pin them to six slivers at
+		// the minimum and scroll, when 3x2 fits outright.
+		const W = 3420, H = 1265;
+		expect(shapeForBand('columns', 6, W, H, 8, DEFAULT_CELL_METRICS)).toEqual({ cols: 6, rows: 1 });
+		expect(shapeFits(W, H, 8, { cols: 6, rows: 1 }, DEFAULT_CELL_METRICS)).toBe(false);
+		const s = autoShape('columns', 6, W, H, 8, DEFAULT_CELL_METRICS);
+		expect(s).toEqual({ cols: 3, rows: 2 });
+		expect(shapeFits(W, H, 8, s, DEFAULT_CELL_METRICS)).toBe(true);
+	});
+	it('keeps the band when it fits — four terminals on the same ultrawide stay columns', () => {
+		expect(autoShape('columns', 4, 3420, 1265, 8, DEFAULT_CELL_METRICS)).toEqual({ cols: 4, rows: 1 });
+	});
+	it('keeps the band when nothing fits — a portrait stage still stacks and scrolls', () => {
+		const W = 1060, H = 1745;
+		const s = autoShape('rows', 6, W, H, 8, DEFAULT_CELL_METRICS);
+		expect(s).toEqual({ cols: 1, rows: 6 });                                  // full width, scroll down
+		expect(shapeFits(W, H, 8, s, DEFAULT_CELL_METRICS)).toBe(false);
+	});
+	it('a NAMED mode never falls back — Columns means columns even when they scroll', () => {
+		expect(shapeForBand('columns', 6, 3420, 1265, 8, DEFAULT_CELL_METRICS)).toEqual({ cols: 6, rows: 1 });
 	});
 });

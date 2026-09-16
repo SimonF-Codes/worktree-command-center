@@ -73,20 +73,35 @@ function shapeScore(W: number, H: number, gap: number, s: Shape, m: CellMetrics)
  *  and at most one row is short. Ties break toward fewer rows on a landscape box and fewer columns
  *  on a portrait one — i.e. toward spending the abundant dimension.
  *
+ *  Shapes that clear the minimum outrank shapes that do not, and among those that do not, shapes
+ *  that at least clear it in WIDTH outrank the rest. That is not a second rule bolted on: tiles
+ *  below the minimum are held AT the minimum and the stage scrolls, so for those shapes the score
+ *  is measuring a cell size that no longer happens — all that is left to choose between them is
+ *  which way the stage has to scroll, and scrolling down past full-width tiles beats scrolling
+ *  sideways past half-width ones. Without the ranking, six tiles on a half-width window come out
+ *  as a 2x3 that scrolls BOTH ways instead of a single column that scrolls down.
+ *
  *  This replaced `Math.ceil(Math.sqrt(n))`, which read only n: four tiles were a 2x2 grid on every
  *  screen there is, halving an already-narrow portrait width and wasting an ultrawide. */
 export function bestFitShape(n: number, W: number, H: number, gap: number, m: CellMetrics = DEFAULT_CELL_METRICS): Shape {
 	if (n <= 1) return { cols: 1, rows: 1 };
 	const landscape = W >= H;
+	const min = minTileSize(m);
 	let best: Shape = { cols: 1, rows: n };
+	let bestRank = -1;
 	let bestScore = -Infinity;
 	for (let cols = 1; cols <= n; cols++) {
 		const s: Shape = { cols, rows: Math.ceil(n / cols) };
+		const px = cellPx(W, H, gap, s);
+		const rank = px.w < min.w ? 0 : px.h < min.h ? 1 : 2;
 		const score = shapeScore(W, H, gap, s, m);
-		const tied = Math.abs(score - bestScore) < 1e-9;
-		if (score > bestScore + 1e-9 || (tied && (landscape ? s.rows < best.rows : s.cols < best.cols))) {
+		const tied = rank === bestRank && Math.abs(score - bestScore) < 1e-9;
+		if (rank > bestRank
+			|| (rank === bestRank && score > bestScore + 1e-9)
+			|| (tied && (landscape ? s.rows < best.rows : s.cols < best.cols))) {
 			best = s;
-			bestScore = Math.max(score, bestScore);
+			bestRank = rank;
+			bestScore = score;
 		}
 	}
 	return best;
@@ -146,6 +161,27 @@ export function shapeForBand(band: LayoutBand, n: number, W: number, H: number, 
 	if (band === 'columns') return { cols: count, rows: 1 };
 	if (band === 'rows') return { cols: 1, rows: count };
 	return bestFitShape(count, W, H, gap, m);
+}
+
+/** Does this shape seat every tile at the minimum without the stage having to scroll? */
+export function shapeFits(W: number, H: number, gap: number, s: Shape, m: CellMetrics = DEFAULT_CELL_METRICS): boolean {
+	const px = cellPx(W, H, gap, s);
+	const min = minTileSize(m);
+	return px.w >= min.w && px.h >= min.h;
+}
+
+/** The shape Auto uses: its band's, unless that band cannot seat the tiles at the minimum while
+ *  the best-fit grid can. Six terminals on an ultrawide stage are the case — the Columns band
+ *  would pin them to six 80-column slivers and scroll, when 3x2 fits comfortably without
+ *  scrolling at all, and Auto exists to pick the best layout for the box.
+ *
+ *  A NAMED mode (Grid/Columns/Rows) never falls back: it is the escape hatch for when Simon knows
+ *  better than the heuristic, so it does what it says even when the result has to scroll. */
+export function autoShape(band: LayoutBand, n: number, W: number, H: number, gap: number, m: CellMetrics = DEFAULT_CELL_METRICS): Shape {
+	const preferred = shapeForBand(band, n, W, H, gap, m);
+	if (band === 'grid' || shapeFits(W, H, gap, preferred, m)) return preferred;
+	const grid = bestFitShape(Math.max(1, n), W, H, gap, m);
+	return shapeFits(W, H, gap, grid, m) ? grid : preferred;
 }
 
 export interface SettledOpts {

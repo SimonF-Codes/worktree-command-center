@@ -14,7 +14,7 @@ import { openExternalUrl, revealInFileManager } from './links';
 import { EDITORS, FILE_BROWSER, CUSTOM_EDITOR, resolveEditorCommand, type EditorDef } from './editor-launch';
 import { ChatRoom } from './chat-room';
 import { ChatTile } from './chat-tile';
-import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight, autoBand, LAYOUT_OPTIONS, DEFAULT_CELL_METRICS, MIN_TERM_COLS, MIN_TERM_ROWS, type CellMetrics, type LayoutBand, type LayoutMode } from './bubble-layout';
+import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight, autoBand, autoShape, shapeForBand, LAYOUT_OPTIONS, DEFAULT_CELL_METRICS, MIN_TERM_COLS, MIN_TERM_ROWS, type CellMetrics, type LayoutBand, type LayoutMode } from './bubble-layout';
 import { emptyState, applyKeystroke, onReady as rqReady, onSubmit as rqSubmit, onClose as rqClose, onClick as rqClick, onOverview as rqOverview } from './ready-queue';
 import { decideCenter, type SpotlightState } from './focus-decider';
 import { partitionByHidden } from './session-partition';
@@ -1563,7 +1563,7 @@ export class TerminalsGrid {
 		const spotlight = centerId !== null && (mode === 'auto' || mode === 'focus');
 		const rects = spotlight
 			? centeredLayout(ids, W, H, 8, centerId!, { metrics, band, focus: mode === 'focus' })
-			: settledLayout(ids, W, H, 8, { metrics, band: mode === 'auto' || mode === 'focus' ? band : mode });
+			: settledLayout(ids, W, H, 8, { metrics, shape: mode === 'auto' || mode === 'focus' ? autoShape(band, ids.length, W, H, 8, metrics) : shapeForBand(mode, ids.length, W, H, 8, metrics) });
 		for (const t of this.tiles) {
 			const r = rects.find((x) => x.id === t.tileId);
 			if (r) t.setRect(r);
