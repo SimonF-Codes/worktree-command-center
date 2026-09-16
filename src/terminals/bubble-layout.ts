@@ -1,13 +1,118 @@
 export interface Rect { id: number; x: number; y: number; w: number; h: number; }
 
-/** Adaptive grid filling the stage. */
-export function settledLayout(ids: number[], W: number, H: number, gap: number): Rect[] {
+/** Below this a terminal is not a terminal any more: the Claude Code TUI wraps badly under 80
+ *  columns, and under ~20 rows the input box and context line fall off the bottom. Everything
+ *  here is expressed against these two numbers rather than against pixels. */
+export const MIN_TERM_COLS = 80;
+export const MIN_TERM_ROWS = 20;
+
+/** What one character cell costs in pixels, and what the tile chrome around it costs, MEASURED
+ *  from a live xterm rather than assumed.
+ *
+ *  A pixel floor ("a tile is usable at 570px") is only true for one font size on one display —
+ *  the layout that is right at 14px on a 1080p screen is wrong at 20px or on a 4K panel, which
+ *  is exactly the class of bug this module exists to stop making. So the caller measures the
+ *  live terminal and injects the result; nothing in here touches the DOM. */
+export interface CellMetrics {
+	cw: number;        // px per character column
+	ch: number;        // px per character row
+	chromeW: number;   // px of the tile box that is not character cells, horizontally
+	chromeH: number;   // …and vertically (header, borders, padding, scrollbar gutter)
+	minCols: number;
+	minRows: number;
+}
+
+/** The half a live terminal can report; the minimums are the caller's policy, not the font's. */
+export type TileCellMetrics = Pick<CellMetrics, 'cw' | 'ch' | 'chromeW' | 'chromeH'>;
+
+/** Only for before any terminal has rendered (a tab holding just a journal tile, or the very
+ *  first layout): a 12px monospace at 1×, matching TerminalTile's `new Terminal({ fontSize: 12 })`
+ *  and the .cos-term-head/.cos-term-body chrome. Replaced by real metrics as soon as one exists. */
+export const DEFAULT_CELL_METRICS: CellMetrics = { cw: 7, ch: 16, chromeW: 10, chromeH: 33, minCols: MIN_TERM_COLS, minRows: MIN_TERM_ROWS };
+
+/** How many character columns/rows a tile of this pixel size can actually show. */
+export function cellsInTile(w: number, h: number, m: CellMetrics): { cols: number; rows: number } {
+	return {
+		cols: Math.max(0, Math.floor((w - m.chromeW) / Math.max(1, m.cw))),
+		rows: Math.max(0, Math.floor((h - m.chromeH) / Math.max(1, m.ch))),
+	};
+}
+
+/** The smallest tile that is still a usable terminal, in pixels for THIS font and display. */
+export function minTileSize(m: CellMetrics): { w: number; h: number } {
+	return { w: Math.ceil(m.minCols * m.cw + m.chromeW), h: Math.ceil(m.minRows * m.ch + m.chromeH) };
+}
+
+export interface Shape { cols: number; rows: number; }
+
+function cellPx(W: number, H: number, gap: number, s: Shape): { w: number; h: number } {
+	return { w: Math.floor((W - gap * (s.cols + 1)) / s.cols), h: Math.floor((H - gap * (s.rows + 1)) / s.rows) };
+}
+
+/** Past this multiple of the minimum, an axis stops earning credit. 160 columns is no more
+ *  readable than 160 columns; without the cap the score keeps trading one huge axis against the
+ *  other on a big screen and two tiles on a 16:9 stage come out stacked into letterbox strips
+ *  instead of side by side. Twice the minimum is "comfortable"; beyond it the tie-break decides. */
+const HEADROOM_CAP = 2;
+
+/** How good a shape is on this box: the WORSE of its two axes, each measured against the minimum
+ *  it has to clear. 1.0 means "exactly usable", above is headroom, below is how far short it
+ *  falls. Taking the minimum of the two ratios is the whole trick — a shape that buys columns by
+ *  starving rows scores as badly as the starved axis, so portrait boxes pick tall-thin shapes and
+ *  ultrawide boxes pick short-wide ones without either being a special case anywhere. */
+function shapeScore(W: number, H: number, gap: number, s: Shape, m: CellMetrics): number {
+	const px = cellPx(W, H, gap, s);
+	const c = cellsInTile(px.w, px.h, m);
+	const cols = Math.min(HEADROOM_CAP, c.cols / Math.max(1, m.minCols));
+	const rows = Math.min(HEADROOM_CAP, c.rows / Math.max(1, m.minRows));
+	return Math.min(cols, rows);
+}
+
+/** Pick the (cols, rows) that maximises the smallest resulting cell, measured in CHARACTER CELLS.
+ *  Candidates are every column count 1..n with rows = ceil(n / cols), so cols * rows >= n always
+ *  and at most one row is short. Ties break toward fewer rows on a landscape box and fewer columns
+ *  on a portrait one — i.e. toward spending the abundant dimension.
+ *
+ *  This replaced `Math.ceil(Math.sqrt(n))`, which read only n: four tiles were a 2x2 grid on every
+ *  screen there is, halving an already-narrow portrait width and wasting an ultrawide. */
+export function bestFitShape(n: number, W: number, H: number, gap: number, m: CellMetrics = DEFAULT_CELL_METRICS): Shape {
+	if (n <= 1) return { cols: 1, rows: 1 };
+	const landscape = W >= H;
+	let best: Shape = { cols: 1, rows: n };
+	let bestScore = -Infinity;
+	for (let cols = 1; cols <= n; cols++) {
+		const s: Shape = { cols, rows: Math.ceil(n / cols) };
+		const score = shapeScore(W, H, gap, s, m);
+		const tied = Math.abs(score - bestScore) < 1e-9;
+		if (score > bestScore + 1e-9 || (tied && (landscape ? s.rows < best.rows : s.cols < best.cols))) {
+			best = s;
+			bestScore = Math.max(score, bestScore);
+		}
+	}
+	return best;
+}
+
+export interface SettledOpts {
+	metrics?: CellMetrics;
+	/** Override the shape search (used by the Columns/Rows layout modes). */
+	shape?: Shape;
+}
+
+/** Adaptive grid filling the stage, shaped by the box and not just by the tile count. */
+export function settledLayout(ids: number[], W: number, H: number, gap: number, opts: SettledOpts = {}): Rect[] {
 	const n = ids.length;
 	if (n === 0) return [];
-	const cols = Math.ceil(Math.sqrt(n));
-	const rows = Math.ceil(n / cols);
-	const tw = Math.floor((W - gap * (cols + 1)) / cols);
-	const th = Math.floor((H - gap * (rows + 1)) / rows);
+	const m = opts.metrics ?? DEFAULT_CELL_METRICS;
+	const shape = opts.shape ?? bestFitShape(n, W, H, gap, m);
+	const cols = Math.max(1, shape.cols);
+	const rows = Math.max(1, shape.rows);
+	const min = minTileSize(m);
+	// Honour the minimum instead of shrinking past it. When n tiles genuinely cannot fit at
+	// 80x20 the tiles keep that size and the stage scrolls (.cos-terminals-stage is overflow:auto
+	// for exactly this): twelve unreadable slivers is not a layout, and a terminal below the
+	// minimum is the failure this whole module exists to prevent.
+	const tw = Math.max(min.w, Math.floor((W - gap * (cols + 1)) / cols));
+	const th = Math.max(min.h, Math.floor((H - gap * (rows + 1)) / rows));
 	return ids.map((id, i) => {
 		const c = i % cols;
 		const r = Math.floor(i / cols);

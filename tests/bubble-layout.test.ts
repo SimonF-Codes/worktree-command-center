@@ -1,21 +1,104 @@
 import { describe, it, expect } from 'vitest';
-import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight } from '../src/terminals/bubble-layout';
+import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight, bestFitShape, cellsInTile, minTileSize, DEFAULT_CELL_METRICS, type CellMetrics } from '../src/terminals/bubble-layout';
+
+/** A deliberately round cell so the arithmetic in these tests is checkable by hand:
+ *  10px per column, 20px per row, 80x20 minimum ⇒ a usable tile is 800x400 + chrome. */
+const M: CellMetrics = { cw: 10, ch: 20, chromeW: 0, chromeH: 0, minCols: 80, minRows: 20 };
+
+describe('cellsInTile / minTileSize', () => {
+	it('converts a pixel box into character cells, chrome first', () => {
+		expect(cellsInTile(800, 400, M)).toEqual({ cols: 80, rows: 20 });
+		expect(cellsInTile(800, 400, { ...M, chromeW: 10, chromeH: 40 })).toEqual({ cols: 79, rows: 18 });
+	});
+	it('never reports negative cells for a tile smaller than its own chrome', () => {
+		expect(cellsInTile(4, 4, { ...M, chromeW: 10, chromeH: 40 })).toEqual({ cols: 0, rows: 0 });
+	});
+	it('minTileSize is the minimum in cells, priced at the CURRENT font', () => {
+		expect(minTileSize(M)).toEqual({ w: 800, h: 400 });
+		expect(minTileSize({ ...M, cw: 20, ch: 40 })).toEqual({ w: 1600, h: 800 }); // bigger font ⇒ bigger floor
+	});
+});
+
+describe('bestFitShape — the shape comes from the BOX, not from sqrt(n)', () => {
+	it('n=4 on a PORTRAIT stage is one column, not 2x2', () => {
+		expect(bestFitShape(4, 900, 2400, 8, M)).toEqual({ cols: 1, rows: 4 });
+	});
+	it('n=4 on an ULTRAWIDE stage is one row, not 2x2', () => {
+		expect(bestFitShape(4, 5120, 900, 8, M)).toEqual({ cols: 4, rows: 1 });
+	});
+	it('n=4 on a SQUARE stage stays 2x2', () => {
+		expect(bestFitShape(4, 2000, 2000, 8, M)).toEqual({ cols: 2, rows: 2 });
+	});
+	it('a single tile is always 1x1', () => {
+		expect(bestFitShape(1, 400, 4000, 8, M)).toEqual({ cols: 1, rows: 1 });
+	});
+	it('the same n on the same aspect but a different FONT can want a different shape', () => {
+		const box = { W: 1800, H: 1000 };
+		// Small cells: two columns each clear 80 cols, so the wide box splits sideways.
+		expect(bestFitShape(2, box.W, box.H, 8, { ...M, cw: 5, ch: 10 })).toEqual({ cols: 2, rows: 1 });
+		// Double the font and a half-width tile no longer clears 80 columns — stack instead.
+		expect(bestFitShape(2, box.W, box.H, 8, { ...M, cw: 20, ch: 20 })).toEqual({ cols: 1, rows: 2 });
+	});
+	it('once both axes are comfortable, the abundant dimension is spent (16:9, two tiles)', () => {
+		// Both shapes clear 80x20 easily here; the headroom cap stops the score from preferring
+		// a 267x26 letterbox strip over a 132x56 tile just because it maximises columns.
+		expect(bestFitShape(2, 1900, 950, 8, DEFAULT_CELL_METRICS)).toEqual({ cols: 2, rows: 1 });
+	});
+	it('six tiles on a big 16:9 screen come out 3x2, not six slivers or six strips', () => {
+		expect(bestFitShape(6, 3840, 2000, 8, DEFAULT_CELL_METRICS)).toEqual({ cols: 3, rows: 2 });
+	});
+	it('chooses cols*rows >= n, never fewer slots than tiles', () => {
+		for (let n = 1; n <= 12; n++) {
+			const s = bestFitShape(n, 1600, 1000, 8, M);
+			expect(s.cols * s.rows).toBeGreaterThanOrEqual(n);
+			expect(s.cols).toBeGreaterThanOrEqual(1);
+			expect(s.rows).toBeGreaterThanOrEqual(1);
+		}
+	});
+});
 
 describe('settledLayout', () => {
-	it('lays N tiles in an adaptive grid, all within bounds', () => {
-		const r = settledLayout([1, 2, 3, 4], 1000, 600, 8);
+	it('lays N tiles in an adaptive grid, all within bounds when they fit', () => {
+		const r = settledLayout([1, 2, 3, 4], 2000, 1400, 8, { metrics: M });
 		expect(r).toHaveLength(4);
 		for (const t of r) {
 			expect(t.x).toBeGreaterThanOrEqual(0);
 			expect(t.y).toBeGreaterThanOrEqual(0);
-			expect(t.x + t.w).toBeLessThanOrEqual(1000);
-			expect(t.y + t.h).toBeLessThanOrEqual(600);
+			expect(t.x + t.w).toBeLessThanOrEqual(2000);
+			expect(t.y + t.h).toBeLessThanOrEqual(1400);
 			expect(t.w).toBeGreaterThan(0);
 			expect(t.h).toBeGreaterThan(0);
 		}
 	});
 	it('returns [] for no tiles', () => {
 		expect(settledLayout([], 800, 600, 8)).toEqual([]);
+	});
+	it('stacks full-width tiles on a portrait stage (the 2x2-on-a-vertical-monitor bug)', () => {
+		const r = settledLayout([1, 2, 3, 4], 900, 2400, 8, { metrics: M });
+		expect(new Set(r.map((t) => t.x)).size).toBe(1);       // one column
+		expect(new Set(r.map((t) => t.y)).size).toBe(4);       // four rows
+		expect(r[0]!.w).toBe(900 - 16);                        // full width, not half of it
+	});
+	it('spreads full-height columns on an ultrawide stage', () => {
+		const r = settledLayout([1, 2, 3, 4], 5120, 900, 8, { metrics: M });
+		expect(new Set(r.map((t) => t.y)).size).toBe(1);
+		expect(new Set(r.map((t) => t.x)).size).toBe(4);
+		expect(r[0]!.h).toBe(900 - 16);
+	});
+	it('honours the minimum and overflows the stage rather than shrinking below it', () => {
+		// Four tiles on a box that cannot give any of them 80x20: tiles stay at the minimum and
+		// the layout runs off the stage, which then scrolls.
+		const r = settledLayout([1, 2, 3, 4], 900, 500, 8, { metrics: M });
+		const min = minTileSize(M);
+		for (const t of r) { expect(t.w).toBe(min.w); expect(t.h).toBe(min.h); }
+		expect(Math.max(...r.map((t) => t.x + t.w))).toBeGreaterThan(900); // scrolls, by design
+	});
+	it('an explicit shape overrides the search (Columns / Rows modes)', () => {
+		const r = settledLayout([1, 2, 3], 2400, 1400, 8, { metrics: M, shape: { cols: 3, rows: 1 } });
+		expect(new Set(r.map((t) => t.y)).size).toBe(1);
+	});
+	it('defaults to the built-in metrics when none are injected', () => {
+		expect(settledLayout([1], 1000, 600, 8)).toEqual(settledLayout([1], 1000, 600, 8, { metrics: DEFAULT_CELL_METRICS }));
 	});
 });
 
