@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight, bestFitShape, cellsInTile, minTileSize, DEFAULT_CELL_METRICS, type CellMetrics } from '../src/terminals/bubble-layout';
+import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight, bestFitShape, cellsInTile, minTileSize, DEFAULT_CELL_METRICS, rawBand, autoBand, shapeForBand, isLayoutMode, type CellMetrics } from '../src/terminals/bubble-layout';
 
 /** A deliberately round cell so the arithmetic in these tests is checkable by hand:
  *  10px per column, 20px per row, 80x20 minimum ⇒ a usable tile is 800x400 + chrome. */
@@ -199,5 +199,60 @@ describe('nextSpotlight (Alt+←/→ cycle incl. equal-grid stop)', () => {
 	it('no tiles → only the equal grid', () => {
 		expect(nextSpotlight([], null, 1)).toBeNull();
 		expect(nextSpotlight([], 5, 1)).toBeNull();
+	});
+});
+
+describe('autoBand — Auto follows the stage aspect', () => {
+	it('narrow stacks, ultrawide splits, in between is a grid', () => {
+		expect(rawBand(0.5)).toBe('rows');
+		expect(rawBand(1.0)).toBe('grid');
+		expect(rawBand(3.5)).toBe('columns');
+	});
+	it('with no previous band it just reads the aspect', () => {
+		expect(autoBand(0.5, null)).toBe('rows');
+		expect(autoBand(2.4, null)).toBe('columns');
+	});
+	it('HYSTERESIS: a wobble across a boundary smaller than the margin does not flip', () => {
+		// Dragging a window edge around 0.8 — the raw band changes on every sample, the
+		// applied band does not.
+		for (const a of [0.81, 0.79, 0.78, 0.8, 0.76, 0.82]) expect(autoBand(a, 'grid')).toBe('grid');
+		for (const a of [0.79, 0.81, 0.85, 0.87, 0.8]) expect(autoBand(a, 'rows')).toBe('rows');
+		// …and the same around the ultrawide edge.
+		for (const a of [2.21, 2.3, 2.4, 2.19]) expect(autoBand(a, 'grid')).toBe('grid');
+		for (const a of [2.19, 2.05, 2.0, 2.25]) expect(autoBand(a, 'columns')).toBe('columns');
+	});
+	it('switches once the aspect clears the boundary by the margin', () => {
+		expect(autoBand(0.71, 'grid')).toBe('rows');       // past 0.8 × 0.9
+		expect(autoBand(2.43, 'grid')).toBe('columns');    // past 2.2 × 1.1
+		expect(autoBand(0.89, 'rows')).toBe('grid');       // past 0.8 × 1.1
+		expect(autoBand(1.97, 'columns')).toBe('grid');    // past 2.2 × 0.9
+	});
+	it('a jump straight across both bands lands on the far one, not the middle', () => {
+		expect(autoBand(3.0, 'rows')).toBe('columns');
+		expect(autoBand(0.4, 'columns')).toBe('rows');
+	});
+	it('is stable: re-applying a band to its own aspect never moves', () => {
+		for (const a of [0.3, 0.6, 0.8, 1.2, 2.2, 2.6, 5]) {
+			const b = autoBand(a, null);
+			expect(autoBand(a, b)).toBe(b);
+		}
+	});
+});
+
+describe('shapeForBand', () => {
+	it('columns is one row, rows is one column, grid searches', () => {
+		expect(shapeForBand('columns', 4, 2000, 1000, 8, DEFAULT_CELL_METRICS)).toEqual({ cols: 4, rows: 1 });
+		expect(shapeForBand('rows', 4, 2000, 1000, 8, DEFAULT_CELL_METRICS)).toEqual({ cols: 1, rows: 4 });
+		expect(shapeForBand('grid', 4, 2000, 2000, 8, DEFAULT_CELL_METRICS)).toEqual({ cols: 2, rows: 2 });
+	});
+	it('a named band beats the box — Columns stays columns on a portrait stage', () => {
+		expect(shapeForBand('columns', 4, 900, 2400, 8, DEFAULT_CELL_METRICS)).toEqual({ cols: 4, rows: 1 });
+	});
+});
+
+describe('isLayoutMode', () => {
+	it('accepts the five modes and nothing else', () => {
+		for (const m of ['auto', 'grid', 'columns', 'rows', 'focus']) expect(isLayoutMode(m)).toBe(true);
+		for (const m of ['', 'Grid', 'tiles', 7, null, undefined, {}]) expect(isLayoutMode(m)).toBe(false);
 	});
 });

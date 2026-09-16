@@ -7,7 +7,9 @@
  *  again on every app restart. Keeping it per workspace (not app-wide) is the point: a tab IS
  *  the unit of work, so each one remembers its own target. */
 
-export interface ToolbarState { repo?: string; branch?: string; model?: string; effort?: string; }
+import { isLayoutMode, type LayoutMode } from './bubble-layout';
+
+export interface ToolbarState { repo?: string; branch?: string; model?: string; effort?: string; layout?: LayoutMode; }
 
 /** workspace id → that tab's remembered toolbar selection. */
 export type WorkspaceToolbars = Record<string, ToolbarState>;
@@ -21,6 +23,10 @@ export function normalizeToolbarState(raw: unknown): ToolbarState {
 	if (!raw || typeof raw !== 'object') return out;
 	const o = raw as Record<string, unknown>;
 	for (const k of KEYS) if (typeof o[k] === 'string' && o[k]) out[k] = o[k] as string;
+	// The tile layout rides here too, for the same reason the rest does: it belongs to the TAB.
+	// A workspace opened on a vertical monitor keeps its own preference, and 'auto' — the
+	// default — is dropped like an unset dropdown so a default workspace persists nothing.
+	if (isLayoutMode(o.layout) && o.layout !== 'auto') out.layout = o.layout;
 	return out;
 }
 

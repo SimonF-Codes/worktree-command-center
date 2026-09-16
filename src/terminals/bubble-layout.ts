@@ -92,10 +92,68 @@ export function bestFitShape(n: number, W: number, H: number, gap: number, m: Ce
 	return best;
 }
 
+/** What Simon picked for this workspace. Auto follows the window as it resizes; the other four
+ *  are the escape hatch for when he knows better than the heuristic. */
+export type LayoutMode = 'auto' | 'grid' | 'columns' | 'rows' | 'focus';
+
+/** The three shapes Auto chooses between. Also what Grid/Columns/Rows name directly. */
+export type LayoutBand = 'rows' | 'grid' | 'columns';
+
+export const LAYOUT_OPTIONS: ReadonlyArray<{ value: LayoutMode; label: string; title: string }> = [
+	{ value: 'auto', label: '⤢ Auto', title: 'Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre.' },
+	{ value: 'grid', label: '▦ Grid', title: 'Grid — always an equal best-fit grid, even when a terminal is spotlighted.' },
+	{ value: 'columns', label: '▥ Columns', title: 'Columns — always full-height columns, one per terminal.' },
+	{ value: 'rows', label: '▤ Rows', title: 'Rows — always full-width rows, one per terminal.' },
+	{ value: 'focus', label: '◎ Focus', title: 'Focus — the spotlighted terminal as large as it can be, the rest kept to preview strips at the edge.' },
+];
+
+export function isLayoutMode(v: unknown): v is LayoutMode {
+	return typeof v === 'string' && LAYOUT_OPTIONS.some((o) => o.value === v);
+}
+
+/** Auto's aspect (W/H) bands: narrower than 0.8 stacks into rows, wider than 2.2 splits into
+ *  columns, and everything in between gets the best-fit grid. */
+export const AUTO_BAND_EDGES = { portrait: 0.8, wide: 2.2 } as const;
+
+/** How far past an edge the aspect must travel before Auto changes its mind. Without this,
+ *  dragging a window edge across a boundary flips the layout back and forth for the whole drag,
+ *  which makes the feature actively unpleasant rather than merely imperfect. */
+export const BAND_HYSTERESIS = 0.1;
+
+/** The band an aspect falls in with no memory of where it came from. */
+export function rawBand(aspect: number): LayoutBand {
+	if (aspect < AUTO_BAND_EDGES.portrait) return 'rows';
+	if (aspect > AUTO_BAND_EDGES.wide) return 'columns';
+	return 'grid';
+}
+
+/** The band to use, given the one already on screen. Stays put until the aspect has cleared the
+ *  current band's own edges by `margin`; once it has, the NEW aspect decides, so a jump straight
+ *  from portrait to ultrawide lands on columns without stopping at grid. */
+export function autoBand(aspect: number, prev: LayoutBand | null = null, margin: number = BAND_HYSTERESIS): LayoutBand {
+	const next = rawBand(aspect);
+	if (prev === null || prev === next) return next;
+	const [lo, hi] = prev === 'rows' ? [0, AUTO_BAND_EDGES.portrait]
+		: prev === 'grid' ? [AUTO_BAND_EDGES.portrait, AUTO_BAND_EDGES.wide]
+			: [AUTO_BAND_EDGES.wide, Infinity];
+	return aspect < lo * (1 - margin) || aspect > hi * (1 + margin) ? next : prev;
+}
+
+/** The grid shape a band asks for. Columns and Rows are the degenerate shapes the best-fit search
+ *  would pick on an extreme box anyway — naming them is how Simon pins one down on any box. */
+export function shapeForBand(band: LayoutBand, n: number, W: number, H: number, gap: number, m: CellMetrics = DEFAULT_CELL_METRICS): Shape {
+	const count = Math.max(1, n);
+	if (band === 'columns') return { cols: count, rows: 1 };
+	if (band === 'rows') return { cols: 1, rows: count };
+	return bestFitShape(count, W, H, gap, m);
+}
+
 export interface SettledOpts {
 	metrics?: CellMetrics;
 	/** Override the shape search (used by the Columns/Rows layout modes). */
 	shape?: Shape;
+	/** Shape for this band; ignored when `shape` is given. Defaults to the best-fit grid. */
+	band?: LayoutBand;
 }
 
 /** Adaptive grid filling the stage, shaped by the box and not just by the tile count. */
@@ -103,7 +161,7 @@ export function settledLayout(ids: number[], W: number, H: number, gap: number, 
 	const n = ids.length;
 	if (n === 0) return [];
 	const m = opts.metrics ?? DEFAULT_CELL_METRICS;
-	const shape = opts.shape ?? bestFitShape(n, W, H, gap, m);
+	const shape = opts.shape ?? shapeForBand(opts.band ?? 'grid', n, W, H, gap, m);
 	const cols = Math.max(1, shape.cols);
 	const rows = Math.max(1, shape.rows);
 	const min = minTileSize(m);
