@@ -5,6 +5,34 @@ landed on `main`.
 
 ## Unreleased
 
+**🪟 The stage lays tiles out by the SHAPE of the space, not just how many there are**
+- Both layout functions picked their shape from the tile count alone — `ceil(sqrt(n))`, with the
+  stage width and height used only to size cells inside a shape already decided. Four terminals
+  were a 2x2 grid on every screen there is: on a portrait monitor that halved an already-narrow
+  width, on an ultrawide it left the horizontal space unused.
+- The shape now comes from a search over every (cols, rows) that can hold the tiles, picking the
+  one that maximises the smallest resulting cell **measured in character cells**. Portrait and
+  ultrawide stop being special cases — the same rule produces a stacked column on a vertical
+  monitor, full-height columns on an ultrawide, and 2x2 on a square screen.
+- The minimum — roughly **80 columns by 20 rows**, below which the Claude TUI wraps badly and the
+  input box falls off the bottom — is read from the LIVE terminal metrics, not hardcoded in
+  pixels. Cell size moves with the font size and the display DPI, so a pixel floor is correct on
+  one screen and wrong on the next, which is the whole bug. The old `90px`/`60px` floors are gone.
+- **A layout preference per workspace**: Auto (default) · Grid · Columns · Rows · Focus. It rides
+  on the same per-tab state as the repo/branch/model/effort dropdowns, so a tab opened on a
+  vertical monitor keeps its own choice across restarts.
+- **Auto follows the window as you resize it**, reading the stage aspect: narrow stacks into rows,
+  ultrawide splits into full-height columns, everything between gets the best-fit grid. Switching
+  bands needs the aspect to cross the boundary by ~10% — without that margin, dragging a window
+  edge flips the layout back and forth for the whole drag.
+- **The centred layout puts its satellites where the stage has room**: top/bottom bands on a
+  narrow stage, left/right columns on a wide one. They used to round-robin into left, right, top,
+  bottom by index, so on a portrait monitor the first two satellites took 40% of the scarce
+  dimension. Their thickness is now capped so the centre keeps a usable terminal.
+- **When the tiles genuinely cannot fit, the stage scrolls** rather than shrinking them into
+  unreadable slivers, and it prefers to scroll downwards past full-width tiles over sideways past
+  half-width ones. Nothing is auto-hidden — a tile never vanishes without being asked.
+
 **🧠 Memory — what every session costs, and what is running that no session owns**
 - A panel, next to Changelog, listing every live session ACROSS EVERY WORKSPACE with its repo and
   branch, the RAM of its sidecar and everything under it, and how long it has been idle, biggest
