@@ -5,6 +5,36 @@ landed on `main`.
 
 ## Unreleased
 
+**The usage battery leaked a `claude` session every five minutes — about 3 GB an hour**
+- Measured on the live machine 2026-09-16: 81 `claude` processes holding 19.5 GB and 80 node
+  sidecars holding 3.5 GB, while the floor showed five terminals. 31 of those sidecars sat in the
+  usage-probe's scratch directory, spaced exactly 5.0 minutes apart from 05:50 to 08:20 — one per
+  `AUTO_MS` tick of the usage bar, going back to the moment the app started.
+- The cause was a callback that outlived the session it belonged to. `UsageProbe` keeps the
+  current session in `this.bridge`, and each session's `exit` handler cleared that field without
+  first checking the session was still the current one. When a refresh's first pass came back
+  empty, the probe killed it and immediately started a replacement; the dead session's `exit`
+  landed a few hundred ms later and nulled `this.bridge` out from under the *live* one.
+  `refreshOnce()` then threw `session unavailable` before reaching its `dispose()`, and the
+  running sidecar's pid was gone from the program for good. Reproduced deterministically:
+  2 sessions spawned, 1 leaked. After the fix, 2 spawned, 0 leaked.
+- The handlers are now addressed to their own bridge, cleanup moved into a `try/finally` so no
+  throw can skip it, and the deferred Enter/Escape writes target the session that asked for them
+  instead of whatever session happens to be current.
+- `SessionBridge.kill()` was fire-and-forget: it spawned `taskkill`, read neither exit code nor
+  stderr, and set `this.proc = null` regardless — so a kill that failed was both silent and
+  unrecoverable, because the pid was forgotten in the same breath. Kills are now verified
+  (`kill-tree.ts`): the exit code is read, `128`/"not found" counts as confirmed, a failure is
+  retried once and then reported through `onKillFailure`, and **the pid is kept until the death is
+  confirmed**. Unconfirmed pids are remembered for a later sweep. That is not what caused this
+  leak, but it is why nobody saw it for 31 refreshes.
+- Strays are reaped at startup (`stray-reaper.ts`). A probe session left by a previous run holds
+  ~250 MB and nothing in the new process knows its pid, so it survives until the machine reboots.
+  Only the probe's own dedicated directory is ever swept: a sidecar in a real worktree may belong
+  to a second running instance (dev and installed builds share one profile) and is left alone.
+  Running the reaper against the machine freed 6.1 GB across 29 processes, with none refused.
+- The 5-minute cadence and what the bar scrapes are unchanged. The cadence was never the problem.
+
 **A notification never types into a line you are still writing**
 - A watch firing while you were mid-sentence in Kane's console did not overwrite your draft — it
   MERGED with it and pressed Enter, submitting the mixture as if you had written it. `notify()`

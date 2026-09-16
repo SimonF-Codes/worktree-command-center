@@ -10,6 +10,7 @@ import { SerialWriter } from './serial-writer';
 import { normalizeToolbars, setToolbarState, pruneToolbars, type WorkspaceToolbars } from './terminals/toolbar-state';
 import { createGitRepo } from './create-repo';
 import { UsageProbe } from './terminals/usage-probe';
+import { reapUsageProbeStrays } from './terminals/stray-reaper';
 import { UsageWidget } from './ui/usage-widget';
 import { ClaudeWarning } from './ui/claude-warning';
 import { PerfMonitor } from './ui/perf-monitor';
@@ -147,6 +148,18 @@ async function main(): Promise<void> {
 		};
 		startUsageProbe();
 		window.addEventListener('beforeunload', () => { usageWidget?.dispose(); usageProbe?.dispose(); });
+
+		// Reap probe sidecars left behind by an earlier run. Each one pins a live `claude`
+		// (~250 MB) that nothing else can reach any more — its owner's pid died with the old
+		// renderer — so they accumulate until the machine reboots. Deferred past first paint:
+		// it costs one process snapshot and must not sit in front of the UI.
+		window.setTimeout(() => {
+			void reapUsageProbeStrays(path.join(userData, 'usage-probe'), usageProbe?.ownedPids() ?? [])
+				.then((r) => {
+					if (r.reaped.length) console.info(`[wcc] reaped ${r.reaped.length} stray usage-probe session(s):`, r.reaped);
+					for (const f of r.failed) console.error(`[wcc] could NOT kill stray pid ${f.pid}: ${f.detail}`);
+				});
+		}, 3000);
 
 		// Kane self-improvement (see docs/superpowers/specs/2026-07-15-kane-self-improvement-design.md):
 		// config names the app's own source repo; toolsDir defaults beside the user's home.
