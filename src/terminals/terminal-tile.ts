@@ -11,6 +11,7 @@ import { loadRolePrompt } from './role-loader';
 import type { SessionFact } from './role-library';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { FitThrottle } from './fit-throttle';
+import { MIN_TERM_COLS, MIN_TERM_ROWS, type TileCellMetrics } from './bubble-layout';
 import { HiddenOutputBuffer } from './hidden-buffer';
 import { isUserInput } from './ready-queue';
 import { activeTerminalPalette, activeTerminalFont, type TerminalPalette } from './theme-store';
@@ -246,8 +247,8 @@ export class TerminalTile implements StageTile {
 			// resize / satellite count). Clamp to ≥80 cols so output is never wrapped tiny.
 			propose: () => (this.centered ? this.fit?.proposeDimensions() ?? null : null),
 			apply: (cols, rows) => { this.term?.resize(cols, rows); this.bridge?.resize(cols, rows); },
-			minCols: 80,
-			minRows: 20,
+			minCols: MIN_TERM_COLS,
+			minRows: MIN_TERM_ROWS,
 		});
 		this.fitSoon();
 
@@ -550,6 +551,28 @@ export class TerminalTile implements StageTile {
 		return lines.join('\n');
 	}
 
+	/** px per character cell, plus the part of the tile box that is NOT character cells, read from
+	 *  the LIVE terminal. The stage layout needs this to reason in columns and rows: cell size
+	 *  moves with the font size and the display DPI, so a layout built on pixel constants is
+	 *  correct on one screen and wrong on the next — which is the bug adaptive layout exists to
+	 *  fix, so it must not be rebuilt on a pixel constant here.
+	 *
+	 *  The chrome is derived from what the fit addon says currently fits rather than from the CSS,
+	 *  so cellsInTile() predicts the same cols/rows the addon would propose for a tile of that size —
+	 *  header, borders, padding and xterm's own scrollbar gutter are all inside the difference. */
+	cellMetrics(): TileCellMetrics | null {
+		const core = (this.term as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } } } | null)?._core;
+		const cell = core?._renderService?.dimensions?.css?.cell;
+		if (!this.el || !cell || !(cell.width > 0) || !(cell.height > 0)) return null;
+		const fitted = this.fit?.proposeDimensions();
+		if (!fitted) return null;   // not laid out yet — the caller falls back to the defaults
+		return {
+			cw: cell.width,
+			ch: cell.height,
+			chromeW: Math.max(0, this.el.offsetWidth - fitted.cols * cell.width),
+			chromeH: Math.max(0, this.el.offsetHeight - fitted.rows * cell.height),
+		};
+	}
 	/** This terminal's display name (matches COS_TERMINAL_NAME used by cos-coord chat). */
 	get name(): string {
 		return this.displayName;

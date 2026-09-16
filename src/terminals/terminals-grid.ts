@@ -14,7 +14,7 @@ import { openExternalUrl, revealInFileManager } from './links';
 import { EDITORS, FILE_BROWSER, CUSTOM_EDITOR, resolveEditorCommand, type EditorDef } from './editor-launch';
 import { ChatRoom } from './chat-room';
 import { ChatTile } from './chat-tile';
-import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight } from './bubble-layout';
+import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight, autoBand, LAYOUT_OPTIONS, DEFAULT_CELL_METRICS, MIN_TERM_COLS, MIN_TERM_ROWS, type CellMetrics, type LayoutBand, type LayoutMode } from './bubble-layout';
 import { emptyState, applyKeystroke, onReady as rqReady, onSubmit as rqSubmit, onClose as rqClose, onClick as rqClick, onOverview as rqOverview } from './ready-queue';
 import { decideCenter, type SpotlightState } from './focus-decider';
 import { partitionByHidden } from './session-partition';
@@ -119,6 +119,11 @@ export class TerminalsGrid {
 	private branchSel: HTMLSelectElement | null = null;
 	private modelSel: HTMLSelectElement | null = null;
 	private effortSel: HTMLSelectElement | null = null;
+	private layoutSel: HTMLSelectElement | null = null;
+	/** The Auto band currently on screen. Remembered between frames so autoBand() has something
+	 *  to be hysteretic ABOUT — without it, dragging a window edge across a boundary flips the
+	 *  layout back and forth for the whole drag. Cleared when the preference changes. */
+	private layoutBand: LayoutBand | null = null;
 	private stageEl: HTMLElement | null = null;
 	private maxBtn: HTMLElement | null = null;
 	private controlsEl: HTMLElement | null = null;
@@ -276,6 +281,18 @@ export class TerminalsGrid {
 		for (const m of SPAWN_EFFORTS) this.effortSel.createEl('option', { text: m.label, value: m.value });
 		if (saved.effort && SPAWN_EFFORTS.some((m) => m.value === saved.effort)) this.effortSel.value = saved.effort;
 		this.effortSel.addEventListener('change', () => this.rememberToolbar());
+
+		// Tile layout for THIS tab. Auto follows the window as it resizes; the rest pin a shape.
+		this.layoutSel = controls.createEl('select');
+		for (const o of LAYOUT_OPTIONS) this.layoutSel.createEl('option', { text: o.label, value: o.value, attr: { title: o.title } });
+		this.layoutSel.value = saved.layout ?? 'auto';
+		this.layoutSel.title = LAYOUT_OPTIONS.find((o) => o.value === this.layoutSel!.value)?.title ?? '';
+		this.layoutSel.addEventListener('change', () => {
+			this.layoutSel!.title = LAYOUT_OPTIONS.find((o) => o.value === this.layoutSel!.value)?.title ?? '';
+			this.layoutBand = null;   // a deliberate change re-reads the window instead of inheriting the old band
+			this.rememberToolbar();
+			this.applyLayout();
+		});
 
 		const newBranchBtn = controls.createEl('button', { text: '+ New branch' });
 		newBranchBtn.addEventListener('click', () => {
@@ -546,6 +563,7 @@ export class TerminalsGrid {
 			branch: this.branchSel?.value,
 			model: this.modelSel?.value,
 			effort: this.effortSel?.value,
+			layout: this.layoutSel?.value,
 		});
 		this.toolbar = next;
 		this.deps.onToolbarChange?.(next);
@@ -1511,6 +1529,19 @@ export class TerminalsGrid {
 		tile.focus();
 	}
 
+	/** px per character cell + tile chrome, measured from whichever tile has a live terminal. The
+	 *  layout is decided in columns and rows, so it has to be told what a column costs HERE — font
+	 *  size and DPI both move that, and the same pixel box is a comfortable terminal on one screen
+	 *  and an unusable one on another. Falls back to the 12px defaults when nothing is measurable
+	 *  yet (first layout, or a tab holding only a journal tile). */
+	private cellMetrics(): CellMetrics {
+		for (const t of this.tiles) {
+			const m = t.cellMetrics?.();
+			if (m) return { ...m, minCols: MIN_TERM_COLS, minRows: MIN_TERM_ROWS };
+		}
+		return DEFAULT_CELL_METRICS;
+	}
+
 	private applyLayout(): void {
 		if (!this.stageEl || (this.tiles.length === 0 && !this.chatTile)) return;
 		const W = this.stageEl.clientWidth || 800;
@@ -1519,7 +1550,20 @@ export class TerminalsGrid {
 		const ids = [...this.tiles.map((t) => t.tileId), ...(chatId !== undefined ? [chatId] : [])];
 		// The chat tile is a normal movable participant — centered only when it IS centeredId.
 		const centerId = this.centeredId !== null && ids.includes(this.centeredId) ? this.centeredId : null;
-		const rects = centerId !== null ? centeredLayout(ids, W, H, 8, centerId) : settledLayout(ids, W, H, 8);
+		const metrics = this.cellMetrics();
+		const mode: LayoutMode = this.toolbar.layout ?? 'auto';
+		// Track the Auto band on every layout, whatever the mode: it is what the centred layout uses
+		// to pick its satellite edges, and keeping it live means switching back to Auto does not
+		// inherit a stale band.
+		const band = autoBand(W / Math.max(1, H), this.layoutBand);
+		this.layoutBand = band;
+		// Auto and Focus honour the spotlight (Focus just gives it more room); Grid/Columns/Rows are
+		// the explicit "lay everything out equally, whatever is centred" modes. Nothing here changes
+		// WHICH tile is centred — that stays with the ready queue and focus-decider.
+		const spotlight = centerId !== null && (mode === 'auto' || mode === 'focus');
+		const rects = spotlight
+			? centeredLayout(ids, W, H, 8, centerId!, { metrics, band, focus: mode === 'focus' })
+			: settledLayout(ids, W, H, 8, { metrics, band: mode === 'auto' || mode === 'focus' ? band : mode });
 		for (const t of this.tiles) {
 			const r = rects.find((x) => x.id === t.tileId);
 			if (r) t.setRect(r);
