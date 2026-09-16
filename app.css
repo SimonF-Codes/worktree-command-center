@@ -92,7 +92,11 @@ html, body {
 .wcc-grid-container { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; position: relative; }
 .cos-terminals-controls { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--background-modifier-border); background: var(--background-primary-alt); }
 .cos-terminals-controls select { background: var(--background-secondary-alt); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 5px 8px; }
-.cos-terminals-stage { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; }
+/* Scrolls rather than shrinking tiles below a usable terminal (bubble-layout minTileSize):
+   when n tiles cannot fit at 80x20 they keep that size and the stage scrolls past them. The
+   gutter is reserved permanently so the scrollbar appearing cannot shrink clientWidth, change
+   the best-fit shape, remove the overflow and flip back. */
+.cos-terminals-stage { flex: 1 1 auto; min-height: 0; position: relative; overflow: auto; scrollbar-gutter: stable; }
 
 /* Coordination board + worktree registry — clean rows, not raw markdown. */
 .cos-coord-board { flex: 0 0 auto; max-height: 38vh; overflow-y: auto; background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); padding: 8px 12px; font-size: 12px; }
