@@ -35,6 +35,7 @@ import { FormatProbe } from './format-probe';
 import { ConvertProbe } from './convert-probe';
 import { vaultNoteFilename, vaultNoteContent, type ConvertDestination, type VaultDestination } from './convert-destinations';
 import type { StageTile } from './stage-tile';
+import type { SessionClaim } from './session-memory';
 
 /** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
  *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
@@ -834,6 +835,67 @@ export class TerminalsGrid {
 
 	/** Every live session GOD should see / be able to message (foreground + hidden background). */
 	private allSessions(): StageTile[] { return [...this.tiles, ...this.hidden]; }
+
+	/** What this workspace's sessions are, for the memory panel to roll process memory onto.
+	 *
+	 *  Includes hidden tiles: a hidden session is still a live `claude` holding its RAM, and the
+	 *  sessions you forget are exactly the ones you are not looking at. Journals are skipped —
+	 *  they have no process. */
+	memoryClaims(workspaceName: string): SessionClaim[] {
+		const out: SessionClaim[] = [];
+		for (const t of [...this.tiles, ...this.hidden]) {
+			if (t.isJournal) continue;
+			const tt = t as TerminalTile;
+			out.push({
+				key: `${this.deps.group}:${tt.tileId}`,
+				name: tt.name,
+				workspaceId: this.deps.group,
+				workspaceName,
+				repo: tt.repoName,
+				branch: tt.isFolder ? '(folder)' : tt.branch,
+				pid: tt.sidecarPid,
+				busy: tt.isBusy,
+				idleSince: tt.idleSince,
+				hidden: this.hidden.includes(t),
+			});
+		}
+		return out;
+	}
+
+	/** End a session from the memory panel WITHOUT destroying its work.
+	 *
+	 *  Deliberately not the tile's × , which deletes the worktree and branch. The panel's whole
+	 *  premise is that closing is cheap and reversible: the transcript in ~/.claude/projects is
+	 *  keyed by worktree PATH, so deleting the worktree is exactly what would make it
+	 *  unresumable. Uncommitted work is parked first (the same `wip:` commit used on teardown,
+	 *  undone by Reopen), then the process is killed and the tile leaves the floor. The branch
+	 *  and worktree stay, so Reopen in the Coordination panel brings the whole thing back.
+	 *
+	 *  Returns false if there was no such tile. Callers do the confirming — this does not ask. */
+	async endSessionKeepingWork(tileId: number): Promise<boolean> {
+		const tile = [...this.tiles, ...this.hidden].find((t) => t.tileId === tileId);
+		if (!tile || tile.isJournal) return false;
+		const tt = tile as TerminalTile;
+		// A folder target's directory is the user's own; `git add -A` there would commit THEIR
+		// working tree into whatever repo happens to contain it. Never park one — same reason
+		// parkAll() skips them.
+		if (!tt.isFolder) {
+			try { await parkWorktree(tt.worktreePath, new Date().toISOString()); }
+			catch { /* parking is a safety net, not a precondition for ending the session */ }
+		}
+		this.tiles = this.tiles.filter((t) => t !== tile);
+		this.hidden = this.hidden.filter((t) => t !== tile);
+		this.idleTiles.delete(tileId);
+		if (this.lockedTileId === tileId) this.lockedTileId = null;
+		if (this.centeredId === tileId) this.centeredId = null;
+		this.q = rqClose(this.q, tileId).state;
+		tile.kill();
+		await this.persist();
+		this.applyLayout();
+		this.autoCenter();
+		this.board?.refresh();
+		return true;
+	}
 
 	/** Number of live terminals (foreground + hidden) — for the close-workspace confirm. */
 	terminalCount(): number { return this.tiles.length + this.hidden.length; }

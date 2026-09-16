@@ -101,7 +101,10 @@ export function promptForConfirm(title: string, message: string, okLabel = 'Conf
 
 		const msg = document.createElement('div');
 		msg.textContent = message;
-		msg.style.cssText = 'color:#b8bccb;margin-bottom:14px;line-height:1.45';
+		// pre-line so a confirm can LIST what it is about to act on, one per line. A confirm that
+		// says "close 7 sessions" without naming them isn't something anyone can agree to
+		// honestly. Existing callers pass single-line messages and are unaffected.
+		msg.style.cssText = 'color:#b8bccb;margin-bottom:14px;line-height:1.45;white-space:pre-line';
 
 		const row = document.createElement('div');
 		row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';
