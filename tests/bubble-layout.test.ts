@@ -256,3 +256,110 @@ describe('isLayoutMode', () => {
 		for (const m of ['', 'Grid', 'tiles', 7, null, undefined, {}]) expect(isLayoutMode(m)).toBe(false);
 	});
 });
+
+describe('centeredLayout — the satellite edges come from the stage shape', () => {
+	/** Every tile inside the stage, and no two tiles on top of each other. */
+	const sane = (r: ReturnType<typeof centeredLayout>, W: number, H: number): void => {
+		for (const t of r) {
+			expect(t.w).toBeGreaterThan(0);
+			expect(t.h).toBeGreaterThan(0);
+			expect(t.x).toBeGreaterThanOrEqual(0);
+			expect(t.y).toBeGreaterThanOrEqual(0);
+			expect(t.x + t.w).toBeLessThanOrEqual(W);
+			expect(t.y + t.h).toBeLessThanOrEqual(H);
+		}
+		for (let i = 0; i < r.length; i++) {
+			for (let j = i + 1; j < r.length; j++) {
+				const a = r[i]!, b = r[j]!;
+				const overlaps = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+				expect(overlaps).toBe(false);
+			}
+		}
+	};
+
+	it('PORTRAIT: satellites take top/bottom bands, so the centre keeps the whole width', () => {
+		const r = centeredLayout([1, 2, 3, 4], 900, 2000, 8, 1);
+		const c = r.find((t) => t.id === 1)!;
+		expect(c.w).toBe(900 - 16);                                     // full width — no columns stolen
+		for (const t of r) {
+			if (t.id === 1) continue;
+			expect(t.y + t.h <= c.y || t.y >= c.y + c.h).toBe(true);      // above or below, never beside
+		}
+		sane(r, 900, 2000);
+	});
+
+	it('the old round-robin put the first satellites in COLUMNS even on a portrait stage', () => {
+		// Regression: with `order = [l, r, t, b]` and `i % 4`, tiles 2 and 3 became left and right
+		// columns here, spending 40% of the scarce dimension. Nothing may sit beside the centre now.
+		const r = centeredLayout([1, 2, 3], 700, 1800, 8, 1);
+		const c = r.find((t) => t.id === 1)!;
+		for (const t of r) {
+			if (t.id === 1) continue;
+			const beside = t.x + t.w <= c.x || t.x >= c.x + c.w;
+			expect(beside).toBe(false);
+		}
+		sane(r, 700, 1800);
+	});
+
+	it('WIDE: satellites take left/right columns and the centre keeps the whole height', () => {
+		const r = centeredLayout([1, 2, 3, 4], 3000, 1200, 8, 1);
+		const c = r.find((t) => t.id === 1)!;
+		expect(c.h).toBe(1200 - 16);
+		for (const t of r) {
+			if (t.id === 1) continue;
+			expect(t.x + t.w <= c.x || t.x >= c.x + c.w).toBe(true);    // beside, never above/below
+		}
+		sane(r, 3000, 1200);
+	});
+
+	it('an explicit band overrides the aspect (Focus on a stage Auto would stack)', () => {
+		const r = centeredLayout([1, 2], 900, 2000, 8, 1, { band: 'grid' });
+		const c = r.find((t) => t.id === 1)!;
+		const sat = r.find((t) => t.id === 2)!;
+		expect(sat.x + sat.w <= c.x || sat.x >= c.x + c.w).toBe(true);  // a column, because we said so
+	});
+
+	it('the edge is capped so the centre never drops below a usable terminal', () => {
+		// 1000x400 can just about seat an 80x20 centre with two satellite columns: the centre gets
+		// exactly the minimum and the satellites get what is left, not a blind 20% each.
+		const r = centeredLayout([1, 2, 3], 1000, 400, 8, 1);
+		const c = r.find((t) => t.id === 1)!;
+		expect(c.w).toBe(minTileSize(DEFAULT_CELL_METRICS).w);
+		sane(r, 1000, 400);
+	});
+
+	it('when the stage cannot seat both, the centre keeps 60% instead of being squeezed out', () => {
+		const W = 800, H = 300;
+		const r = centeredLayout([1, 2, 3], W, H, 8, 1);
+		const c = r.find((t) => t.id === 1)!;
+		expect(c.w).toBeGreaterThan((W - 32) * 0.55);
+		sane(r, W, H);
+	});
+
+	it('edge thickness is priced in character cells, not in a hardcoded 90px', () => {
+		const focus = (m: CellMetrics): number => {
+			const r = centeredLayout([1, 2, 3], 3000, 1200, 8, 1, { metrics: m, focus: true });
+			return r.find((t) => t.id === 2)!.w;
+		};
+		const base = { ...DEFAULT_CELL_METRICS, chromeW: 10 };
+		expect(focus(base)).toBe(Math.ceil(16 * base.cw + base.chromeW));
+		expect(focus({ ...base, cw: base.cw * 2 })).toBe(Math.ceil(16 * base.cw * 2 + base.chromeW));
+	});
+
+	it('FOCUS keeps the satellites to a preview strip, so the centre is bigger than in Auto', () => {
+		const box = [3000, 1200] as const;
+		const auto = centeredLayout([1, 2, 3], box[0], box[1], 8, 1).find((t) => t.id === 1)!;
+		const focus = centeredLayout([1, 2, 3], box[0], box[1], 8, 1, { focus: true }).find((t) => t.id === 1)!;
+		expect(focus.w).toBeGreaterThan(auto.w);
+		expect(focus.h).toBe(auto.h);
+	});
+
+	it('stays sane across a range of boxes and tile counts', () => {
+		for (const [W, H] of [[600, 1600], [900, 900], [1920, 1080], [3440, 900], [500, 400]] as const) {
+			for (let n = 1; n <= 7; n++) {
+				const ids = Array.from({ length: n }, (_, i) => i + 1);
+				sane(centeredLayout(ids, W, H, 8, 1), W, H);
+			}
+		}
+	});
+});

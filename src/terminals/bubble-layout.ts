@@ -178,11 +178,54 @@ export function settledLayout(ids: number[], W: number, H: number, gap: number, 
 	});
 }
 
-/** Big centered tile that fills all space not taken by satellites. Satellites ring the
- *  edges (left/right columns first, then top/bottom bands); the center grows into any
- *  edge that has no satellites, so it's full-height with 1-2 others and never leaves gaps. */
-export function centeredLayout(ids: number[], W: number, H: number, gap: number, centeredId: number): Rect[] {
-	if (!ids.includes(centeredId)) return settledLayout(ids, W, H, gap);
+export interface CenteredOpts {
+	metrics?: CellMetrics;
+	/** Which edges the satellites take: 'rows' (a stage narrow enough that Auto would stack it)
+	 *  puts them in top/bottom bands, anything wider puts them in left/right columns. Defaults to
+	 *  the raw stage aspect. */
+	band?: LayoutBand;
+	/** Focus mode — hold the satellites to the thinnest strip that is still a readable preview so
+	 *  the centre is as large as the stage allows. */
+	focus?: boolean;
+}
+
+/** What a satellite has to show to be worth putting on screen. It is a PREVIEW, not a terminal
+ *  anyone types into — terminal-tile only refits the PTY of the CENTERED tile — so the bar is
+ *  "can I see what this session is doing", not the 80x20 a working terminal needs. Still in
+ *  character cells, so it tracks the font instead of being a magic 90px that a narrow stage
+ *  silently overflowed. */
+const SAT_MIN_COLS = 16;
+const SAT_MIN_ROWS = 4;
+
+/** What one satellite edge asks for when the stage can afford it. */
+const SAT_FRACTION = 0.2;
+
+/** Thickness of one satellite edge along an axis of length `total` with `sides` edges in use.
+ *
+ *  Never a sliver below a readable preview, and never so thick that the centre drops below a
+ *  usable terminal — the old `max(90, 20%)` had a floor but no ceiling, which is exactly how a
+ *  narrow stage ended up with satellites eating the centre. When the axis is too short for both,
+ *  the centre keeps 60% of it rather than being squeezed out by its own satellites. */
+function edgeThickness(total: number, gap: number, sides: number, satMin: number, centerMin: number, focus: boolean): number {
+	if (sides <= 0) return 0;
+	const avail = total - gap * (sides + 2);                                  // tile pixels, gutters paid
+	const want = focus ? satMin : Math.max(satMin, Math.floor(total * SAT_FRACTION));
+	const room = Math.floor((avail - centerMin) / sides);                     // …keeping the centre usable
+	return room >= satMin ? Math.min(want, room) : Math.max(0, Math.floor((avail * 0.4) / sides));
+}
+
+/** Big centered tile that fills all space not taken by satellites.
+ *
+ *  Which edges the satellites take is decided by the SHAPE of the stage, not by their index: on a
+ *  narrow stage they go into top/bottom bands, on a wide one into left/right columns. The old
+ *  round-robin (`buckets[order[i % 4]]`, order l,r,t,b) put the first two satellites in left and
+ *  right columns on every stage — on a portrait monitor that spent 40% of the scarce dimension
+ *  before the centre got any. The centre still grows into any edge with no satellites, so it is
+ *  full-height with one or two others and never leaves gaps. */
+export function centeredLayout(ids: number[], W: number, H: number, gap: number, centeredId: number, opts: CenteredOpts = {}): Rect[] {
+	const m = opts.metrics ?? DEFAULT_CELL_METRICS;
+	const band = opts.band ?? rawBand(W / Math.max(1, H));
+	if (!ids.includes(centeredId)) return settledLayout(ids, W, H, gap, { metrics: m, band });
 	const others = ids.filter((id) => id !== centeredId);
 
 	// Lone tile: fill the whole stage.
@@ -191,11 +234,15 @@ export function centeredLayout(ids: number[], W: number, H: number, gap: number,
 	}
 
 	const buckets: Record<'l' | 'r' | 't' | 'b', number[]> = { l: [], r: [], t: [], b: [] };
-	const order: Array<'l' | 'r' | 't' | 'b'> = ['l', 'r', 't', 'b'];
-	others.forEach((id, i) => buckets[order[i % 4]!].push(id));
+	// Bottom first on a narrow stage (the centre keeps the top), left first on a wide one.
+	const edges: Array<'l' | 'r' | 't' | 'b'> = band === 'rows' ? ['b', 't'] : ['l', 'r'];
+	others.forEach((id, i) => buckets[edges[i % edges.length]!]!.push(id));
 
-	const colW = Math.max(90, Math.floor(W * 0.2));
-	const bandH = Math.max(60, Math.floor(H * 0.2));
+	const min = minTileSize(m);
+	const satMinW = Math.ceil(SAT_MIN_COLS * m.cw + m.chromeW);
+	const satMinH = Math.ceil(SAT_MIN_ROWS * m.ch + m.chromeH);
+	const colW = edgeThickness(W, gap, (buckets.l.length ? 1 : 0) + (buckets.r.length ? 1 : 0), satMinW, min.w, opts.focus ?? false);
+	const bandH = edgeThickness(H, gap, (buckets.t.length ? 1 : 0) + (buckets.b.length ? 1 : 0), satMinH, min.h, opts.focus ?? false);
 	const leftX = gap;
 	const rightX = W - gap - colW;
 	const topY = gap;
@@ -204,24 +251,24 @@ export function centeredLayout(ids: number[], W: number, H: number, gap: number,
 	// The center occupies everything between whichever edges actually hold satellites.
 	const cx = buckets.l.length ? gap + colW + gap : gap;
 	const rightLimit = buckets.r.length ? rightX - gap : W - gap;
-	const cw = Math.max(120, rightLimit - cx);
+	const cw = Math.max(1, rightLimit - cx);
 	const cy = buckets.t.length ? gap + bandH + gap : gap;
 	const botLimit = buckets.b.length ? botY - gap : H - gap;
-	const ch = Math.max(120, botLimit - cy);
+	const ch = Math.max(1, botLimit - cy);
 
 	const out: Rect[] = [{ id: centeredId, x: cx, y: cy, w: cw, h: ch }];
 
 	// Left/right columns span the full height; top/bottom bands span the center's width.
 	const vert = (arr: number[], x: number): void => {
-		const m = arr.length;
-		if (!m) return;
-		const h = Math.floor((H - gap * (m + 1)) / m);
+		const n = arr.length;
+		if (!n) return;
+		const h = Math.floor((H - gap * (n + 1)) / n);
 		arr.forEach((id, i) => out.push({ id, x, y: gap + i * (h + gap), w: colW, h }));
 	};
 	const horiz = (arr: number[], y: number): void => {
-		const m = arr.length;
-		if (!m) return;
-		const w = Math.floor((cw - gap * (m - 1)) / m);
+		const n = arr.length;
+		if (!n) return;
+		const w = Math.floor((cw - gap * (n - 1)) / n);
 		arr.forEach((id, i) => out.push({ id, x: cx + i * (w + gap), y, w, h: bandH }));
 	};
 	vert(buckets.l, leftX);
