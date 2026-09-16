@@ -5,6 +5,35 @@ landed on `main`.
 
 ## Unreleased
 
+**🧠 Memory — what every session costs, and what is running that no session owns**
+- A panel, next to Changelog, listing every live session ACROSS EVERY WORKSPACE with its repo and
+  branch, the RAM of its sidecar and everything under it, and how long it has been idle, biggest
+  first. The sessions you forget are by definition in tabs you are not looking at, so a panel
+  scoped to the visible tab would miss exactly the ones being hunted.
+- Attribution comes from the **process tree, not the tile list**. Each tile's `SessionBridge` now
+  exposes its sidecar pid, and a session's memory is that pid's subtree rolled up — exact
+  ownership, no command-line string matching. One `Win32_Process` snapshot per poll returns every
+  process, its parent and its working set in a single call; a tracker that spawned a process per
+  session to count processes would be the bug it exists to report.
+- **Anything under the app that no session claims gets its own "Unattributed" row**, at the top,
+  in red. That row is the feature, not an edge case: replaying the 2026-09-16 snapshot with the
+  five sessions the floor was showing puts **13.6 GB across 237 processes** in it. A tracker built
+  by summing tiles would have agreed with the floor and reported five healthy terminals.
+- Polls every 20s and ONLY while the panel is open. The snapshot subtracts the process it spawns
+  to take the snapshot — otherwise ~85 MB of PowerShell lands in "Unattributed" every poll, the
+  measuring tool reporting itself as a leak and the one row that must be trusted crying wolf.
+  The usage battery's own probe is a named row for the same reason.
+- **Closing never happens on its own** — which sessions matter is a judgment the app does not
+  have. Close one, or close every session idle longer than a chosen threshold; the bulk confirm
+  names them rather than just counting them, and never includes a session that is working.
+- Closing from here is deliberately NOT the tile's ×, which deletes the worktree and branch.
+  Transcripts in `~/.claude/projects` are keyed by worktree PATH, so deleting the worktree is
+  exactly what would make one unresumable. Uncommitted work is parked as the usual `wip:` commit,
+  the process is killed, and the worktree and branch stay — Reopen brings the whole thing back.
+  The panel says so, because that is what makes the button easy to press.
+- Closing a BUSY session warns that it loses the turn in progress; closing an idle one says
+  plainly that nothing is lost. That distinction is the only real risk in the feature.
+
 **The usage battery leaked a `claude` session every five minutes — about 3 GB an hour**
 - Measured on the live machine 2026-09-16: 81 `claude` processes holding 19.5 GB and 80 node
   sidecars holding 3.5 GB, while the floor showed five terminals. 31 of those sidecars sat in the

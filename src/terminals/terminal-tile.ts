@@ -102,6 +102,10 @@ export class TerminalTile implements StageTile {
 	private pasting = false;
 	private selected = false;
 	private idle = false; // false = busy/starting; true once the session goes ready (refresh confirms only when busy)
+	// When `idle` last became true. The memory panel ranks sessions by how long they have been
+	// sitting there, and "idle" without a clock behind it can't answer that. Written only
+	// through setIdle so the flag and its timestamp can never disagree.
+	private idleSinceTs: number | null = null;
 	private ended = false; // true once the claude process has exited and nothing is listening on the pty
 	// Output pacing: only the CENTERED tile parses PTY output in true real time. Visible
 	// satellites batch on a 300ms cadence and hidden/workspace-detached tiles on 2s —
@@ -265,7 +269,7 @@ export class TerminalTile implements StageTile {
 			// WE cause by centering a tile would otherwise clear its idle flag and bounce the
 			// spotlight to the next tile — forever, with nobody at the keyboard (2026-07-28).
 			if (!isUserInput(d)) return;
-			if (d.includes('\r')) { this.idle = false; this.opts.onEnter?.(this); }
+			if (d.includes('\r')) { this.setIdle(false); this.opts.onEnter?.(this); }
 			else this.opts.onInput?.(this, d);
 		});
 		// If resuming, also enable the fallback: a --continue that finds no conversation
@@ -285,7 +289,7 @@ export class TerminalTile implements StageTile {
 			this.readyWatcher = fs.watch(this.opts.worktree.worktreePath, (_evt, file) => {
 				if (file === '.cos-ready') {
 					try { fs.unlinkSync(path.join(this.opts.worktree.worktreePath, '.cos-ready')); } catch { /* ignore */ }
-					this.idle = true;
+					this.setIdle(true);
 					this.gate.ready();   // bound draft-tracker drift to one turn (see notice-gate.ts)
 					this.opts.onReady?.(this);
 				}
@@ -551,6 +555,22 @@ export class TerminalTile implements StageTile {
 		return this.displayName;
 	}
 
+	/** Single writer for the idle flag, so its timestamp stays in step. Re-entering idle while
+	 *  already idle does NOT restart the clock — a session that has sat untouched for four hours
+	 *  should say four hours, not reset every time a hook marker lands. */
+	private setIdle(v: boolean): void {
+		if (v && !this.idle) this.idleSinceTs = Date.now();
+		if (!v) this.idleSinceTs = null;
+		this.idle = v;
+	}
+
+	/** Mid-response. Closing one of these loses the turn; closing an idle one loses nothing. */
+	get isBusy(): boolean { return !this.idle; }
+	/** When this session last went idle, or null while it is working. */
+	get idleSince(): number | null { return this.idleSinceTs; }
+	/** Pid of this session's sidecar — the root of the process subtree it is accountable for. */
+	get sidecarPid(): number | null { return this.bridge?.pid ?? null; }
+
 	get worktreePath(): string { return this.opts.worktree.worktreePath; }
 	get branch(): string { return this.opts.worktree.branch; }
 	/** True for a plain-folder target — the grid uses this to skip git-only bookkeeping. */
@@ -751,10 +771,10 @@ export class TerminalTile implements StageTile {
 				return;
 			}
 			this.ended = true;
-			this.idle = true; // nothing running — a ⟳/keypress revival shouldn't ask "still working?"
+			this.setIdle(true); // nothing running — a ⟳/keypress revival shouldn't ask "still working?"
 			this.writeOut(`\r\n[session ended (code ${code ?? '?'}) — press any key, or ⟳ above, to start a new one]\r\n`);
 		});
-		this.bridge.onReady(() => { this.idle = true; this.opts.onReady?.(this); });
+		this.bridge.onReady(() => { this.setIdle(true); this.opts.onReady?.(this); });
 		this.bridge.start();
 	}
 
@@ -780,7 +800,7 @@ export class TerminalTile implements StageTile {
 		this.bridge?.kill();
 		this.hiddenBuf.clear(); // old-session output must not replay into the fresh screen
 		this.term?.reset();
-		this.idle = false;
+		this.setIdle(false);
 		this.gate.reset(); // fresh TUI, empty box — anything queued waits for the next ready marker
 		this.startSession(true, true);
 	}

@@ -30,8 +30,58 @@ export async function snapshotProcesses(opts: { withCommandLine?: boolean } = {}
 	const script =
 		'[Console]::OutputEncoding=[Text.Encoding]::UTF8;' +
 		`Get-CimInstance Win32_Process | Select-Object ${fields} | ConvertTo-Json -Compress -Depth 2`;
-	const raw = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
-	return parseSnapshot(raw);
+	const { raw, pid } = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
+	// The snapshot is taken by a child of THIS process, so it is in its own results — roughly
+	// 85 MB of PowerShell and its conhost, parented to the app, owned by no session. Left in, it
+	// would land in "unattributed" on every single poll: the measuring tool reporting itself as
+	// a leak, and the one row that must be trusted crying wolf every 20 seconds.
+	return excludeSubtree(parseSnapshot(raw), pid);
+}
+
+/** Drop `root` and everything beneath it. Exported for tests; an absent root is a no-op. */
+export function excludeSubtree(rows: readonly ProcRow[], root: number | undefined): ProcRow[] {
+	if (root === undefined) return [...rows];
+	const doomed = new Set(subtreePids(indexProcesses(rows), root));
+	return rows.filter((r) => !doomed.has(r.pid));
+}
+
+/** A snapshot indexed for subtree walks: pid → row, and parent → children. */
+export interface ProcIndex {
+	byPid: Map<number, ProcRow>;
+	kids: Map<number, number[]>;
+}
+
+/** Index a snapshot once so many subtrees can be walked without rebuilding the parent map. */
+export function indexProcesses(rows: readonly ProcRow[]): ProcIndex {
+	const byPid = new Map<number, ProcRow>();
+	const kids = new Map<number, number[]>();
+	for (const r of rows) {
+		byPid.set(r.pid, r);
+		if (r.pid === r.ppid) continue; // a self-parented row would make the walk never finish
+		const list = kids.get(r.ppid);
+		if (list) list.push(r.pid);
+		else kids.set(r.ppid, [r.pid]);
+	}
+	return { byPid, kids };
+}
+
+/** Every pid at or below `root`, or [] if the root is not in the snapshot.
+ *
+ *  Iterative with a seen-set: the OS recycles pids, so a snapshot's parent map can contain a
+ *  cycle, and a recursive walk would blow the stack inside a render loop. */
+export function subtreePids(ix: ProcIndex, root: number): number[] {
+	if (!ix.byPid.has(root)) return [];
+	const out: number[] = [];
+	const seen = new Set<number>();
+	const stack = [root];
+	while (stack.length) {
+		const p = stack.pop()!;
+		if (seen.has(p)) continue;
+		seen.add(p);
+		out.push(p);
+		for (const c of ix.kids.get(p) ?? []) stack.push(c);
+	}
+	return out;
 }
 
 /** Parse the snapshot command's JSON. Exported for tests; tolerant by design — a snapshot
@@ -101,10 +151,12 @@ function num(v: unknown): number | null {
 	return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
-function run(file: string, args: string[]): Promise<string> {
+/** Run the snapshot command, reporting its pid alongside its output so the measurement can be
+ *  subtracted from its own result. */
+function run(file: string, args: string[]): Promise<{ raw: string; pid: number | undefined }> {
 	return new Promise((resolve) => {
-		execFile(file, args, { windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (err, stdout) => {
-			resolve(err ? '' : stdout);
+		const child = execFile(file, args, { windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (err, stdout) => {
+			resolve({ raw: err ? '' : stdout, pid: child.pid });
 		});
 	});
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSnapshot, findUsageProbeStrays, type ProcRow } from '../src/terminals/process-snapshot';
+import { parseSnapshot, findUsageProbeStrays, excludeSubtree, indexProcesses, subtreePids, type ProcRow } from '../src/terminals/process-snapshot';
 
 const PROBE = 'C:\\Users\\x\\AppData\\Roaming\\worktree-command-center\\usage-probe';
 const sidecarCmd = (cwd: string) => `node.exe C:\\app\\resources\\pty-sidecar\\sidecar.cjs ${cwd} claude`;
@@ -85,5 +85,42 @@ describe('findUsageProbeStrays', () => {
 	it('skips rows with no command line instead of guessing', () => {
 		const rows = [row({ pid: 55, ppid: 999 })];
 		expect(findUsageProbeStrays(rows, PROBE, APP, [])).toEqual([]);
+	});
+});
+
+describe('excludeSubtree', () => {
+	// The snapshot is taken by a child of the app, so it appears in its own results. Left in, it
+	// lands in "unattributed" on every poll — the measuring tool reporting itself as a leak.
+	const rows = [
+		row({ pid: 100, ppid: 1, name: 'app.exe' }),
+		row({ pid: 200, ppid: 100, name: 'node.exe' }),
+		row({ pid: 900, ppid: 100, name: 'powershell.exe' }),
+		row({ pid: 901, ppid: 900, name: 'conhost.exe' }),
+	];
+
+	it('removes the snapshot process AND its conhost', () => {
+		expect(excludeSubtree(rows, 900).map((r) => r.pid)).toEqual([100, 200]);
+	});
+
+	it('is a no-op when the snapshot pid is unknown', () => {
+		expect(excludeSubtree(rows, undefined).map((r) => r.pid)).toEqual([100, 200, 900, 901]);
+	});
+
+	it('leaves everything alone when the root is not in the snapshot', () => {
+		expect(excludeSubtree(rows, 4242).map((r) => r.pid)).toEqual([100, 200, 900, 901]);
+	});
+});
+
+describe('subtreePids', () => {
+	it('walks a chain to the bottom', () => {
+		const ix = indexProcesses([row({ pid: 1, ppid: 0 }), row({ pid: 2, ppid: 1 }), row({ pid: 3, ppid: 2 })]);
+		expect(subtreePids(ix, 1).sort()).toEqual([1, 2, 3]);
+	});
+	it('returns [] for a root that is not present', () => {
+		expect(subtreePids(indexProcesses([row({ pid: 1, ppid: 0 })]), 99)).toEqual([]);
+	});
+	it('terminates on a cycle rather than hanging', () => {
+		const ix = indexProcesses([row({ pid: 1, ppid: 3 }), row({ pid: 2, ppid: 1 }), row({ pid: 3, ppid: 2 })]);
+		expect(subtreePids(ix, 1).sort()).toEqual([1, 2, 3]);
 	});
 });
