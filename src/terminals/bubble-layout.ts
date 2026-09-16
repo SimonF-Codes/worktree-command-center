@@ -49,8 +49,8 @@ function cellPx(W: number, H: number, gap: number, s: Shape): { w: number; h: nu
 	return { w: Math.floor((W - gap * (s.cols + 1)) / s.cols), h: Math.floor((H - gap * (s.rows + 1)) / s.rows) };
 }
 
-/** Past this multiple of the minimum, an axis stops earning credit. 160 columns is no more
- *  readable than 160 columns; without the cap the score keeps trading one huge axis against the
+/** Past this multiple of the minimum, an axis stops earning credit. a terminal 160 columns wide is no
+ *  more readable than one 120 wide; without the cap the score keeps trading one huge axis against the
  *  other on a big screen and two tiles on a 16:9 stage come out stacked into letterbox strips
  *  instead of side by side. Twice the minimum is "comfortable"; beyond it the tie-break decides. */
 const HEADROOM_CAP = 2;

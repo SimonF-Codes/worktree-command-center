@@ -563,7 +563,10 @@ export class TerminalTile implements StageTile {
 	cellMetrics(): TileCellMetrics | null {
 		const core = (this.term as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } } } | null)?._core;
 		const cell = core?._renderService?.dimensions?.css?.cell;
-		if (!this.el || !cell || !(cell.width > 0) || !(cell.height > 0)) return null;
+		// A hidden tile (display:none) measures 0 and would under-report the chrome — skip it and let
+		// the grid ask the next tile.
+		if (!this.el || this.el.offsetWidth <= 0 || this.el.offsetHeight <= 0) return null;
+		if (!cell || !(cell.width > 0) || !(cell.height > 0)) return null;
 		const fitted = this.fit?.proposeDimensions();
 		if (!fitted) return null;   // not laid out yet — the caller falls back to the defaults
 		return {
@@ -573,6 +576,7 @@ export class TerminalTile implements StageTile {
 			chromeH: Math.max(0, this.el.offsetHeight - fitted.rows * cell.height),
 		};
 	}
+
 	/** This terminal's display name (matches COS_TERMINAL_NAME used by cos-coord chat). */
 	get name(): string {
 		return this.displayName;
