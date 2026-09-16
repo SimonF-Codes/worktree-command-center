@@ -10,6 +10,7 @@ import { removeWorktreeAndBranch, terminalSystemPrompt, folderSystemPrompt, work
 import { loadRolePrompt } from './role-loader';
 import type { SessionFact } from './role-library';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
+import { attachDragSelect } from './drag-select';
 import { FitThrottle } from './fit-throttle';
 import { MIN_TERM_COLS, MIN_TERM_ROWS, type TileCellMetrics } from './bubble-layout';
 import { HiddenOutputBuffer } from './hidden-buffer';
@@ -251,6 +252,14 @@ export class TerminalTile implements StageTile {
 		// xterm's native paste in the capture phase so a right-click doesn't paste TWICE: the Ctrl+V
 		// keydown path already preventDefaults the native paste; right-click did not, hence the double.
 		body.addEventListener('paste', (e) => { e.preventDefault(); e.stopImmediatePropagation(); }, true);
+		// Plain drag selects text even while Claude's TUI tracks the mouse (clicks still reach
+		// the TUI, so menu options stay clickable). Without this, selecting required the
+		// undiscoverable Shift+drag. Attached after the focus-guard above so a press on an
+		// UNcentered tile still only focuses it.
+		attachDragSelect(body, {
+			tuiOwnsMouse: () => this.tuiOwnsMouse(),
+			clearSelection: () => this.term?.clearSelection(),
+		});
 		this.fitThrottle = new FitThrottle({
 			// Only resize the PTY when this tile is CENTERED. Resizing on every bubble/center makes
 			// ConPTY re-emit the screen (xterm appends it → the same message duplicated N times).
