@@ -288,7 +288,10 @@ export class MemoryPanel {
 		const freed = s.rssBytes;
 		const done = await this.deps.endSession(s.workspaceId, s.key);
 		if (!done) { this.deps.toast(`"${s.name}" was already gone`, 'warn'); }
-		else this.deps.toast(`Closed "${s.name}" — freed about ${formatBytes(freed)}`);
+		// The confirm names the way back; so does this. The confirm is read under pressure with a
+		// list in front of you — the toast is what is still on screen ten seconds later, when you
+		// wonder what you just did.
+		else this.deps.toast(`Closed "${s.name}" — freed about ${formatBytes(freed)} · reopen it from the Coordination panel`);
 		await this.refresh();
 	}
 
@@ -304,7 +307,8 @@ export class MemoryPanel {
 		if (!ok) return;
 		let closed = 0;
 		for (const v of victims) if (await this.deps.endSession(v.workspaceId, v.key)) closed++;
-		this.deps.toast(`Closed ${closed} session${closed === 1 ? '' : 's'} — freed about ${formatBytes(freed)}`);
+		this.deps.toast(`Closed ${closed} session${closed === 1 ? '' : 's'} — freed about ${formatBytes(freed)}`
+			+ ' · reopen them from the Coordination panel');
 		await this.refresh();
 	}
 }
