@@ -5,6 +5,41 @@ landed on `main`.
 
 ## Unreleased
 
+**🧠 The RAM gauge shows three quantities instead of one, because one was answering its own
+question wrong**
+- The bar drew this app's share of physical RAM and left the rest as empty track. Measured on
+  2026-09-17: Worktree Command Center **1.1 GB** across 16 processes, everything else
+  **17.1 GB**, actually free **12.9 GB**, total 31.1 GB. So it displayed `1.1/31 GB` — about
+  **3% filled**, reading as a machine with 30 GB of headroom when there was 12.9 GB. The empty
+  97% was silently conflating "free" with "in use by something else", and today that difference
+  was 17 GB. The one question a pressure gauge exists to answer — *can I open another terminal?*
+  — was the one it answered wrong, in the dangerous direction.
+- **Three segments, in the order you read them:** this app (accent, and it stays **first** so
+  its size is read against a fixed left edge — it is the quantity compared over time and the
+  bar is 38px wide), other processes (muted), free (the unfilled track, which already reads as
+  empty without a third colour or a legend). The label leads with the app's own figure, because
+  that is the actionable number and the reason the widget exists: `1.1 GB · 18.2/31 used`.
+- `os.totalmem()` is still read once. **`os.freemem()` is re-read every poll** — free is the
+  fastest-moving of the three, and the number the old bar silently assumed was everything it
+  was not drawing. Neither call spawns a process, so this adds nothing to the ~300 ms snapshot
+  the tracker budgets for.
+- **The seam is admitted, not reconciled.** Free and total come from the OS and are
+  authoritative. This app's figure is a sum of process **working sets**, which over-counts:
+  shared pages — the Electron runtime behind sixteen processes — are counted once each. `other`
+  is a remainder, so it inherits that error backwards and can compute negative. It is clamped
+  at zero, the app segment is drawn no wider than the measured used space so the three
+  fractions still sum to 1, the label keeps reporting the app figure **as measured**, and the
+  tooltip says plainly which number is the soft one. A gauge that quietly reconciles two
+  incompatible measurements is worse than one that admits the seam.
+- **Each segment reports its own state.** The gauge's warning colour still means *something
+  about this app needs attention* — unattributed memory first, then the app's own share,
+  unchanged thresholds. Machine pressure is a second, independent signal and it tints the
+  **free** segment alone. If a machine filled by Chrome could redden the app's gauge, the one
+  reading that must be trusted would start crying wolf about things nobody can fix from here —
+  precisely the failure the unattributed row was designed to avoid.
+- The panel's total row had the same ambiguity (`1.1 GB total`) and gets the same split:
+  `1.1 GB this app · 17.1 GB other · 12.9 GB free of 31.1 GB`.
+
 **🪟 The chrome fits a narrow window instead of running off the edge of it**
 - On a 1080px-wide window (a portrait monitor, a half-screen snap) the top bar's eleven controls
   came to roughly 1330px on a single non-wrapping row. `#app` is `overflow:hidden`, so the
