@@ -1,0 +1,105 @@
+<!doctype html>
+<!-- Layout fixture: the real stylesheets against a faithful copy of the top bar and the dock row,
+     so "does the chrome fit a 1080px portrait monitor" is measured instead of estimated.
+     Open it directly, or drive it from a headless browser; window.measure() returns the numbers. -->
+<html>
+<head>
+	<meta charset="utf-8" />
+	<link rel="stylesheet" href="../../styles.css" />
+	<link rel="stylesheet" href="../../app.css" />
+</head>
+<body>
+<div id="app">
+	<div class="wcc-terminal-root">
+		<div class="wcc-topbar">
+			<span class="wcc-brand"><span class="wcc-brand-mark">🌳</span><span class="wcc-brand-text">Worktree Command Center</span></span>
+			<button class="wcc-add" title="Add folder"><span class="wcc-btn-ico">➕</span><span class="wcc-btn-text">Add folder</span></button>
+			<button class="wcc-add" title="New repo"><span class="wcc-btn-ico">🆕</span><span class="wcc-btn-text">New repo</span></button>
+			<span class="wcc-status">6 repos</span>
+			<select class="wcc-theme-sel">
+				<option>Default</option><option>Olympus</option><option selected>Hades</option><option>Iris</option>
+			</select>
+			<div class="wcc-usage-host" style="display:inline-flex;align-items:center;gap:6px">
+				<div class="wcc-usage">
+					<div class="wcc-batt"><div class="wcc-batt-fill"></div></div>
+					<span class="wcc-usage-session">tap ⟳ for usage</span>
+					<button class="wcc-usage-auto">⏱</button>
+					<button class="wcc-usage-refresh">⟳</button>
+				</div>
+			</div>
+			<div class="wcc-mem-host">
+				<div class="wcc-mem-widget">
+					<span class="wcc-mem-widget-tag">RAM</span>
+					<div class="wcc-membar"><div class="wcc-membar-fill"></div></div>
+					<span class="wcc-mem-widget-label">6.1 / 32 GB</span>
+				</div>
+			</div>
+			<button class="wcc-phone" title="Phone"><span class="wcc-btn-ico">📱</span><span class="wcc-btn-text">Phone</span></button>
+			<button class="wcc-settings-btn" title="Settings"><span class="wcc-btn-ico">⚙</span><span class="wcc-btn-text">Settings</span></button>
+			<button class="wcc-changelog-btn" title="Changelog"><span class="wcc-btn-ico">📋</span><span class="wcc-btn-text">Changelog</span></button>
+			<button class="wcc-settings-btn" title="Roles"><span class="wcc-btn-ico">📖</span><span class="wcc-btn-text">Roles</span></button>
+		</div>
+		<div class="wcc-grid-container">
+			<div class="cos-terminals-controls">
+				<select><option>worktree-command-center</option></select>
+				<select><option>main</option></select>
+				<select><option>Opus 5 (1M)</option></select>
+				<select><option>High effort</option></select>
+				<select><option>Auto</option></select>
+				<button>+ New branch</button>
+				<button class="cos-play-btn">▶ Play</button>
+				<button class="cos-lock-btn">🔓 Lock</button>
+				<button class="cos-god-btn">🜲 Alpha</button>
+				<button class="cos-god-btn">🜲+</button>
+				<button>🧩 View Code</button>
+				<button>⟳ Refresh</button>
+				<button class="cos-journal-btn">📓 Journal Entry</button>
+			</div>
+			<div class="cos-stage-wrap">
+				<div class="cos-terminals-stage"></div>
+				<div class="cos-god-panel"><div class="cos-god-head"><span>🜲 Alpha</span></div><div class="cos-god-body"></div></div>
+				<div class="cos-god-panel"><div class="cos-god-head"><span>🜲 Alpha 4</span></div><div class="cos-god-body"></div></div>
+				<div class="cos-god-panel"><div class="cos-god-head"><span>🜲 Alpha 5</span></div><div class="cos-god-body"></div></div>
+			</div>
+		</div>
+	</div>
+</div>
+<script>
+window.measure = function () {
+	const bar = document.querySelector('.wcc-topbar');
+	const wrap = document.querySelector('.cos-stage-wrap');
+	const stage = document.querySelector('.cos-terminals-stage');
+	const panels = [...document.querySelectorAll('.cos-god-panel')];
+	const ctrls = document.querySelector('.cos-terminals-controls');
+	// Count VISUAL lines, not distinct offsets: align-items:center gives children of different
+	// heights different `top` values on the same line, which reads as one row per child.
+	const rowsOf = (el) => {
+		const mids = [...el.children].map((c) => { const r = c.getBoundingClientRect(); return (r.top + r.bottom) / 2; });
+		const lines = [];
+		for (const m of mids.sort((a, b) => a - b)) if (!lines.some((l) => Math.abs(l - m) < 8)) lines.push(m);
+		return lines.length;
+	};
+	const rightmost = (els) => Math.max(...els.map((e) => e.getBoundingClientRect().right));
+	return {
+		viewport: window.innerWidth + 'x' + window.innerHeight,
+		topbar: {
+			clientWidth: bar.clientWidth,
+			scrollWidth: bar.scrollWidth,
+			rows: rowsOf(bar),
+			height: Math.round(bar.getBoundingClientRect().height),
+			rightmostChild: Math.round(rightmost([...bar.children])),
+			overflowsViewport: rightmost([...bar.children]) > window.innerWidth + 0.5,
+		},
+		controls: { rows: rowsOf(ctrls), scrollWidth: ctrls.scrollWidth, clientWidth: ctrls.clientWidth },
+		dock: {
+			wrapWidth: Math.round(wrap.getBoundingClientRect().width),
+			stageWidth: Math.round(stage.getBoundingClientRect().width),
+			panelWidths: panels.map((p) => Math.round(p.getBoundingClientRect().width)),
+			rightmostPanel: Math.round(rightmost(panels)),
+			overflowsViewport: rightmost(panels) > window.innerWidth + 0.5,
+		},
+	};
+};
+</script>
+</body>
+</html>

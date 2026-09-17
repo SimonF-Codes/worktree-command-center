@@ -849,9 +849,20 @@
 /* The wrap must FILL the remaining column height (like the bare stage did) and BOUND its
    children to it — otherwise the stage's 70vh drives the row and the docked panel runs off
    the bottom of the page. */
-.cos-stage-wrap { flex:1 1 auto; min-height:0; display:flex; gap:10px; align-items:stretch; }
-.cos-stage-wrap > .cos-terminals-stage { flex:1 1 auto; min-width:0; height:100%; min-height:0; }
-.cos-god-panel { position:relative; flex:0 0 380px; min-height:0; display:flex; flex-direction:column; min-width:0; background:#0e0f17; border:1px solid var(--background-modifier-border); border-radius:10px; overflow:hidden; }
+/* overflow-x is the last resort, not the plan: with the floors below the row fits three consoles
+   on a 1080px window, and past that scrolling beats #app's overflow:hidden silently eating a
+   panel. */
+.cos-stage-wrap { flex:1 1 auto; min-height:0; display:flex; gap:10px; align-items:stretch; overflow-x:auto; }
+/* The stage keeps a floor of its own. With `min-width:0` it was the only fully-compressible item
+   in the row, so three docked consoles shrank it to ELEVEN pixels — the terminals were still
+   "on screen" and completely unusable. */
+.cos-stage-wrap > .cos-terminals-stage { flex:1 1 auto; min-width:300px; height:100%; min-height:0; }
+/* Each docked console asks for 380px but may SHRINK to fit the row (`0 1`, not `0 0`). With
+   flex-shrink 0 the panels simply added up: Alpha plus two 🜲+ duplicates wanted 1140px of a
+   1080px window, so the stage was squeezed to nothing and the last panel ran off the right edge
+   under #app's overflow:hidden. Shrinking keeps every panel on screen; the floor stops them
+   collapsing into unreadable strips, and past that the row honestly has no more room. */
+.cos-god-panel { position:relative; flex:0 1 380px; min-width:240px; min-height:0; display:flex; flex-direction:column; background:#0e0f17; border:1px solid var(--background-modifier-border); border-radius:10px; overflow:hidden; }
 .cos-god-head { display:flex; align-items:center; justify-content:space-between; padding:5px 10px; background:#171925; color:#e7c97a; font-weight:600; letter-spacing:.04em; }
 .cos-god-head button { background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:14px; }
 .cos-god-head button:hover { color:#fff; }

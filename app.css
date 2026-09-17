@@ -48,18 +48,42 @@ html, body {
 	overflow: hidden;
 }
 
-/* Top bar (Add folder) */
+/* Top bar (Add folder).
+   Eleven children on one row — brand, two adds, status, theme, usage battery, memory gauge,
+   Phone, Settings, Changelog, Roles — came to ~1330px of content. #app is overflow:hidden, so on
+   anything narrower (a 1080px-wide portrait monitor, a half-screen snap) the right-hand buttons
+   were simply CLIPPED AWAY with no scrollbar and no way to reach them. It wraps now, so the bar
+   can always be fully used; the compaction below is what usually keeps it to one line anyway. */
 .wcc-topbar {
 	display: flex;
 	align-items: center;
+	flex-wrap: wrap;
 	gap: 12px;
+	row-gap: 6px;
 	padding: 8px 12px !important;
 	background: var(--background-secondary) !important;
 	border-bottom: 1px solid var(--background-modifier-border);
 	flex: 0 0 auto;
 }
-.wcc-topbar .wcc-brand { font-weight: 600; letter-spacing: 0.2px; color: var(--text-normal); }
+.wcc-topbar .wcc-brand { font-weight: 600; letter-spacing: 0.2px; color: var(--text-normal); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .wcc-topbar .wcc-status { color: var(--text-muted); font-size: 12px; }
+
+/* Narrow shell: spend less on chrome before spending the user's rows. The words go first (the
+   tree still says which app this is), then the gutters, then the button padding. Wrapping is
+   still the safety net underneath — this only decides how often it is needed. */
+@media (max-width: 1300px) {
+	.wcc-topbar { gap: 6px; padding: 6px 8px !important; }
+	.wcc-topbar .wcc-brand-text { display: none; }
+	.wcc-topbar button { padding: 4px 7px; font-size: 12px; }
+	.wcc-topbar select { padding: 4px 6px; font-size: 12px; }
+}
+/* Tighter still: the words go and the icons stay, each button keeping its label as a tooltip.
+   Worth ~220px, which is the difference between one row and two on a 1080px portrait monitor. */
+@media (max-width: 1150px) {
+	.wcc-topbar .wcc-btn-text { display: none; }
+	.wcc-topbar button { padding: 4px 6px; }
+}
+.wcc-topbar .wcc-btn-ico + .wcc-btn-text { margin-left: 5px; }
 /* DEV badge beside the brand — dev build only (see app.ts). Loud on purpose: the dev and
    installed builds share one profile, so you need to know which window you're in. */
 .wcc-topbar .wcc-devbadge {

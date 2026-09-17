@@ -15,6 +15,8 @@ import { FitThrottle } from './fit-throttle';
 import { ctrlClickActivator, openExternalUrl } from './links';
 import { promptForConfirm } from '../ui/prompt-dialog';
 import { NoticeGate } from './notice-gate';
+import { shouldStartFresh } from './resume-fallback';
+import { orphanTranscripts, pickResumeFile, projectDirName, type JobRecord } from './resume-target';
 
 /** How long a released backlog waits before being typed in, so the keystroke that emptied the box
  *  lands first. Nothing to do with the 250/900ms Enter pair in writeNotice. */
@@ -33,7 +35,7 @@ export interface GodConsoleOpts {
 	onFocusChange?: (focused: boolean) => void;
 	instanceName?: string;   // head label + COS_TERMINAL_NAME (default 'Kane')
 	terminalId?: string;     // COS_TERMINAL_ID for cos-coord identity (default '0')
-	resume?: boolean;        // open with --continue (fresh fallback) — the main Kane sets this
+	resume?: boolean;        // reopen this home's conversation (fresh fallback) — the main Kane sets this
 }
 
 /** GOD: a single privileged claude session in a docked side panel. Real terminal — the
@@ -83,7 +85,10 @@ export class GodConsole {
 		// Left-edge grip: drag to resize the panel width. One shared width for every Kane
 		// panel, persisted across sessions; the body's ResizeObserver refits xterm live.
 		const saved = Number(window.localStorage.getItem('cos-god-width'));
-		if (Number.isFinite(saved) && saved >= 280) this.el.style.flex = `0 0 ${Math.min(Math.round(saved), Math.round(window.innerWidth * 0.7))}px`;
+		// `0 1`, matching the stylesheet: the dragged width is what this panel ASKS for, not a
+		// floor it holds against the window. Inline `0 0` here used to override the rule and put
+		// the panels back to overflowing the dock row whenever more than one was docked.
+		if (Number.isFinite(saved) && saved >= 280) this.el.style.flex = `0 1 ${Math.min(Math.round(saved), Math.round(window.innerWidth * 0.7))}px`;
 		const grip = this.el.createDiv({ cls: 'cos-god-resize' });
 		grip.addEventListener('pointerdown', (e) => {
 			e.preventDefault();
@@ -94,7 +99,7 @@ export class GodConsole {
 			const move = (ev: PointerEvent): void => {
 				if (!this.el) return; // disposed mid-drag
 				const w = Math.min(Math.max(280, startW + (startX - ev.clientX)), Math.round(window.innerWidth * 0.7));
-				this.el.style.flex = `0 0 ${Math.round(w)}px`;
+				this.el.style.flex = `0 1 ${Math.round(w)}px`;
 			};
 			const up = (ev: PointerEvent): void => {
 				grip.classList.remove('dragging');
@@ -221,12 +226,13 @@ export class GodConsole {
 	}
 
 	/** Build args/env, create Kane's session bridge, wire it, and start it. Called from render()
-	 *  and from refresh(). resume → claude --continue; fallbackFresh → if --continue finds no
-	 *  conversation, relaunch a FRESH session in place (so ⟳ revives a dead Kane). */
+	 *  and from refresh(). resume → resume this console's own conversation (see resumeArgs);
+	 *  fallbackFresh → if that resume cannot start, relaunch a FRESH session in place, so ⟳
+	 *  revives a dead Kane instead of re-running the same doomed command. */
 	private startSession(resume: boolean, fallbackFresh = false): void {
 		const ctxFile = this.writeSystemPromptFile();
 		this.writeKaneCommands();
-		const args: string[] = resume ? ['--continue'] : [];
+		const args: string[] = resume ? this.resumeArgs() : [];
 		if (ctxFile) args.push('--append-system-prompt-file', ctxFile);
 		const sidecarDir = path.dirname(this.opts.sidecarPath);
 		const env: Record<string, string> = {
@@ -238,18 +244,61 @@ export class GodConsole {
 			PATH: sidecarDir + path.delimiter + (process.env.PATH ?? ''),
 		};
 		fs.mkdirSync(this.opts.godHomeDir, { recursive: true });
-		let probe = ''; // first bytes only (capped) — detect the --continue "no conversation" exit
+		let probe = ''; // first bytes only (capped) — the refusal text a failed resume prints
+		const startedAt = Date.now();
 		this.bridge = new SessionBridge(this.opts.sidecarPath, this.opts.godHomeDir, 'claude', args, env);
 		this.bridge.onData((d) => { if (fallbackFresh && probe.length < 2048) probe += d; this.term?.write(d); this.markBusy(); });
 		this.bridge.onExit((code) => {
-			if (fallbackFresh && /no conversation found to continue/i.test(probe)) {
-				this.term?.reset();          // --continue had nothing to resume → start fresh in place
-				this.startSession(false);
+			const name = this.opts.instanceName ?? 'Kane';
+			if (shouldStartFresh({ fallbackFresh, probe, elapsedMs: Date.now() - startedAt })) {
+				// Say WHY, both here and in devtools: a silent reset is indistinguishable from
+				// "my history vanished for no reason". The new TUI may paint over the line, so the
+				// console.warn is the copy that survives.
+				console.warn(`[god] ${name}: resume failed (code ${code ?? '?'}), starting fresh. First output:`, probe.slice(0, 500));
+				this.term?.reset();
+				this.term?.write(`\r\n[${name} could not resume the previous conversation — starting a fresh session]\r\n`);
+				this.startSession(false); // fallbackFresh defaults false → a fresh session can never loop back here
 				return;
 			}
-			this.term?.write(`\r\n[${this.opts.instanceName ?? 'Kane'} session ended (code ${code ?? '?'})]\r\n`);
+			this.term?.write(`\r\n[${name} session ended (code ${code ?? '?'})]\r\n`);
 		});
 		this.bridge.start();
+	}
+
+	/** Args that resume THIS console's own conversation.
+	 *
+	 *  Bare `--continue` takes the newest transcript in this home's project folder, which a
+	 *  background job forked off a previous console can outrank — that is how the primary console
+	 *  came back dead after a restart while an orphaned job still held the session (2026-09-16).
+	 *  When such a job is on disk we name the file we want instead. Everything else — no job, no
+	 *  project folder yet, an unreadable one — falls through to the old `--continue`, so a home
+	 *  that never spawned a job takes exactly the path it always did. */
+	private resumeArgs(): string[] {
+		const CONTINUE = ['--continue'];
+		try {
+			const home = process.env.USERPROFILE || process.env.HOME;
+			if (!home) return CONTINUE;
+			const projectDir = path.join(home, '.claude', 'projects', projectDirName(this.opts.godHomeDir));
+			const files = fs.readdirSync(projectDir).filter((f) => f.endsWith('.jsonl'));
+			if (files.length === 0) return CONTINUE; // nothing to resume — --continue starts fresh itself
+			const jobsDir = path.join(home, '.claude', 'jobs');
+			const jobs: JobRecord[] = [];
+			for (const id of fs.readdirSync(jobsDir)) {
+				try {
+					const st = JSON.parse(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')) as { linkScanPath?: string };
+					jobs.push({ linkScanPath: st.linkScanPath }); // matched by PATH — a job folder's id is a short prefix of its transcript's
+				} catch { /* a plain file (pins.json), a job mid-write, a job without a transcript */ }
+			}
+			const orphans = orphanTranscripts(jobs, projectDir);
+			if (orphans.size === 0) return CONTINUE; // nothing to disambiguate — unchanged behaviour
+			const pick = pickResumeFile(files.map((f) => ({
+				file: path.join(projectDir, f),
+				mtimeMs: fs.statSync(path.join(projectDir, f)).mtimeMs,
+			})), orphans);
+			// Every transcript here belongs to a background job → none of them is this console's
+			// conversation, so start fresh rather than adopting a stranger's.
+			return pick ? ['--resume', pick] : [];
+		} catch { return CONTINUE; }
 	}
 
 	/** Kane has no ready-marker, so approximate "busy" from output activity: any output marks
@@ -271,7 +320,7 @@ export class GodConsole {
 		this.term.options.minimumContrastRatio = f.minimumContrastRatio;
 	}
 
-	/** Refresh Kane: kill + relaunch with --continue in place, resuming his conversation.
+	/** Refresh Kane: kill + relaunch in place, resuming his conversation.
 	 *  Confirms first only if he's mid-output. */
 	async refresh(): Promise<void> {
 		if (this.busy) {
@@ -291,7 +340,7 @@ export class GodConsole {
 		// New TUI, empty input box — but anything queued is KEPT and goes out on the next ready
 		// marker, rather than being typed into a session that is still booting.
 		this.gate.reset();
-		this.startSession(true, true); // try --continue; if no conversation, fall back to a fresh session
+		this.startSession(true, true); // try to resume; if that cannot start, fall back to a fresh session
 	}
 
 	/** Show/hide the panel WITHOUT killing the session. Refits on show. */

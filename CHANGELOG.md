@@ -3,6 +3,52 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
+## Unreleased
+
+**🪟 The chrome fits a narrow window instead of running off the edge of it**
+- On a 1080px-wide window (a portrait monitor, a half-screen snap) the top bar's eleven controls
+  came to roughly 1330px on a single non-wrapping row. `#app` is `overflow:hidden`, so the
+  right-hand end — Phone, Settings, Changelog, Roles — was simply **clipped away**, with no
+  scrollbar and no way to reach it.
+- The bar wraps now, so nothing can ever be unreachable. Above that, it spends less on chrome as
+  the window narrows: under 1300px the brand drops to 🌳 and the gutters tighten, under 1150px the
+  button labels drop to icons, each keeping its word as a tooltip. Measured on the real
+  stylesheets at a 1078px viewport: **one row, 41px tall, 280px to spare** (was clipped).
+- **Docked consoles shrink instead of overflowing.** `.cos-god-panel` was `flex: 0 0 380px` — no
+  shrink — so Alpha plus two 🜲+ duplicates asked for 1140px of a 1080px window and the last panel
+  ran off the edge. They are `0 1 380px` now, with a 240px floor.
+- **The stage has a floor too.** It was the only fully-compressible item in that row, so three
+  docked consoles squeezed it to **eleven pixels** — technically on screen, entirely unusable. It
+  keeps 300px, and if the row still cannot fit, the dock scrolls rather than letting
+  `overflow:hidden` eat a panel.
+- `tests/fixtures/topbar-fit.html` is the measuring harness: the real stylesheets against a copy
+  of the bar and the dock row, with `window.measure()` returning the widths and row counts. Kept
+  because none of this is checkable in vitest — jsdom has no layout engine.
+
+**🜲 An overseer console no longer comes back dead because a background job outranked it**
+- The primary console for a workspace restored itself with bare `claude --continue`, which takes
+  the **newest transcript** in that home's project folder. That is the right guess until the
+  console spawns a background job: the job forks its own session into the *same* folder and keeps
+  writing after the console is gone. On the next launch `--continue` reached for the job's
+  transcript instead — and when the daemon still held that session open, the console exited on
+  arrival. Observed on `.god/default`: the job forked at 22:39:59, the app restarted at 22:42:32,
+  and Alpha never came back.
+- **The resume now names the file it wants.** Jobs recording a transcript in this home's folder
+  are orphans by construction at restore time — no console for the home exists yet, so any such
+  job belongs to a console that is already gone. The newest transcript that is *not* one of
+  theirs is passed as `--resume <file>`. With no job on disk nothing changes: still `--continue`.
+  When *every* transcript belongs to a job, the console starts fresh rather than adopting a
+  conversation that was never its own.
+- Matching is on the transcript **path**, never a session id — a job's folder is named with a
+  short id (`45d9196d`) while its transcript carries the full uuid (`45d9196d-8a96-…`), so keying
+  by id silently matches nothing and the orphan stays eligible.
+- **The fresh-session fallback is no longer one string.** It fired only on
+  `no conversation found to continue`, so any other refusal left `[… session ended (code N)]` on
+  screen and a ⟳ that re-ran the identical doomed command. Now a known refusal *or* any exit
+  inside the first 4s — a resume that never got off the ground — retries fresh, says so in the
+  terminal, and logs the first output to devtools. The retry runs with the fallback disabled, so
+  it can never loop.
+
 ## 0.7.0 — 2026-09-16
 
 **🧹 The memory panel can close unattributed processes — but only ones old enough to be safe**

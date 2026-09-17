@@ -98,12 +98,25 @@ async function main(): Promise<void> {
 
 		// --- top bar (persistent above the tabs + grid; never wiped by grid.mount()) ---
 		const topBar = terminalRoot.createDiv({ cls: 'wcc-topbar' });
-		topBar.createSpan({ cls: 'wcc-brand', text: '🌳 Worktree Command Center' });
+		// Two spans, not one string: on a narrow window the words drop and the tree stays, which
+		// buys back ~180px of a bar that otherwise runs off the edge (see .wcc-topbar in app.css).
+		const brand = topBar.createSpan({ cls: 'wcc-brand' });
+		brand.createSpan({ cls: 'wcc-brand-mark', text: '🌳' });
+		brand.createSpan({ cls: 'wcc-brand-text', text: 'Worktree Command Center' });
 		// DEV badge: both builds share one profile (same repos/workspaces/sessions), so without a
 		// marker it's impossible to tell which one you're typing into. Dev only.
 		if (isDev) topBar.createSpan({ cls: 'wcc-devbadge', text: 'DEV', attr: { title: 'Running the dev build from source (npm start) — same profile as the installed app' } });
-		const addFolderBtn = topBar.createEl('button', { cls: 'wcc-add', text: '➕ Add folder' });
-		const newRepoBtn = topBar.createEl('button', { cls: 'wcc-add', text: '🆕 New repo' });
+		/** A top-bar button whose WORD drops on a narrow window, leaving the icon and its tooltip.
+		 *  Eleven full-width controls do not fit a 1080px portrait monitor; icon-only gets the bar
+		 *  back to a single row there instead of two (see .wcc-topbar in app.css). */
+		const barButton = (cls: string, icon: string, label: string): HTMLButtonElement => {
+			const b = topBar.createEl('button', { cls, attr: { title: label } });
+			b.createSpan({ cls: 'wcc-btn-ico', text: icon });
+			b.createSpan({ cls: 'wcc-btn-text', text: label });
+			return b;
+		};
+		const addFolderBtn = barButton('wcc-add', '➕', 'Add folder');
+		const newRepoBtn = barButton('wcc-add', '🆕', 'New repo');
 		const statusSpan = topBar.createSpan({ cls: 'wcc-status', text: `${repos.length} repos` });
 
 		// Theme switcher: applies instantly, persists via the merge below.
@@ -254,8 +267,8 @@ async function main(): Promise<void> {
 		attention.render(topBar);
 		window.addEventListener('beforeunload', () => attention.dispose());
 
-		const phoneBtn = topBar.createEl('button', { cls: 'wcc-phone', text: '📱 Phone' });
-		const settingsBtn = topBar.createEl('button', { cls: 'wcc-settings-btn', text: '⚙ Settings' });
+		const phoneBtn = barButton('wcc-phone', '📱', 'Phone');
+		const settingsBtn = barButton('wcc-settings-btn', '⚙', 'Settings');
 
 		// ⚙ Settings button → panel to configure journal "Convert to…" destinations. Created early
 		// (before depsFor/grids) so GridDeps.openSettings can reference it.
@@ -269,7 +282,7 @@ async function main(): Promise<void> {
 		settingsBtn.addEventListener('click', () => { void settingsPanel.toggle(appEl); });
 
 		// 📋 Changelog button → panel with the current version + CHANGELOG.md.
-		const changelogBtn = topBar.createEl('button', { cls: 'wcc-changelog-btn', text: '📋 Changelog' });
+		const changelogBtn = barButton('wcc-changelog-btn', '📋', 'Changelog');
 		const changelogPanel = new ChangelogPanel({ appRoot, version });
 		changelogBtn.addEventListener('click', () => changelogPanel.toggle(appEl));
 
@@ -367,7 +380,7 @@ async function main(): Promise<void> {
 		// It rides the same hide/show machinery an overlay surface uses, so the terminal grid
 		// unmounts (every tile suspends) while something else owns the window, and leaving puts
 		// the workspaces back exactly as they were.
-		const rolesBtn = topBar.createEl('button', { cls: 'wcc-settings-btn', text: '📖 Roles' });
+		const rolesBtn = barButton('wcc-settings-btn', '📖', 'Roles');
 		// The library path is re-read from config on every open rather than captured at startup:
 		// adding the roleLibrary key should show up in the wiki without relaunching the app.
 		// (Running SESSIONS still pick a role file up at session start only, by design.)
