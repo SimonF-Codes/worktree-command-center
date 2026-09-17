@@ -121,7 +121,12 @@ export function closeConfirm(row: Pick<MemoryRow, 'name' | 'busy'>): ConfirmCopy
 }
 
 /** What the panel asks before a bulk close. Names them — at most eight, then a count — because
- *  "close 7 sessions" is not something anyone can agree to honestly. */
+ *  "close 7 sessions" is not something anyone can agree to honestly.
+ *
+ *  It also names the route back, the same promise closeConfirm() makes for a single session.
+ *  Closing nine at once and being told only that things are "kept" reads as data loss at the
+ *  moment it matters: nothing is lost, but the user has no idea where to look, so the route is
+ *  spelled out as a click path rather than left as "it can be reopened". */
 export function bulkConfirm(victims: readonly MemoryRow[], thresholdLabel: string, now: number): ConfirmCopy {
 	const shown = victims.slice(0, 8)
 		.map((v) => `• ${v.name} (${v.workspaceName}, idle ${formatIdle(now - (v.idleSince ?? now))})`)
@@ -131,7 +136,8 @@ export function bulkConfirm(victims: readonly MemoryRow[], thresholdLabel: strin
 	return {
 		title: `Close ${victims.length} session${victims.length === 1 ? '' : 's'} idle over ${thresholdLabel}?`,
 		body: `${shown}${rest}\n\nAbout ${formatBytes(freed)}. Sessions that are working are NOT included. `
-			+ 'Each conversation, worktree and branch is kept; uncommitted work is parked.',
+			+ 'Each conversation, worktree and branch is kept; uncommitted work is parked. '
+			+ 'To bring one back: Coordination panel → its branch in the worktree list → Reopen.',
 		okLabel: `Close ${victims.length}`,
 	};
 }

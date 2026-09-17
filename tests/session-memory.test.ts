@@ -174,6 +174,16 @@ describe('confirm copy', () => {
 	it('states that working sessions are excluded, so the button can be trusted', () => {
 		expect(bulkConfirm([row({ key: 'a' })], '2 hours', 0).body).toMatch(/working are NOT included/);
 	});
+
+	// The regression guard for a real incident: nine terminals closed at once, every conversation
+	// safe on disk, and an hour lost to believing they were gone — because the confirm said the
+	// work was "kept" without ever saying where to go for it. Naming the panel is the fix, so
+	// naming the panel is what the test asserts.
+	it('names WHERE a bulk-closed session comes back from, not just that it can', () => {
+		const body = bulkConfirm([row({ key: 'a' }), row({ key: 'b' })], '1 hour', 0).body;
+		expect(body).toMatch(/Coordination panel/);
+		expect(body).toMatch(/Reopen/);
+	});
 });
 
 describe('unattributedConfirm', () => {
@@ -215,6 +225,14 @@ describe('unattributedConfirm', () => {
 		expect(c.body).toContain('LEFT ALONE');
 		expect(c.body).toContain('git from the coordination hooks');
 		expect(c.body).toContain('Nothing a session claims is ever included');
+	});
+
+	// The session confirms gained a "reopen it from the Coordination panel" route; this one must
+	// NOT. A stray process belongs to no session, so there is no branch to reopen and no
+	// conversation to continue — promising a way back here would be a lie about a real kill.
+	it('never offers the reopen route the session confirms do', () => {
+		const c = unattributedConfirm(plan(), NOW, '3 minutes');
+		expect(c.body).not.toMatch(/Reopen|Coordination panel/);
 	});
 
 	it('warns that a tree takes its children when fewer trees than processes are being killed', () => {
