@@ -76,7 +76,7 @@ describe('closeableUnattributed', () => {
 		const { state, now } = steady([leak], 12, 20_000);
 		const plan = closeableUnattributed([leak], state, now);
 		expect(plan.victims.map((v) => v.pid)).toEqual([500]);
-		expect(plan.trees).toEqual([{ root: 500, pids: [500], rssBytes: 254 * MB }]);
+		expect(plan.trees).toEqual([{ root: 500, startedAt: T0 - 60_000, pids: [500], rssBytes: 254 * MB }]);
 		expect(plan.totalBytes).toBe(254 * MB);
 	});
 
@@ -146,6 +146,17 @@ describe('closeableUnattributed', () => {
 		// kill it.
 		expect(plan.victims.map((v) => v.pid)).toEqual([502, 500, 501]);
 		expect(plan.totalBytes).toBe(302 * MB);
+	});
+
+	it('carries the start time of the root, so a plan can be re-checked after a confirm', () => {
+		const leak = proc({ pid: 500, startedAt: T0 - 90 * 60_000 });
+		const { state, now } = steady([leak], 12, 20_000);
+		expect(closeableUnattributed([leak], state, now).trees[0]!.startedAt).toBe(T0 - 90 * 60_000);
+		// Same pid, different process: the two plans do not match, and a caller comparing them
+		// declines rather than killing the newcomer.
+		const recycled = proc({ pid: 500, startedAt: now });
+		const after = trackUnattributed(state, [recycled], [500], now);
+		expect(closeableUnattributed([recycled], after, now).trees).toEqual([]);
 	});
 
 	it('drops a pid that died between the last poll and the click', () => {

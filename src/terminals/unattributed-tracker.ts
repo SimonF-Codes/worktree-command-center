@@ -46,6 +46,10 @@ export const EMPTY_UNATTRIBUTED: UnattributedState = new Map();
  *  not have its bytes counted as freed. */
 export interface CloseableTree {
 	root: number;
+	/** The root's creation time, so a plan made before a confirm can be checked against a plan
+	 *  made after it. A pid recycled in between is a DIFFERENT process, and the only thing that
+	 *  can tell you so is this field. */
+	startedAt: number;
 	/** Every pid in the tree, the root included. All of them are eligible; see `closeable`. */
 	pids: number[];
 	rssBytes: number;
@@ -148,8 +152,15 @@ export function closeableUnattributed(
 	const trees: CloseableTree[] = [];
 	for (const [pid, pids] of closeable) {
 		const ppid = ix.byPid.get(pid)?.ppid;
+		// Only the immediate parent needs checking: closeability is inherited downwards, so a
+		// closeable grandparent implies a closeable parent.
 		if (ppid !== undefined && closeable.has(ppid)) continue; // an ancestor's kill covers it
-		trees.push({ root: pid, pids, rssBytes: pids.reduce((a, p) => a + (ix.byPid.get(p)?.rssBytes ?? 0), 0) });
+		trees.push({
+			root: pid,
+			startedAt: ripe.get(pid)!.startedAt,
+			pids,
+			rssBytes: pids.reduce((a, p) => a + (ix.byPid.get(p)?.rssBytes ?? 0), 0),
+		});
 	}
 
 	// Biggest first, matching the panel: the question being answered is "what is holding the

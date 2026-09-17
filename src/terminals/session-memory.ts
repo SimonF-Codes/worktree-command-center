@@ -170,6 +170,51 @@ export function unattributedConfirm(plan: CloseablePlan, now: number, thresholdL
 	};
 }
 
+/** What actually happened when the unattributed close ran. */
+export interface KillOutcome {
+	/** Processes confirmed dead, counting everything that went with a killed tree. */
+	ended: number;
+	freedBytes: number;
+	/** Trees whose kill could not be confirmed, with taskkill's own explanation. */
+	failed: Array<{ pid: number; detail: string }>;
+	/** Process TREES that were in the confirm but no longer eligible when the kill ran — a
+	 *  child was spawned under one, or it died on its own, while the dialog was open. */
+	skipped: number;
+}
+
+/** How the panel reports that outcome.
+ *
+ *  A kill that silently failed MUST NOT read as a success. taskkill can refuse — access denied,
+ *  a process mid-exit — and the pid is kept by kill-tree for a later retry, but the person who
+ *  pressed the button has to be told now, or they will believe the memory came back and go
+ *  looking for a different explanation.
+ *
+ *  Pure, because "did it work" is exactly the sentence worth testing. */
+export function unattributedResult(o: KillOutcome): { message: string; variant: 'info' | 'warn' | 'error' } {
+	const freed = ` — freed about ${formatBytes(o.freedBytes)}`;
+	const left = o.skipped
+		? `; ${o.skipped} changed while you were deciding and ${o.skipped === 1 ? 'was' : 'were'} left alone`
+		: '';
+	if (o.failed.length) {
+		const first = o.failed[0]!;
+		const more = o.failed.length > 1 ? ` (and ${o.failed.length - 1} more)` : '';
+		return {
+			message: `Closed ${o.ended} process${o.ended === 1 ? '' : 'es'}${o.ended ? freed : ''}. `
+				+ `${o.failed.length} REFUSED: pid ${first.pid}: ${first.detail}${more}${left}`,
+			variant: 'error',
+		};
+	}
+	if (!o.ended) {
+		return {
+			message: o.skipped
+				? 'Closed nothing: everything in the list changed while you were deciding, and was left alone'
+				: 'Closed nothing — they were already gone',
+			variant: 'warn',
+		};
+	}
+	return { message: `Closed ${o.ended} unattributed process${o.ended === 1 ? '' : 'es'}${freed}${left}`, variant: 'info' };
+}
+
 /** Bytes as the panel shows them: GB once it's worth it, MB below that. */
 export function formatBytes(n: number): string {
 	if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;

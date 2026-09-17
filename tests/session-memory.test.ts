@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { attributeMemory, idleLongerThan, formatBytes, formatIdle, closeConfirm, bulkConfirm, unattributedConfirm, type SessionClaim, type MemoryRow } from '../src/terminals/session-memory';
+import { attributeMemory, idleLongerThan, formatBytes, formatIdle, closeConfirm, bulkConfirm, unattributedConfirm, unattributedResult, type SessionClaim, type MemoryRow, type KillOutcome } from '../src/terminals/session-memory';
 import type { CloseablePlan, TrackedProc } from '../src/terminals/unattributed-tracker';
 import type { ProcRow } from '../src/terminals/process-snapshot';
 
@@ -234,5 +234,53 @@ describe('unattributedConfirm', () => {
 	it('reads correctly for exactly one process', () => {
 		const c = unattributedConfirm(plan({ victims: [tracked({ pid: 501 })] }), NOW, '3 minutes');
 		expect(c.title).toBe('Close 1 unattributed process?');
+	});
+});
+
+describe('unattributedResult — a kill that failed must never read as a success', () => {
+	const outcome = (over: Partial<KillOutcome> = {}): KillOutcome =>
+		({ ended: 3, freedBytes: 700 * MB, failed: [], skipped: 0, ...over });
+
+	it('reports what died and what it freed', () => {
+		const r = unattributedResult(outcome());
+		expect(r.message).toBe('Closed 3 unattributed processes — freed about 700 MB');
+		expect(r.variant).toBe('info');
+	});
+
+	it('names the refusal, with taskkill\'s own words, and shouts about it', () => {
+		const r = unattributedResult(outcome({ ended: 2, failed: [{ pid: 812, detail: 'taskkill exit 1: Access is denied' }] }));
+		expect(r.variant).toBe('error');
+		expect(r.message).toContain('REFUSED');
+		expect(r.message).toContain('pid 812');
+		expect(r.message).toContain('Access is denied');
+	});
+
+	it('does not claim to have freed anything when NOTHING died', () => {
+		const r = unattributedResult(outcome({ ended: 0, freedBytes: 0, failed: [{ pid: 812, detail: 'taskkill exit 1' }] }));
+		expect(r.message).not.toContain('freed');
+		expect(r.variant).toBe('error');
+	});
+
+	it('counts the extra refusals rather than listing every one', () => {
+		const failed = [1, 2, 3].map((pid) => ({ pid, detail: 'taskkill exit 1' }));
+		expect(unattributedResult(outcome({ failed })).message).toContain('(and 2 more)');
+	});
+
+	it('says when something was dropped between the confirm and the kill', () => {
+		expect(unattributedResult(outcome({ skipped: 1 })).message)
+			.toContain('1 changed while you were deciding and was left alone');
+		expect(unattributedResult(outcome({ skipped: 2 })).message).toContain('2 changed');
+	});
+
+	it('warns rather than congratulates when the whole list evaporated', () => {
+		const r = unattributedResult(outcome({ ended: 0, freedBytes: 0, skipped: 2 }));
+		expect(r.variant).toBe('warn');
+		expect(r.message).toContain('Closed nothing');
+	});
+
+	it('warns when there was simply nothing left to kill', () => {
+		const r = unattributedResult({ ended: 0, freedBytes: 0, failed: [], skipped: 0 });
+		expect(r.variant).toBe('warn');
+		expect(r.message).toBe('Closed nothing — they were already gone');
 	});
 });

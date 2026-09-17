@@ -1,8 +1,10 @@
 import type { MemoryMonitor } from '../terminals/memory-monitor';
 import {
-	idleLongerThan, formatBytes, formatIdle, closeConfirm, bulkConfirm,
-	type MemoryReport, type MemoryRow,
+	idleLongerThan, formatBytes, formatIdle, closeConfirm, bulkConfirm, unattributedConfirm,
+	unattributedResult, type KillOutcome, type MemoryReport, type MemoryRow,
 } from '../terminals/session-memory';
+import { STALE_MS, type CloseableTree } from '../terminals/unattributed-tracker';
+import { killProcessTree, type KillResult } from '../terminals/kill-tree';
 import { promptForConfirm } from './prompt-dialog';
 
 /** How fast the SHARED poller runs while this panel is open.
@@ -21,6 +23,18 @@ const BULK_CHOICES: Array<{ label: string; ms: number }> = [
 	{ label: '4 hours', ms: 4 * 60 * 60_000 },
 ];
 
+/** A closeable tree's identity across two plans: the pid alone would let a recycled number
+ *  inherit the agreement given for the process that held it. */
+const treeKey = (t: CloseableTree): string => `${t.root}@${t.startedAt}`;
+
+/** The age gate in words, derived from the constant so the copy cannot drift away from the
+ *  rule it describes. */
+function staleLabel(): string {
+	const mins = STALE_MS / 60_000;
+	if (mins >= 1) return `${mins} minute${mins === 1 ? '' : 's'}`;
+	return `${Math.round(STALE_MS / 1000)} seconds`;
+}
+
 export interface MemoryPanelDeps {
 	/** The one process poller, shared with the top-bar widget. The session claims and the app
 	 *  pid live there now, because they belong to whoever takes the snapshot. */
@@ -28,6 +42,9 @@ export interface MemoryPanelDeps {
 	/** End one session, keeping its worktree and branch. Returns false if it was already gone. */
 	endSession: (workspaceId: string, key: string) => Promise<boolean>;
 	toast: (msg: string, variant?: 'info' | 'warn' | 'error') => void;
+	/** How an unattributed process tree is ended. The app's ONE kill path, injectable only so a
+	 *  test never has to spawn taskkill. */
+	killTree?: (pid: number) => Promise<KillResult>;
 }
 
 /** "Session memory": what every live session is costing in RAM, across every workspace, and
@@ -137,6 +154,26 @@ export class MemoryPanel {
 		for (const s of r.sessions) this.renderRow(body, s, now, selected.has(s.key));
 	}
 
+	/** The leak row, and the only place on the floor that offers to end a process no session
+	 *  claims.
+	 *
+	 *  This row used to carry a comment refusing a close button — "these pids belong to nothing
+	 *  the app can name, so the honest action is to report them and let a restart (which reaps
+	 *  them) clear it". The objection behind it stands, and is now written into the rule below.
+	 *  What did not stand is the remedy: restarting kills every session on the floor to reclaim
+	 *  memory held by things that are not sessions, which is why the usage-probe leak was left
+	 *  running for hours — the only cure cost more than the disease.
+	 *
+	 *  So there is a button, and AGE is what makes it safe. Unattributed is not a synonym for
+	 *  leaked: git invoked by the coordination hooks, cos-coord and their conhosts pass through
+	 *  this row constantly, and a git killed mid-write can leave an index.lock in a repo eight
+	 *  terminals share — damage that surfaces much later, somewhere else. Only processes that
+	 *  have been unattributed in EVERY snapshot for over three minutes and at least three polls,
+	 *  with nothing younger anywhere in their tree, are ever offered. A transient never lives
+	 *  long enough to qualify; a leak has been there for hours.
+	 *
+	 *  Never automatic, at any threshold. Which processes matter is a judgement only the person
+	 *  looking at the floor has, and an auto-reaper that gets it wrong corrupts a shared repo. */
 	private renderUnattributed(body: HTMLElement, r: MemoryReport): void {
 		const el = body.createDiv({ cls: 'wcc-mem-row wcc-mem-unattributed' });
 		const main = el.createDiv({ cls: 'wcc-mem-rowmain' });
@@ -146,12 +183,57 @@ export class MemoryPanel {
 			cls: 'wcc-mem-sub',
 			text: `${r.unattributed.procCount} process${r.unattributed.procCount === 1 ? '' : 'es'} under this app that no session owns`,
 		});
+
+		const plan = this.deps.monitor.unattributedPlan();
+		const n = plan.victims.length;
 		el.createDiv({
 			cls: 'wcc-mem-sub wcc-mem-hint',
-			// No close button here on purpose: these pids belong to nothing the app can name, so
-			// the honest action is to report them and let a restart (which reaps them) clear it.
-			text: 'Nothing on the floor is holding these. Restarting the app reaps them — and if this keeps growing, something is leaking.',
+			text: n
+				? `${n} of them ${n === 1 ? 'has' : 'have'} been unattributed on every poll for over ${staleLabel()} — `
+					+ `${formatBytes(plan.totalBytes)}, safe to close. The rest are too young to be sure about, and are left alone.`
+				: `Nothing here has been unattributed for over ${staleLabel()} yet. Short-lived processes — git from the `
+					+ 'coordination hooks, cos-coord, their conhosts — pass through this row constantly, and killing one '
+					+ 'mid-write can lock up a repo the other terminals share. If this keeps growing, something is leaking.',
 		});
+		if (!n) return;
+		const btn = el.createEl('button', { cls: 'wcc-mem-endbtn', text: `Close ${n} stale…` });
+		btn.addEventListener('click', () => void this.closeUnattributed());
+	}
+
+	/** End the processes that have earned it. Measures twice, kills once.
+	 *
+	 *  The plan is rebuilt from a FRESH snapshot before the confirm, and again after it, and only
+	 *  the trees in both — same root, same start time — are killed. That window is exactly when a
+	 *  stale process can spawn a git for a coordination hook, and killProcessTree takes the whole
+	 *  tree: a plan agreed to a minute ago is not evidence about the tree as it stands now. A pid
+	 *  recycled in between is a different process and fails the start-time check. Whatever changed
+	 *  is reported as left alone rather than killed on the strength of the older look. */
+	private async closeUnattributed(): Promise<void> {
+		await this.deps.monitor.refreshNow();
+		const planned = this.deps.monitor.unattributedPlan();
+		if (!planned.victims.length) {
+			this.deps.toast(`Nothing has been unattributed for over ${staleLabel()}`, 'warn');
+			return;
+		}
+		const c = unattributedConfirm(planned, Date.now(), staleLabel());
+		if (!await promptForConfirm(c.title, c.body, c.okLabel)) return;
+
+		await this.deps.monitor.refreshNow();
+		const agreed = new Set(planned.trees.map(treeKey));
+		const trees = this.deps.monitor.unattributedPlan().trees.filter((t) => agreed.has(treeKey(t)));
+
+		// The app's ONE kill path: verified, retried once, and it remembers a pid whose death it
+		// could not confirm so a later sweep can try again.
+		const kill = this.deps.killTree ?? killProcessTree;
+		const outcome: KillOutcome = { ended: 0, freedBytes: 0, failed: [], skipped: planned.trees.length - trees.length };
+		for (const t of trees) {
+			const res = await kill(t.root);
+			if (res.ok) { outcome.ended += t.pids.length; outcome.freedBytes += t.rssBytes; }
+			else outcome.failed.push({ pid: t.root, detail: res.detail });
+		}
+		const { message, variant } = unattributedResult(outcome);
+		this.deps.toast(message, variant);
+		await this.refresh();
 	}
 
 	private renderRow(body: HTMLElement, s: MemoryRow, now: number, inBulk: boolean): void {
