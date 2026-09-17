@@ -10,6 +10,12 @@ export interface ProcRow {
 	rssBytes: number;
 	/** Only populated when the snapshot was taken with `withCommandLine`. */
 	cmd?: string;
+	/** Win32 creation time, epoch ms. Absent only when the snapshot could not read it.
+	 *
+	 *  Carried so a process can be IDENTIFIED across polls: Windows recycles pids, and anything
+	 *  that accumulates state against a bare pid (an age, a strike count) hands that state to
+	 *  whatever inherits the number next. pid + `startedAt` cannot be inherited. */
+	startedAt?: number;
 }
 
 /** Sidecars are `node <…>/sidecar.cjs <cwd> <command> …`, so this identifies one. */
@@ -26,7 +32,10 @@ const SIDECAR_MARK = 'sidecar.cjs';
  *  nothing rather than guessing. */
 export async function snapshotProcesses(opts: { withCommandLine?: boolean } = {}): Promise<ProcRow[]> {
 	if (process.platform !== 'win32') return [];
-	const fields = `ProcessId,ParentProcessId,Name,WorkingSetSize${opts.withCommandLine ? ',CommandLine' : ''}`;
+	// CreationDate rides along in the SAME query. The rule this tracker is built on is that it
+	// never runs two Win32_Process queries — a memory tracker that spawned a second PowerShell
+	// just to ask when things started would be the bug it exists to report.
+	const fields = `ProcessId,ParentProcessId,Name,WorkingSetSize,CreationDate${opts.withCommandLine ? ',CommandLine' : ''}`;
 	const script =
 		'[Console]::OutputEncoding=[Text.Encoding]::UTF8;' +
 		`Get-CimInstance Win32_Process | Select-Object ${fields} | ConvertTo-Json -Compress -Depth 2`;
@@ -97,12 +106,14 @@ export function parseSnapshot(raw: string): ProcRow[] {
 		const o = r as Record<string, unknown>;
 		const pid = num(o.ProcessId);
 		if (pid === null) continue;
+		const startedAt = cimDate(o.CreationDate);
 		out.push({
 			pid,
 			ppid: num(o.ParentProcessId) ?? 0,
 			name: typeof o.Name === 'string' ? o.Name : '',
 			rssBytes: num(o.WorkingSetSize) ?? 0,
 			...(typeof o.CommandLine === 'string' ? { cmd: o.CommandLine } : {}),
+			...(startedAt === null ? {} : { startedAt }),
 		});
 	}
 	return out;
@@ -145,6 +156,23 @@ export function findUsageProbeStrays(
  *  quoted or cased — Windows treats both as insignificant, and the match must too. */
 function normPath(s: string): string {
 	return s.replace(/\\/g, '/').toLowerCase();
+}
+
+/** A CIM DateTime, as JSON, in epoch ms.
+ *
+ *  Windows PowerShell 5.1 — which is what the snapshot spawns — renders a DateTime through
+ *  ConvertTo-Json as Microsoft's `/Date(1789453890660)/`, sometimes with a `+0100` suffix that
+ *  names a zone without moving the instant. PowerShell 7 renders ISO 8601 instead; both are read
+ *  here so the field cannot silently go missing if this is ever run under `pwsh`. An
+ *  unrecognised shape yields null rather than a guess: a wrong timestamp here is not a wrong
+ *  age, it is a wrong IDENTITY, and callers are then free to refuse a process they cannot name. */
+export function cimDate(v: unknown): number | null {
+	if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+	if (typeof v !== 'string') return null;
+	const ms = /^\/Date\((-?\d+)(?:[+-]\d{4})?\)\/$/.exec(v);
+	if (ms) return Number(ms[1]);
+	const iso = Date.parse(v);
+	return Number.isFinite(iso) ? iso : null;
 }
 
 function num(v: unknown): number | null {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSnapshot, findUsageProbeStrays, excludeSubtree, indexProcesses, subtreePids, type ProcRow } from '../src/terminals/process-snapshot';
+import { parseSnapshot, cimDate, findUsageProbeStrays, excludeSubtree, indexProcesses, subtreePids, type ProcRow } from '../src/terminals/process-snapshot';
 
 const PROBE = 'C:\\Users\\x\\AppData\\Roaming\\worktree-command-center\\usage-probe';
 const sidecarCmd = (cwd: string) => `node.exe C:\\app\\resources\\pty-sidecar\\sidecar.cjs ${cwd} claude`;
@@ -34,6 +34,34 @@ describe('parseSnapshot', () => {
 		expect(parseSnapshot(JSON.stringify([{ Name: 'x' }, { ProcessId: 5 }]))).toEqual([
 			{ pid: 5, ppid: 0, name: '', rssBytes: 0 },
 		]);
+	});
+
+	it('reads CreationDate as the start time — the half of a process identity that pid alone lacks', () => {
+		const raw = JSON.stringify([{ ProcessId: 9, ParentProcessId: 1, Name: 'claude.exe', WorkingSetSize: 4, CreationDate: '/Date(1789453890660)/' }]);
+		expect(parseSnapshot(raw)).toEqual([{ pid: 9, ppid: 1, name: 'claude.exe', rssBytes: 4, startedAt: 1789453890660 }]);
+	});
+
+	it('leaves startedAt OFF rather than guessing when the date is unreadable', () => {
+		const raw = JSON.stringify([{ ProcessId: 9, ParentProcessId: 1, Name: 'x', WorkingSetSize: 0, CreationDate: 'nonsense' }]);
+		expect(parseSnapshot(raw)[0]).not.toHaveProperty('startedAt');
+	});
+});
+
+describe('cimDate', () => {
+	it('reads the /Date(ms)/ shape Windows PowerShell 5.1 emits, with or without a zone suffix', () => {
+		expect(cimDate('/Date(1789453890660)/')).toBe(1789453890660);
+		expect(cimDate('/Date(1789453890660+0100)/')).toBe(1789453890660);
+	});
+
+	it('reads the ISO 8601 shape PowerShell 7 would emit instead', () => {
+		expect(cimDate('2026-09-16T12:00:00.000Z')).toBe(Date.parse('2026-09-16T12:00:00.000Z'));
+	});
+
+	it('returns null for anything it does not recognise — a guessed timestamp is a wrong identity', () => {
+		expect(cimDate('nonsense')).toBeNull();
+		expect(cimDate(undefined)).toBeNull();
+		expect(cimDate(null)).toBeNull();
+		expect(cimDate(NaN)).toBeNull();
 	});
 });
 
