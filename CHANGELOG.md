@@ -5,6 +5,40 @@ landed on `main`.
 
 ## Unreleased
 
+**🧹 The memory panel can close unattributed processes — but only ones old enough to be safe**
+- The unattributed row reported a leak and offered nothing to do about it, deliberately: those
+  pids belong to nothing the app can name. But the only remedy left was **restarting, which
+  kills every session on the floor** to reclaim memory held by things that are not sessions.
+  That is why the usage-probe leak was allowed to run for hours — the cure cost more than the
+  disease.
+- **Unattributed is not a synonym for leaked.** It means "under this app's pid, claimed by no
+  session", and on a healthy floor that set holds `git` invoked by the coordination hooks on
+  every Bash call, `cos-coord`, and their conhosts. A `git` killed mid-write can leave an
+  `index.lock` in a repo eight terminals share, and the damage surfaces much later as a
+  confusing lock in someone else's worktree. A blanket kill would eventually eat a real
+  operation.
+- **Age is the safety mechanism**, because the two populations differ by orders of magnitude in
+  lifetime: transients live for seconds, a leaked `claude` lives for hours. A process is
+  offered only after it has been unattributed in **every** snapshot since it was first seen,
+  for over **3 minutes** *and* at least **3 polls**. Both, because the poll cadence changes
+  between 60s (gauge alone) and 20s (panel open), and either gate alone is wrong at one of the
+  two rates. Any gap resets the clock.
+- **Identity is pid plus creation time, never the pid alone.** Windows recycles pids; keyed on
+  the number, a recycled pid would inherit the dead process's age and the button would offer to
+  kill something four seconds old. `CreationDate` now rides along in the same `Win32_Process`
+  query — there is still never a second one.
+- **A whole tree has to qualify, not just its root.** `killProcessTree` takes the tree, so a
+  stale parent with a four-second-old `git` under it is left alone until the `git` is gone.
+  That is also what makes it impossible to touch anything a session claims.
+- **The confirm names every process** — what it is, how long it has been unattributed, how long
+  it has been alive, and what it is holding — with the total and a plain statement that
+  anything younger is being left alone. You cannot consent to a number.
+- It **measures twice and kills once**: the plan is rebuilt before the confirm and again after
+  it, and only the trees in both are killed. Refusals are reported as refusals, so a kill that
+  silently failed can never read as freed memory.
+- **Never automatic, at any threshold.** Which processes matter is a judgement the person
+  looking at the floor has and an auto-reaper does not.
+
 **🧠 Session memory is a gauge in the top bar, not a panel behind a button**
 - The memory tracker shipped behind a `🧠 Memory` button, so you only saw the number once you
   already suspected something — exactly backwards for the bug it was built for. The usage-probe
