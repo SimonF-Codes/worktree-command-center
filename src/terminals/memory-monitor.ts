@@ -1,5 +1,9 @@
 import { snapshotProcesses, type ProcRow } from './process-snapshot';
 import { attributeMemory, type MemoryReport, type SessionClaim } from './session-memory';
+import {
+	trackUnattributed, closeableUnattributed, EMPTY_UNATTRIBUTED,
+	type CloseablePlan, type UnattributedState,
+} from './unattributed-tracker';
 
 /** ONE process snapshot, shared by everything that wants to know about memory.
  *
@@ -29,6 +33,9 @@ export interface MemoryMonitorDeps {
 	/** Injectable timers, for the same reason. Defaults to the host's (window in the renderer). */
 	setInterval?: (fn: () => void, ms: number) => number;
 	clearInterval?: (handle: number) => void;
+	/** Injectable clock. The unattributed record is measured in wall time, so a test that walks
+	 *  a process through three minutes of polls must be able to say so without waiting. */
+	now?: () => number;
 }
 
 export type MemorySubscriber = (report: MemoryReport) => void;
@@ -42,6 +49,8 @@ export class MemoryMonitor {
 	private timerMs: number | null = null;
 	private inFlight: Promise<MemoryReport | null> | null = null;
 	private last: MemoryReport | null = null;
+	private lastRows: readonly ProcRow[] = [];
+	private tracking: UnattributedState = EMPTY_UNATTRIBUTED;
 
 	constructor(private deps: MemoryMonitorDeps) {}
 
@@ -75,6 +84,14 @@ export class MemoryMonitor {
 				const rows = await (this.deps.snapshot ?? snapshotProcesses)();
 				const report = attributeMemory(rows, this.deps.appPid ?? process.pid, this.deps.claims());
 				this.last = report;
+				// The record of what has been unattributed, and for how long, is kept HERE rather
+				// than in the panel: the gauge polls at 60s with the panel shut, and the evidence a
+				// close needs is gathered the whole time the app is open, not from the moment
+				// someone looks. An unreadable snapshot arrives as [] and therefore resets every
+				// clock — the conservative direction, since the alternative is crediting a process
+				// with time nothing observed.
+				this.lastRows = rows;
+				this.tracking = trackUnattributed(this.tracking, rows, report.unattributed.pids, this.clock());
 				// Copy: a subscriber may unsubscribe (the panel closing on a click) mid-delivery.
 				for (const s of [...this.subs]) this.deliver(s, report);
 				return report;
@@ -92,6 +109,13 @@ export class MemoryMonitor {
 	/** The most recent report, or null before the first one lands. */
 	latest(): MemoryReport | null { return this.last; }
 
+	/** Which unattributed processes have been unattributed long enough, and often enough, to be
+	 *  safe to offer — and which pids to actually kill for them. See unattributed-tracker for
+	 *  why age is the safety mechanism and why nothing here ever acts on its own. */
+	unattributedPlan(now: number = this.clock()): CloseablePlan {
+		return closeableUnattributed(this.lastRows, this.tracking, now);
+	}
+
 	/** 0 or 1 — never more. The whole point of the class, and asserted in the tests. */
 	pollerCount(): number { return this.timer === null ? 0 : 1; }
 
@@ -102,6 +126,8 @@ export class MemoryMonitor {
 		this.subs = [];
 		this.retune();
 	}
+
+	private clock(): number { return (this.deps.now ?? Date.now)(); }
 
 	/** Run one timer at the fastest cadence anyone asked for, and none when nobody did.
 	 *  Idempotent: an unchanged cadence leaves the existing timer alone rather than restarting

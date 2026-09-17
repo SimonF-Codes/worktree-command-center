@@ -32,13 +32,17 @@ function claim(pid: number, key = `s${pid}`): SessionClaim {
 	};
 }
 
+const T0 = 1_700_000_000_000;
+
 const rows: ProcRow[] = [
-	{ pid: APP, ppid: 1, name: 'app.exe', rssBytes: 120 * MB },
-	{ pid: 200, ppid: APP, name: 'node.exe', rssBytes: 300 * MB },
-	{ pid: 900, ppid: APP, name: 'leak.exe', rssBytes: 700 * MB }, // claimed by nobody
+	{ pid: APP, ppid: 1, name: 'app.exe', rssBytes: 120 * MB, startedAt: T0 - 3_600_000 },
+	{ pid: 200, ppid: APP, name: 'node.exe', rssBytes: 300 * MB, startedAt: T0 - 3_600_000 },
+	// Claimed by nobody. Old enough to be a leak rather than a hook's git — but the tracker
+	// only counts what IT has watched, so it still has to earn its three minutes below.
+	{ pid: 900, ppid: APP, name: 'leak.exe', rssBytes: 700 * MB, startedAt: T0 - 3_600_000 },
 ];
 
-function build(over: { snapshot?: () => Promise<ProcRow[]>; claims?: () => SessionClaim[] } = {}) {
+function build(over: { snapshot?: () => Promise<ProcRow[]>; claims?: () => SessionClaim[]; now?: () => number } = {}) {
 	const timers = fakeTimers();
 	let snapshots = 0;
 	const monitor = new MemoryMonitor({
@@ -47,6 +51,7 @@ function build(over: { snapshot?: () => Promise<ProcRow[]>; claims?: () => Sessi
 		snapshot: over.snapshot ?? (async () => { snapshots++; return rows; }),
 		setInterval: timers.setInterval,
 		clearInterval: timers.clearInterval,
+		...(over.now ? { now: over.now } : {}),
 	});
 	return { monitor, timers, snapshots: () => snapshots };
 }
@@ -247,5 +252,40 @@ describe('MemoryMonitor — one snapshot feeds everyone', () => {
 		await monitor.refreshNow();
 		expect(reached).toBe(true);
 		expect(monitor.intervalMs()).toBe(60_000);
+	});
+});
+
+describe('the unattributed record accumulates across polls, panel or no panel', () => {
+	it('offers nothing until a process has been unattributed long enough AND often enough', async () => {
+		let now = T0;
+		const { monitor } = build({ now: () => now });
+
+		await monitor.refreshNow();
+		expect(monitor.unattributedPlan(now).victims).toEqual([]); // one poll is not evidence
+
+		// The gauge alone, at 60s: three polls is two minutes, still short of the time gate.
+		for (let i = 0; i < 2; i++) { now += 60_000; await monitor.refreshNow(); }
+		expect(monitor.unattributedPlan(now).victims).toEqual([]);
+
+		now += 60_000;
+		await monitor.refreshNow();
+		const plan = monitor.unattributedPlan(now);
+		expect(plan.victims.map((v) => v.pid)).toEqual([900]);
+		expect(plan.trees.map((t) => t.root)).toEqual([900]);
+		expect(plan.totalBytes).toBe(700 * MB);
+	});
+
+	it('never offers what a session claims, however long the app has been up', async () => {
+		let now = T0;
+		const { monitor } = build({ now: () => now });
+		for (let i = 0; i < 30; i++) { await monitor.refreshNow(); now += 60_000; }
+		const plan = monitor.unattributedPlan(now);
+		expect(plan.victims.some((v) => v.pid === 200)).toBe(false);
+		expect(plan.trees.some((t) => t.pids.includes(APP))).toBe(false);
+	});
+
+	it('has an empty plan before the first snapshot — nothing observed, nothing offered', () => {
+		const { monitor } = build();
+		expect(monitor.unattributedPlan()).toEqual({ victims: [], trees: [], totalBytes: 0 });
 	});
 });
