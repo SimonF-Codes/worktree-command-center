@@ -30,7 +30,7 @@ export interface MemoryWidgetDeps {
 	totalRamBytes?: number;
 }
 
-/** Top-bar memory gauge: `🧠 ▓▓▓▓░░░░ 2.3 GB · 7`, beside the usage battery and mirroring its
+/** Top-bar memory gauge: `RAM ▓▓▓▓░░░░ 2.3/32 GB`, beside the usage battery and mirroring its
  *  idiom — a small bar, a number, click for detail.
  *
  *  It exists because the tracker shipped as a panel behind a button, and a number you have to
@@ -48,7 +48,9 @@ export class MemoryWidget {
 	render(parent: HTMLElement): void {
 		const el = parent.createDiv({ cls: 'wcc-mem-widget' });
 		this.el = el;
-		el.createSpan({ cls: 'wcc-mem-widget-icon', text: '🧠' });
+		// A unit label, not an icon and not a button: the emoji read as decoration in a strip of
+		// instrument readings, and "RAM" says what the bar beside it is measuring.
+		el.createSpan({ cls: 'wcc-mem-widget-tag', text: 'RAM' });
 		const bar = el.createDiv({ cls: 'wcc-membar' });
 		this.fillEl = bar.createDiv({ cls: 'wcc-membar-fill' });
 		this.labelEl = el.createSpan({ cls: 'wcc-mem-widget-label' });
