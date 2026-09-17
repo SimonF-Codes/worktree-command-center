@@ -3,14 +3,16 @@ import type { UsageReadout } from '../terminals/usage-parse';
 
 const AUTO_MS = 300_000; // auto-refresh cadence when enabled (5 min)
 
-/** Topbar usage battery: session % + reset and weekly % inline; ⟳ manual refresh; an auto-
- *  refresh toggle; and a click-to-expand popover with session / week / credits detail. */
+/** Topbar usage battery: the bar and the session % alone; ⟳ manual refresh; an auto-refresh
+ *  toggle; and a click-to-expand popover with session / week / credits detail.
+ *
+ *  Week, Fable and the reset time live in the popover ONLY. Three bare percentages side by side
+ *  in the bar are indistinguishable from each other, and labelling them back into legibility is
+ *  the prose this widget is trying to shed. The hover title carries what the bar no longer says. */
 export class UsageWidget {
 	private battEl: HTMLElement | null = null;
 	private battFill: HTMLElement | null = null;
 	private sessionLabel: HTMLElement | null = null;
-	private weekLabel: HTMLElement | null = null;
-	private fableLabel: HTMLElement | null = null;
 	private refreshBtn: HTMLButtonElement | null = null;
 	private autoBtn: HTMLButtonElement | null = null;
 	private pop: HTMLElement | null = null;
@@ -28,8 +30,6 @@ export class UsageWidget {
 		this.battFill = this.battEl.createDiv({ cls: 'wcc-batt-fill' });
 		this.battEl.addEventListener('click', (e) => { e.stopPropagation(); this.togglePop(); });
 		this.sessionLabel = el.createSpan({ cls: 'wcc-usage-session', text: 'tap ⟳ for usage' });
-		this.weekLabel = el.createSpan({ cls: 'wcc-usage-week', text: '' });
-		this.fableLabel = el.createSpan({ cls: 'wcc-usage-week', text: '' });
 		this.autoBtn = el.createEl('button', { cls: 'wcc-usage-auto', text: '⏱', attr: { title: 'Auto-refresh every 5 min (off)' } });
 		this.autoBtn.addEventListener('click', (e) => { e.stopPropagation(); this.toggleAuto(); });
 		this.refreshBtn = el.createEl('button', { cls: 'wcc-usage-refresh', text: '⟳', attr: { title: 'Refresh usage' } });
@@ -73,11 +73,10 @@ export class UsageWidget {
 			// low battery → red.
 			this.battFill.dataset.level = left === null ? '' : left >= 50 ? 'ok' : left >= 20 ? 'warn' : 'crit';
 		}
-		this.sessionLabel!.textContent = left === null
-			? 'usage unavailable'
-			: `${left}% left${r.sessionReset ? ` · resets ${r.sessionReset}` : ''}`;
-		this.weekLabel!.textContent = r.weekPct === null ? '' : `Week ${Math.max(0, 100 - r.weekPct)}% left`;
-		this.fableLabel!.textContent = r.fablePct === null ? '' : `Fable ${Math.max(0, 100 - r.fablePct)}% left`;
+		// A number, nothing else — the bar beside it already says what the number is about, and
+		// the reset time is a sentence, not a reading. Both are in the popover and the title.
+		// "usage unavailable" stays prose because it is not a number.
+		this.sessionLabel!.textContent = left === null ? 'usage unavailable' : `${left}%`;
 		if (this.pop && this.pop.style.display !== 'none') this.renderPop();
 	}
 

@@ -161,7 +161,6 @@ html, body {
 .wcc-batt-fill[data-level='warn'] { background: #e0a92e; }
 .wcc-batt-fill[data-level='crit'] { background: #d2453e; }
 .wcc-usage-session { color: var(--text-normal); }
-.wcc-usage-week { opacity: .8; }
 .wcc-usage-refresh { background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 4px; }
 .wcc-usage-refresh:hover { color: var(--text-normal); }
 .wcc-usage-refresh:disabled { opacity: .5; cursor: default; }
