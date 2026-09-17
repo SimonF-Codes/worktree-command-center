@@ -1,14 +1,17 @@
-import { snapshotProcesses } from '../terminals/process-snapshot';
+import type { MemoryMonitor } from '../terminals/memory-monitor';
 import {
-	attributeMemory, idleLongerThan, formatBytes, formatIdle, closeConfirm, bulkConfirm,
-	type MemoryReport, type MemoryRow, type SessionClaim,
+	idleLongerThan, formatBytes, formatIdle, closeConfirm, bulkConfirm,
+	type MemoryReport, type MemoryRow,
 } from '../terminals/session-memory';
 import { promptForConfirm } from './prompt-dialog';
 
-/** How often the panel re-measures WHILE IT IS OPEN. It is closed the rest of the time and
- *  costs nothing then — a memory tracker that polled continuously would be the bug it exists
- *  to report. */
-const POLL_MS = 20_000;
+/** How fast the SHARED poller runs while this panel is open.
+ *
+ *  The panel no longer owns a timer. It asks the MemoryMonitor for this cadence and gives it
+ *  back on close; the monitor runs one timer at the fastest rate anyone has asked for, so
+ *  opening the panel pulls the always-on widget's 60s up to 20s and closing it drops back
+ *  again. Two pollers would double exactly the cost the tracker exists to bound. */
+export const PANEL_POLL_MS = 20_000;
 
 /** Choices for the bulk close. Hours, because the sessions worth closing are hours old. */
 const BULK_CHOICES: Array<{ label: string; ms: number }> = [
@@ -19,13 +22,11 @@ const BULK_CHOICES: Array<{ label: string; ms: number }> = [
 ];
 
 export interface MemoryPanelDeps {
-	/** Claims from EVERY workspace, not just the visible tab — the sessions you forget are by
-	 *  definition in tabs you are not looking at. */
-	claims: () => SessionClaim[];
+	/** The one process poller, shared with the top-bar widget. The session claims and the app
+	 *  pid live there now, because they belong to whoever takes the snapshot. */
+	monitor: MemoryMonitor;
 	/** End one session, keeping its worktree and branch. Returns false if it was already gone. */
 	endSession: (workspaceId: string, key: string) => Promise<boolean>;
-	/** This process's pid — the root everything unclaimed is measured against. */
-	appPid?: number;
 	toast: (msg: string, variant?: 'info' | 'warn' | 'error') => void;
 }
 
@@ -38,10 +39,9 @@ export interface MemoryPanelDeps {
 export class MemoryPanel {
 	private el: HTMLElement | null = null;
 	private bodyEl: HTMLElement | null = null;
-	private timer: number | null = null;
+	private unsubscribe: (() => void) | null = null;
 	private report: MemoryReport | null = null;
 	private bulkMs = BULK_CHOICES[1]!.ms;
-	private busyRefreshing = false;
 
 	constructor(private deps: MemoryPanelDeps) {}
 
@@ -55,12 +55,19 @@ export class MemoryPanel {
 		this.el = parent.createDiv({ cls: 'wcc-mem-panel' });
 		this.el.addEventListener('click', (e) => e.stopPropagation());
 		this.renderShell();
+		// Subscribing hands over the last known report straight away, so the panel opens onto
+		// the widget's figure rather than flashing "Measuring…" for a third of a second.
+		this.unsubscribe = this.deps.monitor.subscribe(PANEL_POLL_MS, (r) => {
+			if (!this.el) return; // closed while a snapshot was in flight
+			this.report = r;
+			this.renderBody();
+		});
 		void this.refresh();
-		this.timer = window.setInterval(() => void this.refresh(), POLL_MS);
 	}
 
 	close(): void {
-		if (this.timer !== null) { window.clearInterval(this.timer); this.timer = null; }
+		this.unsubscribe?.();
+		this.unsubscribe = null;
 		this.el?.remove();
 		this.el = null;
 		this.bodyEl = null;
@@ -99,17 +106,11 @@ export class MemoryPanel {
 		closeBtn.addEventListener('click', () => this.close());
 	}
 
+	/** Ask the shared poller to measure now. It coalesces concurrent callers, so ⟳ landing on
+	 *  the same moment as a tick still costs one snapshot; the rendering happens in the
+	 *  subscription callback either way. */
 	private async refresh(): Promise<void> {
-		if (this.busyRefreshing || !this.el) return;
-		this.busyRefreshing = true;
-		try {
-			const rows = await snapshotProcesses();
-			if (!this.el) return; // panel closed while the snapshot was in flight
-			this.report = attributeMemory(rows, this.deps.appPid ?? process.pid, this.deps.claims());
-			this.renderBody();
-		} finally {
-			this.busyRefreshing = false;
-		}
+		await this.deps.monitor.refreshNow();
 	}
 
 	private renderBody(): void {

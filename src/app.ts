@@ -19,6 +19,7 @@ import { WorkspaceBar } from './ui/workspace-bar';
 import { SettingsPanel } from './ui/settings-panel';
 import { ChangelogPanel } from './ui/changelog-panel';
 import { MemoryPanel } from './ui/memory-panel';
+import { MemoryMonitor } from './terminals/memory-monitor';
 import type { SessionClaim } from './terminals/session-memory';
 import { RolesView } from './ui/roles-view';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
@@ -270,8 +271,13 @@ async function main(): Promise<void> {
 		// what is running under this app that no session claims. It reads the process tree, not
 		// the tile list, so it can contradict the floor — which is the only way it could ever
 		// have caught the usage-probe leak.
+		//
+		// ONE poller, which everything that wants to know about memory subscribes to. Today that
+		// is only the panel, at 20s while it is open; the monitor exists so a second reader can
+		// be added at its own cadence without a second `Win32_Process` query — which would be
+		// the bug this tracker reports.
 		const memoryBtn = topBar.createEl('button', { cls: 'wcc-changelog-btn', text: '🧠 Memory' });
-		const memoryPanel = new MemoryPanel({
+		const memoryMonitor = new MemoryMonitor({
 			claims: () => {
 				const out: SessionClaim[] = [];
 				// Every grid, not just the active one. Grids are created lazily per workspace, so
@@ -291,6 +297,9 @@ async function main(): Promise<void> {
 				}
 				return out;
 			},
+		});
+		const memoryPanel = new MemoryPanel({
+			monitor: memoryMonitor,
 			endSession: async (workspaceId, key) => {
 				const tileId = Number(key.slice(key.lastIndexOf(':') + 1));
 				if (!Number.isFinite(tileId)) return false;
@@ -299,7 +308,7 @@ async function main(): Promise<void> {
 			toast,
 		});
 		memoryBtn.addEventListener('click', () => memoryPanel.toggle(appEl));
-		window.addEventListener('beforeunload', () => memoryPanel.close());
+		window.addEventListener('beforeunload', () => { memoryPanel.close(); memoryMonitor.dispose(); });
 
 
 		// --- workspace tab bar ---
