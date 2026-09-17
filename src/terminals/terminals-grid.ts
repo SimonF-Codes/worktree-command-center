@@ -14,7 +14,7 @@ import { openExternalUrl, revealInFileManager } from './links';
 import { EDITORS, FILE_BROWSER, CUSTOM_EDITOR, resolveEditorCommand, type EditorDef } from './editor-launch';
 import { ChatRoom } from './chat-room';
 import { ChatTile } from './chat-tile';
-import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight } from './bubble-layout';
+import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight, autoBand, autoShape, shapeForBand, LAYOUT_OPTIONS, DEFAULT_CELL_METRICS, MIN_TERM_COLS, MIN_TERM_ROWS, type CellMetrics, type LayoutBand, type LayoutMode } from './bubble-layout';
 import { emptyState, applyKeystroke, onReady as rqReady, onSubmit as rqSubmit, onClose as rqClose, onClick as rqClick, onOverview as rqOverview } from './ready-queue';
 import { decideCenter, type SpotlightState } from './focus-decider';
 import { partitionByHidden } from './session-partition';
@@ -36,6 +36,7 @@ import { FormatProbe } from './format-probe';
 import { ConvertProbe } from './convert-probe';
 import { vaultNoteFilename, vaultNoteContent, type ConvertDestination, type VaultDestination } from './convert-destinations';
 import type { StageTile } from './stage-tile';
+import type { SessionClaim } from './session-memory';
 
 /** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
  *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
@@ -44,6 +45,20 @@ import type { StageTile } from './stage-tile';
 export interface RepoConfig { name: string; path: string; remote?: string; group?: string; folder?: boolean; }
 
 export interface RemoteTerminal { id: number; name: string; repo: string; branch: string; state: string; output: string; remoteOn: boolean; }
+
+interface TellResult { ok: boolean; reason?: string; }
+// A tell that doesn't land gets retried on this cadence — not because we expect it to land
+// mid-retry-wait, but because the thing eating it (a /compact, a slow boot) is usually done
+// within a few of these. Bounded total so a target that's genuinely never coming back doesn't
+// hold a `cos-coord tell` process (and whoever is waiting on it) open indefinitely — see the
+// brief this answers, "fix-tell-swallowing". Kept comfortably under coord-core's TELL_WAIT_MS
+// (the CLI's own give-up bound) so the CLI gets an honest receipt instead of its generic timeout.
+const TELL_RETRY_INTERVAL_MS = 5000;
+const TELL_MAX_WAIT_MS = 40000;
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 export interface GridDeps {
 	repos: RepoConfig[];
@@ -105,6 +120,11 @@ export class TerminalsGrid {
 	private branchSel: HTMLSelectElement | null = null;
 	private modelSel: HTMLSelectElement | null = null;
 	private effortSel: HTMLSelectElement | null = null;
+	private layoutSel: HTMLSelectElement | null = null;
+	/** The Auto band currently on screen. Remembered between frames so autoBand() has something
+	 *  to be hysteretic ABOUT — without it, dragging a window edge across a boundary flips the
+	 *  layout back and forth for the whole drag. Cleared when the preference changes. */
+	private layoutBand: LayoutBand | null = null;
 	private stageEl: HTMLElement | null = null;
 	private maxBtn: HTMLElement | null = null;
 	private controlsEl: HTMLElement | null = null;
@@ -142,6 +162,10 @@ export class TerminalsGrid {
 	private pulseTimer: number | null = null;
 	private readonly pulseMs = 12 * 60 * 1000; // proactive floor-pulse cadence while personality is on
 	private watchers: Array<{ target: string; note: string }> = [];
+	// One `tell` at a time per target, delivered in the order they arrived (see runTellQueue) —
+	// two tells landing while a session is unresponsive must not race each other in on the retry.
+	private tellQueues = new Map<number, Array<{ message: string; resolve: (r: TellResult) => void }>>();
+	private tellInFlight = new Set<number>();
 	private pendingTask = new Map<number, string>();
 	private idleTiles = new Set<number>();
 	// Per-tab (+ Alpha, keyed -1) last attention bucket — so the per-tab markers update and a pop-up
@@ -258,6 +282,18 @@ export class TerminalsGrid {
 		for (const m of SPAWN_EFFORTS) this.effortSel.createEl('option', { text: m.label, value: m.value });
 		if (saved.effort && SPAWN_EFFORTS.some((m) => m.value === saved.effort)) this.effortSel.value = saved.effort;
 		this.effortSel.addEventListener('change', () => this.rememberToolbar());
+
+		// Tile layout for THIS tab. Auto follows the window as it resizes; the rest pin a shape.
+		this.layoutSel = controls.createEl('select');
+		for (const o of LAYOUT_OPTIONS) this.layoutSel.createEl('option', { text: o.label, value: o.value, attr: { title: o.title } });
+		this.layoutSel.value = saved.layout ?? 'auto';
+		this.layoutSel.title = LAYOUT_OPTIONS.find((o) => o.value === this.layoutSel!.value)?.title ?? '';
+		this.layoutSel.addEventListener('change', () => {
+			this.layoutSel!.title = LAYOUT_OPTIONS.find((o) => o.value === this.layoutSel!.value)?.title ?? '';
+			this.layoutBand = null;   // a deliberate change re-reads the window instead of inheriting the old band
+			this.rememberToolbar();
+			this.applyLayout();
+		});
 
 		const newBranchBtn = controls.createEl('button', { text: '+ New branch' });
 		newBranchBtn.addEventListener('click', () => {
@@ -529,6 +565,7 @@ export class TerminalsGrid {
 			branch: this.branchSel?.value,
 			model: this.modelSel?.value,
 			effort: this.effortSel?.value,
+			layout: this.layoutSel?.value,
 		});
 		this.toolbar = next;
 		this.deps.onToolbarChange?.(next);
@@ -818,6 +855,67 @@ export class TerminalsGrid {
 
 	/** Every live session GOD should see / be able to message (foreground + hidden background). */
 	private allSessions(): StageTile[] { return [...this.tiles, ...this.hidden]; }
+
+	/** What this workspace's sessions are, for the memory panel to roll process memory onto.
+	 *
+	 *  Includes hidden tiles: a hidden session is still a live `claude` holding its RAM, and the
+	 *  sessions you forget are exactly the ones you are not looking at. Journals are skipped —
+	 *  they have no process. */
+	memoryClaims(workspaceName: string): SessionClaim[] {
+		const out: SessionClaim[] = [];
+		for (const t of [...this.tiles, ...this.hidden]) {
+			if (t.isJournal) continue;
+			const tt = t as TerminalTile;
+			out.push({
+				key: `${this.deps.group}:${tt.tileId}`,
+				name: tt.name,
+				workspaceId: this.deps.group,
+				workspaceName,
+				repo: tt.repoName,
+				branch: tt.isFolder ? '(folder)' : tt.branch,
+				pid: tt.sidecarPid,
+				busy: tt.isBusy,
+				idleSince: tt.idleSince,
+				hidden: this.hidden.includes(t),
+			});
+		}
+		return out;
+	}
+
+	/** End a session from the memory panel WITHOUT destroying its work.
+	 *
+	 *  Deliberately not the tile's × , which deletes the worktree and branch. The panel's whole
+	 *  premise is that closing is cheap and reversible: the transcript in ~/.claude/projects is
+	 *  keyed by worktree PATH, so deleting the worktree is exactly what would make it
+	 *  unresumable. Uncommitted work is parked first (the same `wip:` commit used on teardown,
+	 *  undone by Reopen), then the process is killed and the tile leaves the floor. The branch
+	 *  and worktree stay, so Reopen in the Coordination panel brings the whole thing back.
+	 *
+	 *  Returns false if there was no such tile. Callers do the confirming — this does not ask. */
+	async endSessionKeepingWork(tileId: number): Promise<boolean> {
+		const tile = [...this.tiles, ...this.hidden].find((t) => t.tileId === tileId);
+		if (!tile || tile.isJournal) return false;
+		const tt = tile as TerminalTile;
+		// A folder target's directory is the user's own; `git add -A` there would commit THEIR
+		// working tree into whatever repo happens to contain it. Never park one — same reason
+		// parkAll() skips them.
+		if (!tt.isFolder) {
+			try { await parkWorktree(tt.worktreePath, new Date().toISOString()); }
+			catch { /* parking is a safety net, not a precondition for ending the session */ }
+		}
+		this.tiles = this.tiles.filter((t) => t !== tile);
+		this.hidden = this.hidden.filter((t) => t !== tile);
+		this.idleTiles.delete(tileId);
+		if (this.lockedTileId === tileId) this.lockedTileId = null;
+		if (this.centeredId === tileId) this.centeredId = null;
+		this.q = rqClose(this.q, tileId).state;
+		tile.kill();
+		await this.persist();
+		this.applyLayout();
+		this.autoCenter();
+		this.board?.refresh();
+		return true;
+	}
 
 	/** Number of live terminals (foreground + hidden). NOT a safe basis for "does this workspace
 	 *  hold anything" — see sessionsAreLive(). */
@@ -1155,7 +1253,10 @@ export class TerminalsGrid {
 			let text = '';
 			try { text = fsSync.readFileSync(full, 'utf8'); } catch { continue; }
 			const msg = parseOutboxMessage(text);
-			if (msg) this.dispatchOutbox(msg, names);
+			// The id a `tell`'s receipt is filed under (see writeTellReceipt) — the request file's
+			// own name, which `cos-coord tell` already knows because store.tell() returned it.
+			const id = f.replace(/\.json$/, '');
+			if (msg) this.dispatchOutbox(msg, names, id);
 			// A message that fails to parse (bad JSON, unknown/missing required fields — e.g. a
 			// hand-written external drop) used to just get archived, indistinguishable from one
 			// that dispatched fine. That's the same silent-no-op shape as an unresolved tell/watch
@@ -1165,13 +1266,22 @@ export class TerminalsGrid {
 		}
 	}
 
-	/** Act on one parsed Kane command (tell a worker / register a watch / spawn a terminal). */
-	private dispatchOutbox(msg: OutboxMessage, liveNames: string[]): void {
+	/** Act on one parsed Kane command (tell a worker / register a watch / spawn a terminal).
+	 *  `id` names the receipt a `tell` writes once delivery is verified — see deliverTellQueued. */
+	private dispatchOutbox(msg: OutboxMessage, liveNames: string[], id: string): void {
 		if (msg.kind === 'tell') {
 			const name = resolveTellTarget(msg.target, liveNames);
 			const tile = name ? this.allSessions().find((t) => t.name === name) : undefined;
-			if (tile && !tile.isJournal) (tile as TerminalTile).sendLine(msg.message);
-			else this.writeGodInbox(`could not deliver to "${msg.target}" — not a live terminal. Live: ${liveNames.join(', ') || '(none)'}`);
+			if (tile && !tile.isJournal) {
+				void this.deliverTellQueued(tile as TerminalTile, msg.message).then((r) => {
+					this.writeTellReceipt(id, r);
+					if (!r.ok) this.writeGodInbox(`tell to "${name}" was NOT delivered — ${r.reason}`);
+				});
+			} else {
+				const reason = `could not deliver to "${msg.target}" — not a live terminal. Live: ${liveNames.join(', ') || '(none)'}`;
+				this.writeGodInbox(reason);
+				this.writeTellReceipt(id, { ok: false, reason });
+			}
 		} else if (msg.kind === 'watch') {
 			const name = resolveTellTarget(msg.target, liveNames);
 			if (name) this.watchers.push({ target: name, note: msg.note });
@@ -1252,8 +1362,19 @@ export class TerminalsGrid {
 			// a Claude Code session queues input typed while it's mid-task, it doesn't drop it.
 			const tile = this.allSessions().find((t) => t.name === request.terminal);
 			if (tile && !tile.isJournal) {
-				(tile as TerminalTile).sendLine(request.message);
-				this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'accepted', terminalName: tile.name, handledMs: Date.now() });
+				// Same seam Kane's own `tell` uses (deliverTellQueued → attemptTellDelivery →
+				// TerminalTile.deliverLine), not a second one: a connector `tell` and a Kane `tell`
+				// landing on the same terminal close together still deliver in order, and this
+				// receipt is written no sooner than Kane's own is — only once delivery is actually
+				// confirmed (or the retry window gives up), not the moment sendLine was called. Until
+				// then the receipt file simply doesn't exist yet; Brain 2.0's parser already reads a
+				// missing receipt as "unanswered", so there's no need for a third status value here.
+				const r = await this.deliverTellQueued(tile as TerminalTile, request.message);
+				if (r.ok) {
+					this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'accepted', terminalName: tile.name, handledMs: Date.now() });
+				} else {
+					this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'rejected', reason: r.reason ?? 'delivery failed', handledMs: Date.now() });
+				}
 			} else {
 				this.writeConnectorReceipt(connectorId, { v: 1, id: request.id, status: 'rejected', reason: `"${request.terminal}" is no longer a live terminal`, handledMs: Date.now() });
 			}
@@ -1336,6 +1457,73 @@ export class TerminalsGrid {
 		this.notifyKanes(`[error] ${message}`);
 	}
 
+	/** Queue a `tell` for delivery to `tile`, FIFO per tile so two tells arriving close together
+	 *  can't race each other's retries and land out of order. Resolves once delivery is confirmed
+	 *  or the retry window (attemptTellDelivery) gives up. */
+	private deliverTellQueued(tile: TerminalTile, message: string): Promise<TellResult> {
+		return new Promise((resolve) => {
+			const q = this.tellQueues.get(tile.tileId) ?? [];
+			q.push({ message, resolve });
+			this.tellQueues.set(tile.tileId, q);
+			void this.runTellQueue(tile.tileId);
+		});
+	}
+
+	/** Drain one tile's tell queue in order, one at a time. Re-resolves the *current* live tile
+	 *  by id on every entry (not the `tile` object captured at enqueue time) so a queued entry
+	 *  outlasting the terminal it was addressed to sees it's gone rather than delivering into a
+	 *  stale reference. */
+	private async runTellQueue(tileId: number): Promise<void> {
+		if (this.tellInFlight.has(tileId)) return; // already draining this tile's queue
+		this.tellInFlight.add(tileId);
+		try {
+			let entry: { message: string; resolve: (r: TellResult) => void } | undefined;
+			while ((entry = this.tellQueues.get(tileId)?.shift())) {
+				const tile = this.allSessions().find((t) => t.tileId === tileId && !t.isJournal) as TerminalTile | undefined;
+				if (!tile) { entry.resolve({ ok: false, reason: 'the terminal closed before this message could be delivered' }); continue; }
+				entry.resolve(await this.attemptTellDelivery(tile, entry.message));
+			}
+		} finally {
+			this.tellInFlight.delete(tileId);
+			this.tellQueues.delete(tileId);
+		}
+	}
+
+	/** Try to land `message` on `tile`, retrying on a fixed cadence until it's confirmed
+	 *  (TerminalTile.deliverLine) or TELL_MAX_WAIT_MS runs out — bounded so a target that's
+	 *  genuinely never coming back doesn't hold this open forever. Gives up immediately, without
+	 *  waiting out the rest of the window, once the tile has plainly ended or been closed. */
+	private async attemptTellDelivery(tile: TerminalTile, message: string): Promise<TellResult> {
+		const deadline = Date.now() + TELL_MAX_WAIT_MS;
+		for (let attempt = 1; ; attempt++) {
+			if (tile.isEnded || !this.allSessions().includes(tile)) {
+				return { ok: false, reason: 'the terminal is not running' };
+			}
+			if (await tile.deliverLine(message, attempt > 1)) return { ok: true };
+			if (Date.now() >= deadline) {
+				// Name the draft case specifically: "held back because someone is typing in that
+				// terminal" is a different thing to act on than a compacting TUI, and the sender
+				// can see the "N waiting" badge on the tile for the rest.
+				const why = tile.isDrafting
+					? 'someone has unsubmitted typing in its input box — it was NOT typed over'
+					: 'the session may be unable to take input right now (e.g. mid-/compact)';
+				return { ok: false, reason: `not accepted within ${Math.round(TELL_MAX_WAIT_MS / 1000)}s — ${why}` };
+			}
+			await delay(TELL_RETRY_INTERVAL_MS);
+		}
+	}
+
+	/** File the outcome of one `tell` so the CLI process blocked waiting on it (coord-cli.cjs
+	 *  `waitForTellReceipt`) can report it honestly instead of assuming the outbox drop succeeded.
+	 *  New: no receipt existed for any command before this — see coord-store.cjs's comment. */
+	private writeTellReceipt(id: string, r: TellResult): void {
+		try {
+			const dir = path.join(this.outboxDir(), '.receipts');
+			fsSync.mkdirSync(dir, { recursive: true });
+			fsSync.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify(r), 'utf8');
+		} catch { /* best effort — the CLI falls back to its own timeout */ }
+	}
+
 	/** Center a tile AND give its terminal keyboard focus (so typing goes there). */
 	private doCenter(id: number): void {
 		// Navigating to a DIFFERENT tile breaks an individual lock (the only way out of it).
@@ -1382,6 +1570,19 @@ export class TerminalsGrid {
 		tile.focus();
 	}
 
+	/** px per character cell + tile chrome, measured from whichever tile has a live terminal. The
+	 *  layout is decided in columns and rows, so it has to be told what a column costs HERE — font
+	 *  size and DPI both move that, and the same pixel box is a comfortable terminal on one screen
+	 *  and an unusable one on another. Falls back to the 12px defaults when nothing is measurable
+	 *  yet (first layout, or a tab holding only a journal tile). */
+	private cellMetrics(): CellMetrics {
+		for (const t of this.tiles) {
+			const m = t.cellMetrics?.();
+			if (m) return { ...m, minCols: MIN_TERM_COLS, minRows: MIN_TERM_ROWS };
+		}
+		return DEFAULT_CELL_METRICS;
+	}
+
 	private applyLayout(): void {
 		if (!this.stageEl || (this.tiles.length === 0 && !this.chatTile)) return;
 		const W = this.stageEl.clientWidth || 800;
@@ -1390,7 +1591,20 @@ export class TerminalsGrid {
 		const ids = [...this.tiles.map((t) => t.tileId), ...(chatId !== undefined ? [chatId] : [])];
 		// The chat tile is a normal movable participant — centered only when it IS centeredId.
 		const centerId = this.centeredId !== null && ids.includes(this.centeredId) ? this.centeredId : null;
-		const rects = centerId !== null ? centeredLayout(ids, W, H, 8, centerId) : settledLayout(ids, W, H, 8);
+		const metrics = this.cellMetrics();
+		const mode: LayoutMode = this.toolbar.layout ?? 'auto';
+		// Track the Auto band on every layout, whatever the mode: it is what the centred layout uses
+		// to pick its satellite edges, and keeping it live means switching back to Auto does not
+		// inherit a stale band.
+		const band = autoBand(W / Math.max(1, H), this.layoutBand);
+		this.layoutBand = band;
+		// Auto and Focus honour the spotlight (Focus just gives it more room); Grid/Columns/Rows are
+		// the explicit "lay everything out equally, whatever is centred" modes. Nothing here changes
+		// WHICH tile is centred — that stays with the ready queue and focus-decider.
+		const spotlight = centerId !== null && (mode === 'auto' || mode === 'focus');
+		const rects = spotlight
+			? centeredLayout(ids, W, H, 8, centerId!, { metrics, band, focus: mode === 'focus' })
+			: settledLayout(ids, W, H, 8, { metrics, shape: mode === 'auto' || mode === 'focus' ? autoShape(band, ids.length, W, H, 8, metrics) : shapeForBand(mode, ids.length, W, H, 8, metrics) });
 		for (const t of this.tiles) {
 			const r = rects.find((x) => x.id === t.tileId);
 			if (r) t.setRect(r);

@@ -10,6 +10,7 @@ import { SerialWriter } from './serial-writer';
 import { normalizeToolbars, setToolbarState, pruneToolbars, type WorkspaceToolbars } from './terminals/toolbar-state';
 import { createGitRepo } from './create-repo';
 import { UsageProbe } from './terminals/usage-probe';
+import { reapUsageProbeStrays } from './terminals/stray-reaper';
 import { UsageWidget } from './ui/usage-widget';
 import { ClaudeWarning } from './ui/claude-warning';
 import { PerfMonitor } from './ui/perf-monitor';
@@ -17,6 +18,8 @@ import { AttentionWidget } from './ui/attention-widget';
 import { WorkspaceBar } from './ui/workspace-bar';
 import { SettingsPanel } from './ui/settings-panel';
 import { ChangelogPanel } from './ui/changelog-panel';
+import { MemoryPanel } from './ui/memory-panel';
+import type { SessionClaim } from './terminals/session-memory';
 import { RolesView } from './ui/roles-view';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
 import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, type Workspace } from './terminals/workspace-store';
@@ -163,6 +166,18 @@ async function main(): Promise<void> {
 		startUsageProbe();
 		window.addEventListener('beforeunload', () => { usageWidget?.dispose(); usageProbe?.dispose(); });
 
+		// Reap probe sidecars left behind by an earlier run. Each one pins a live `claude`
+		// (~250 MB) that nothing else can reach any more — its owner's pid died with the old
+		// renderer — so they accumulate until the machine reboots. Deferred past first paint:
+		// it costs one process snapshot and must not sit in front of the UI.
+		window.setTimeout(() => {
+			void reapUsageProbeStrays(path.join(userData, 'usage-probe'), usageProbe?.ownedPids() ?? [])
+				.then((r) => {
+					if (r.reaped.length) console.info(`[wcc] reaped ${r.reaped.length} stray usage-probe session(s):`, r.reaped);
+					for (const f of r.failed) console.error(`[wcc] could NOT kill stray pid ${f.pid}: ${f.detail}`);
+				});
+		}, 3000);
+
 		// Kane self-improvement (see docs/superpowers/specs/2026-07-15-kane-self-improvement-design.md):
 		// config names the app's own source repo; toolsDir defaults beside the user's home.
 		const siCfg = parseGodSelfImprove(cfg.god);
@@ -250,6 +265,41 @@ async function main(): Promise<void> {
 		const changelogBtn = topBar.createEl('button', { cls: 'wcc-changelog-btn', text: '📋 Changelog' });
 		const changelogPanel = new ChangelogPanel({ appRoot, version });
 		changelogBtn.addEventListener('click', () => changelogPanel.toggle(appEl));
+
+		// 🧠 Session memory → what every live session costs in RAM, ACROSS EVERY WORKSPACE, and
+		// what is running under this app that no session claims. It reads the process tree, not
+		// the tile list, so it can contradict the floor — which is the only way it could ever
+		// have caught the usage-probe leak.
+		const memoryBtn = topBar.createEl('button', { cls: 'wcc-changelog-btn', text: '🧠 Memory' });
+		const memoryPanel = new MemoryPanel({
+			claims: () => {
+				const out: SessionClaim[] = [];
+				// Every grid, not just the active one. Grids are created lazily per workspace, so
+				// this covers exactly the tabs that have ever had sessions — which is exactly the
+				// set that can be holding memory.
+				for (const [id, g] of grids) {
+					out.push(...g.memoryClaims(workspaces.find((w) => w.id === id)?.name ?? id));
+				}
+				// The usage battery's own probe, named rather than left anonymous. Without this it
+				// would land in "unattributed" every five minutes and train you to ignore the one
+				// row that matters. A LEAKED probe still shows there, which is the point.
+				for (const pid of usageProbe?.ownedPids() ?? []) {
+					out.push({
+						key: `app:usage-probe:${pid}`, name: 'usage battery', workspaceId: '', workspaceName: 'app',
+						repo: 'usage probe', branch: '', pid, busy: true, idleSince: null, hidden: true, system: true,
+					});
+				}
+				return out;
+			},
+			endSession: async (workspaceId, key) => {
+				const tileId = Number(key.slice(key.lastIndexOf(':') + 1));
+				if (!Number.isFinite(tileId)) return false;
+				return (await grids.get(workspaceId)?.endSessionKeepingWork(tileId)) ?? false;
+			},
+			toast,
+		});
+		memoryBtn.addEventListener('click', () => memoryPanel.toggle(appEl));
+		window.addEventListener('beforeunload', () => memoryPanel.close());
 
 
 		// --- workspace tab bar ---

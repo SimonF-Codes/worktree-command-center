@@ -5,6 +5,162 @@ landed on `main`.
 
 ## Unreleased
 
+**🪟 The stage lays tiles out by the SHAPE of the space, not just how many there are**
+- Both layout functions picked their shape from the tile count alone — `ceil(sqrt(n))`, with the
+  stage width and height used only to size cells inside a shape already decided. Four terminals
+  were a 2x2 grid on every screen there is: on a portrait monitor that halved an already-narrow
+  width, on an ultrawide it left the horizontal space unused.
+- The shape now comes from a search over every (cols, rows) that can hold the tiles, picking the
+  one that maximises the smallest resulting cell **measured in character cells**. Portrait and
+  ultrawide stop being special cases — the same rule produces a stacked column on a vertical
+  monitor, full-height columns on an ultrawide, and 2x2 on a square screen.
+- The minimum — roughly **80 columns by 20 rows**, below which the Claude TUI wraps badly and the
+  input box falls off the bottom — is read from the LIVE terminal metrics, not hardcoded in
+  pixels. Cell size moves with the font size and the display DPI, so a pixel floor is correct on
+  one screen and wrong on the next, which is the whole bug. The old `90px`/`60px` floors are gone.
+- **A layout preference per workspace**: Auto (default) · Grid · Columns · Rows · Focus. It rides
+  on the same per-tab state as the repo/branch/model/effort dropdowns, so a tab opened on a
+  vertical monitor keeps its own choice across restarts.
+- **Auto follows the window as you resize it**, reading the stage aspect: narrow stacks into rows,
+  ultrawide splits into full-height columns, everything between gets the best-fit grid. Switching
+  bands needs the aspect to cross the boundary by ~10% — without that margin, dragging a window
+  edge flips the layout back and forth for the whole drag.
+- **The centred layout puts its satellites where the stage has room**: top/bottom bands on a
+  narrow stage, left/right columns on a wide one. They used to round-robin into left, right, top,
+  bottom by index, so on a portrait monitor the first two satellites took 40% of the scarce
+  dimension. Their thickness is now capped so the centre keeps a usable terminal.
+- **When the tiles genuinely cannot fit, the stage scrolls** rather than shrinking them into
+  unreadable slivers, and it prefers to scroll downwards past full-width tiles over sideways past
+  half-width ones. Nothing is auto-hidden — a tile never vanishes without being asked.
+
+**🧠 Memory — what every session costs, and what is running that no session owns**
+- A panel, next to Changelog, listing every live session ACROSS EVERY WORKSPACE with its repo and
+  branch, the RAM of its sidecar and everything under it, and how long it has been idle, biggest
+  first. The sessions you forget are by definition in tabs you are not looking at, so a panel
+  scoped to the visible tab would miss exactly the ones being hunted.
+- Attribution comes from the **process tree, not the tile list**. Each tile's `SessionBridge` now
+  exposes its sidecar pid, and a session's memory is that pid's subtree rolled up — exact
+  ownership, no command-line string matching. One `Win32_Process` snapshot per poll returns every
+  process, its parent and its working set in a single call; a tracker that spawned a process per
+  session to count processes would be the bug it exists to report.
+- **Anything under the app that no session claims gets its own "Unattributed" row**, at the top,
+  in red. That row is the feature, not an edge case: replaying the 2026-09-16 snapshot with the
+  five sessions the floor was showing puts **13.6 GB across 237 processes** in it. A tracker built
+  by summing tiles would have agreed with the floor and reported five healthy terminals.
+- Polls every 20s and ONLY while the panel is open. The snapshot subtracts the process it spawns
+  to take the snapshot — otherwise ~85 MB of PowerShell lands in "Unattributed" every poll, the
+  measuring tool reporting itself as a leak and the one row that must be trusted crying wolf.
+  The usage battery's own probe is a named row for the same reason.
+- **Closing never happens on its own** — which sessions matter is a judgment the app does not
+  have. Close one, or close every session idle longer than a chosen threshold; the bulk confirm
+  names them rather than just counting them, and never includes a session that is working.
+- Closing from here is deliberately NOT the tile's ×, which deletes the worktree and branch.
+  Transcripts in `~/.claude/projects` are keyed by worktree PATH, so deleting the worktree is
+  exactly what would make one unresumable. Uncommitted work is parked as the usual `wip:` commit,
+  the process is killed, and the worktree and branch stay — Reopen brings the whole thing back.
+  The panel says so, because that is what makes the button easy to press.
+- Closing a BUSY session warns that it loses the turn in progress; closing an idle one says
+  plainly that nothing is lost. That distinction is the only real risk in the feature.
+
+**The usage battery leaked a `claude` session every five minutes — about 3 GB an hour**
+- Measured on the live machine 2026-09-16: 81 `claude` processes holding 19.5 GB and 80 node
+  sidecars holding 3.5 GB, while the floor showed five terminals. 31 of those sidecars sat in the
+  usage-probe's scratch directory, spaced exactly 5.0 minutes apart from 05:50 to 08:20 — one per
+  `AUTO_MS` tick of the usage bar, going back to the moment the app started.
+- The cause was a callback that outlived the session it belonged to. `UsageProbe` keeps the
+  current session in `this.bridge`, and each session's `exit` handler cleared that field without
+  first checking the session was still the current one. When a refresh's first pass came back
+  empty, the probe killed it and immediately started a replacement; the dead session's `exit`
+  landed a few hundred ms later and nulled `this.bridge` out from under the *live* one.
+  `refreshOnce()` then threw `session unavailable` before reaching its `dispose()`, and the
+  running sidecar's pid was gone from the program for good. Reproduced deterministically:
+  2 sessions spawned, 1 leaked. After the fix, 2 spawned, 0 leaked.
+- The handlers are now addressed to their own bridge, cleanup moved into a `try/finally` so no
+  throw can skip it, and the deferred Enter/Escape writes target the session that asked for them
+  instead of whatever session happens to be current.
+- `SessionBridge.kill()` was fire-and-forget: it spawned `taskkill`, read neither exit code nor
+  stderr, and set `this.proc = null` regardless — so a kill that failed was both silent and
+  unrecoverable, because the pid was forgotten in the same breath. Kills are now verified
+  (`kill-tree.ts`): the exit code is read, `128`/"not found" counts as confirmed, a failure is
+  retried once and then reported through `onKillFailure`, and **the pid is kept until the death is
+  confirmed**. Unconfirmed pids are remembered for a later sweep. That is not what caused this
+  leak, but it is why nobody saw it for 31 refreshes.
+- Strays are reaped at startup (`stray-reaper.ts`). A probe session left by a previous run holds
+  ~250 MB and nothing in the new process knows its pid, so it survives until the machine reboots.
+  Only the probe's own dedicated directory is ever swept: a sidecar in a real worktree may belong
+  to a second running instance (dev and installed builds share one profile) and is left alone.
+  Running the reaper against the machine freed 6.1 GB across 29 processes, with none refused.
+- The 5-minute cadence and what the bar scrapes are unchanged. The cadence was never the problem.
+
+**A notification never types into a line you are still writing**
+- A watch firing while you were mid-sentence in Kane's console did not overwrite your draft — it
+  MERGED with it and pressed Enter, submitting the mixture as if you had written it. `notify()`
+  wrote the notice into the PTY as keystrokes and pressed Enter 250ms later, without ever looking
+  at what was already in the input box. `TerminalTile.sendLine` (chat broadcasts, relays, an
+  overseer-spawned terminal's initial task) had the identical shape and the identical bug.
+- Both now go through one shared gate (`notice-gate.ts`), which tracks the input box from the
+  keystrokes the app already sees on their way to the PTY — no screen scraping of the TUI's prompt
+  line, which changes too often to depend on. An empty box behaves exactly as before, including
+  the 250/900ms Enter pair, which is unchanged and still load-bearing. A non-empty box queues, and
+  the queue is released on the transition back to empty: your Enter, Ctrl+U, Esc, or backspacing
+  the line away.
+- Nothing is ever dropped. Exact duplicates coalesce and the entry count is capped, but overflow
+  merges rather than discarding, and a release delivers everything pending as one message — a
+  watch notice is the only thing that tells the overseer a worker finished.
+- While anything is held, the session's header says `⏳ N waiting`, with the way out in its
+  tooltip; clicking it delivers immediately, draft and all, for when you want it anyway. A queued
+  notice that said nothing would read exactly like no notice at all.
+- The tracker is a heuristic, so a session's `.cos-ready` marker resyncs it (Kane's console now
+  gets a `Stop` hook to produce one). There is deliberately no timer that delivers anyway after N
+  seconds — that is the original bug with a delay. The resync also waits for a moment's quiet at
+  the keyboard first: a turn ending does not prove the box is empty, because you can type while
+  Claude works.
+- `cos-coord tell` doesn't queue — delivery there is verified, and a queued message hasn't been
+  delivered. It now refuses while someone is typing in the target and retries on its existing 5s
+  cadence. This also stops a retry's `Ctrl+U` (meant for a stale unsubmitted retry) from wiping a
+  real draft, and an exhausted retry window now says so specifically instead of blaming a compact.
+
+**The connector channel's `tell` had the same swallowing bug as `cos-coord tell` — closed the same way**
+- `handleConnectorRequest` typed the message in and wrote an `accepted` receipt immediately,
+  unconditionally — the same fire-and-hope `sendLine` call the CLI `tell` fix above replaced, just
+  behind a second door. This one is the door Brain 2.0's butler actually uses, and its documented
+  contract ("accepted" = "typed and submitted, not acted on") was false until now: four messages
+  were lost to `/compact` in one session through paths shaped exactly like this one, each reported
+  as delivered.
+- A connector `tell` now routes through the same seam Kane's own `tell` uses
+  (`deliverTellQueued`/`TerminalTile.deliverLine`) rather than a second mechanism — the two even
+  queue against the same terminal in arrival order. The receipt is written only once delivery is
+  confirmed or the ~40s retry window gives up: `accepted` only when the text actually landed,
+  `rejected` with the real reason otherwise (an unresolved target, the retry window running out, the
+  terminal closing mid-delivery).
+- No wire-shape change: Brain 2.0's `parseReceipt` already reads an absent receipt file as
+  "unanswered", so the window before delivery resolves (now up to ~40s instead of instant) needs no
+  new status value — it's just what "unanswered" already meant.
+- `spawn`'s `accepted` receipt is unaffected by this pass — it fires once the terminal itself is
+  created, which is true the moment it's written. Its *initial task* is a separate, later delivery
+  (queued, sent on first ready) with the same unverified `sendLine` shape, but spawning a terminal
+  first gates on an explicit ready signal rather than typing into a session of unknown state — a
+  narrower window than `tell`'s, and not the one this pass targeted.
+
+**`cos-coord tell` no longer reports success for a message that was never delivered**
+- `sendLine` typed the text into the target's PTY, fired two timed Enters, and returned — it never
+  checked anything actually landed. Observed losing three messages in one session: each target had
+  just hit `/compact`, and the message vanished into the compacting TUI while `tell` still reported
+  success and the file drop still exited 0. The fix so far (an extra timed Enter, twice before this)
+  was fire-and-hope for a different class of the same bug; this one gets a real feedback path
+  instead of a third guess.
+- Delivery is now VERIFIED: after sending, the tile checks its own recent output for the sent text
+  before believing it landed (`TerminalTile.deliverLine`, `looksDelivered` in `prompt-detect.ts`).
+  A message that doesn't land is held and retried (clearing any stray unsubmitted text first) every
+  5s for up to 40s — long enough for a typical compact to clear — rather than typed once into a
+  session that can't hear it. Two tells queued for the same terminal are delivered in order.
+- `cos-coord tell` now blocks on the app's delivery receipt (new — no receipt existed for any
+  command before this; the outbox request format Brain 2.0 depends on is unchanged) and exits non-
+  zero with the real reason whenever delivery didn't happen: an unresolved target, the retry window
+  running out, or the terminal closing while the message was still queued. Exit 0 now means the
+  message was actually seen on screen, not just that a file was written. See README "External
+  dispatch" and `COS_COORD_TELL_WAIT_MS`.
+
 **Closing a workspace tab asks first, and can be taken back**
 - Closing a tab could destroy every terminal it had saved without asking. The confirm counted
   LIVE MOUNTED tiles, and every workspace's grid is constructed at startup but only mounted when

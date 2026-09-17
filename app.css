@@ -92,7 +92,11 @@ html, body {
 .wcc-grid-container { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; position: relative; }
 .cos-terminals-controls { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--background-modifier-border); background: var(--background-primary-alt); }
 .cos-terminals-controls select { background: var(--background-secondary-alt); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 5px 8px; }
-.cos-terminals-stage { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; }
+/* Scrolls rather than shrinking tiles below a usable terminal (bubble-layout minTileSize):
+   when n tiles cannot fit at 80x20 they keep that size and the stage scrolls past them. The
+   gutter is reserved permanently so the scrollbar appearing cannot shrink clientWidth, change
+   the best-fit shape, remove the overflow and flip back. */
+.cos-terminals-stage { flex: 1 1 auto; min-height: 0; position: relative; overflow: auto; scrollbar-gutter: stable; }
 
 /* Coordination board + worktree registry — clean rows, not raw markdown. */
 .cos-coord-board { flex: 0 0 auto; max-height: 38vh; overflow-y: auto; background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); padding: 8px 12px; font-size: 12px; }
@@ -735,3 +739,39 @@ html, body {
 .wcc-roles-empty-h { font-weight: 600; font-size: 13.5px; margin-bottom: 8px; }
 .wcc-roles-empty-p { font-size: 12.5px; line-height: 1.55; color: var(--text-muted); margin-bottom: 8px; }
 .wcc-roles-code { background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 9px 11px; font: 12px var(--font-monospace); color: var(--text-normal); overflow-x: auto; margin: 0 0 10px; }
+
+/* --- Session memory panel (🧠 Memory) --------------------------------------------------- */
+.wcc-mem-panel { position: absolute; right: 12px; top: 46px; z-index: 1300; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 10px; box-shadow: 0 12px 36px rgba(0,0,0,.55); padding: 12px 14px; min-width: 420px; max-width: 560px; max-height: 74vh; display: flex; flex-direction: column; }
+.wcc-mem-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.wcc-mem-title { font-weight: 600; flex: 1; }
+.wcc-mem-refresh { background: transparent; color: var(--text-muted); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.wcc-mem-refresh:hover { color: var(--text-normal); }
+.wcc-mem-body { overflow-y: auto; font-size: 12.5px; line-height: 1.45; }
+.wcc-mem-empty { color: var(--text-muted); font-size: 12px; padding: 8px 0; }
+.wcc-mem-total { display: flex; justify-content: space-between; align-items: baseline; font-weight: 600; padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid var(--background-modifier-border); }
+.wcc-mem-total-sub { font-weight: 400; font-size: 11.5px; color: var(--text-muted); }
+.wcc-mem-row { position: relative; padding: 7px 78px 7px 0; border-bottom: 1px solid var(--background-modifier-border); }
+.wcc-mem-row:last-child { border-bottom: none; }
+.wcc-mem-rowmain { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.wcc-mem-name { font-weight: 600; color: var(--text-normal); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wcc-mem-ram { font-variant-numeric: tabular-nums; color: var(--text-normal); white-space: nowrap; }
+.wcc-mem-sub { font-size: 11.5px; color: var(--text-muted); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.wcc-mem-hint { font-style: italic; }
+.wcc-mem-busy { color: var(--color-yellow, #d8a657); }
+.wcc-mem-dead { color: var(--text-faint, #6b6f80); }
+.wcc-mem-tag { border: 1px solid var(--background-modifier-border); border-radius: 4px; padding: 0 5px; font-size: 10.5px; color: var(--text-muted); }
+/* The leak detector. Loud on purpose: a number here that isn't near zero means the app is
+   running something it has forgotten it owns. */
+.wcc-mem-unattributed { background: rgba(210,69,62,.10); border-left: 3px solid var(--color-red, #d2453e); border-radius: 6px; padding-left: 9px; margin-bottom: 6px; }
+.wcc-mem-unattributed .wcc-mem-name { color: var(--color-red, #d2453e); }
+/* Rows the current bulk threshold would take — visible BEFORE the button is pressed. */
+.wcc-mem-inbulk { background: rgba(255,255,255,.035); }
+.wcc-mem-inbulk::after { content: 'in bulk'; position: absolute; right: 78px; top: 7px; font-size: 10px; color: var(--text-faint, #6b6f80); }
+.wcc-mem-endbtn { position: absolute; right: 0; top: 10px; background: var(--background-secondary-alt); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 11.5px; }
+.wcc-mem-endbtn:hover { border-color: var(--color-red, #d2453e); color: var(--color-red, #d2453e); }
+.wcc-mem-note { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--background-modifier-border); }
+.wcc-mem-foot { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.wcc-mem-bulk-sel { background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 4px 6px; font-size: 11.5px; }
+.wcc-mem-bulk { background: var(--background-secondary-alt); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+.wcc-mem-bulk:hover { border-color: var(--color-red, #d2453e); }
+.wcc-mem-close { margin-left: auto; background: var(--background-secondary-alt); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 5px 12px; cursor: pointer; }

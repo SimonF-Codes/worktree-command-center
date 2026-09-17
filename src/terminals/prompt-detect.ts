@@ -43,3 +43,21 @@ export function looksErrored(output: string): boolean {
 export function looksBusy(output: string): boolean {
 	return /esc\s+to\s+interrupt/i.test(String(output));
 }
+
+/** Collapse whitespace (including the newlines a wrapped line introduces) to single spaces, so a
+ *  sent string can be found in on-screen output even where the terminal wrapped or re-flowed it. */
+export function normalizeForMatch(s: string): string {
+	return String(s).replace(/\s+/g, ' ').trim();
+}
+
+/** Did a line we just typed actually land on screen, submitted or not? We don't try to tell those
+ *  two apart (see TerminalTile.deliverLine) — we only need to rule out the one failure this exists
+ *  for: the TUI was in a state (mid-/compact, still booting, …) that ate the keystrokes entirely,
+ *  leaving no trace anywhere. Matches on a bounded prefix (not the whole string) so a long message
+ *  that got line-wrapped mid-word still matches, and an empty/whitespace-only line — which leaves no
+ *  trace to look for by definition — is trivially "landed" rather than reported as a false failure. */
+export function looksDelivered(recentOutput: string, sentText: string): boolean {
+	const needle = normalizeForMatch(sentText).slice(0, 80);
+	if (!needle) return true;
+	return normalizeForMatch(recentOutput).includes(needle);
+}

@@ -101,8 +101,10 @@ export function promptForConfirm(title: string, message: string, okLabel = 'Conf
 
 		const msg = document.createElement('div');
 		msg.textContent = message;
-		// pre-wrap: confirm bodies list what is at stake one item per line (see close-summary.ts),
-		// and without this the whole list collapses into one run-on paragraph.
+		// pre-wrap so a confirm can LIST what it is about to act on, one per line: a confirm that
+		// says "close 7 sessions" without naming them is not something anyone can agree to
+		// honestly. The cap + overflow keep a long list (a tab close, or a bulk idle close) on
+		// screen instead of running off the bottom. Single-line callers are unaffected.
 		msg.style.cssText = 'color:#b8bccb;margin-bottom:14px;line-height:1.45;white-space:pre-wrap;max-height:50vh;overflow:auto';
 
 		const row = document.createElement('div');

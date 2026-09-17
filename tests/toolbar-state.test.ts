@@ -53,3 +53,24 @@ describe('pruneToolbars', () => {
 		expect(pruneToolbars(all, ['a', 'b'])).toEqual(all);
 	});
 });
+
+describe('layout preference (per workspace, beside repo/branch/model/effort)', () => {
+	it('keeps a named layout mode', () => {
+		expect(normalizeToolbarState({ repo: 'A', layout: 'columns' })).toEqual({ repo: 'A', layout: 'columns' });
+	});
+	it("drops 'auto' — it is the default, so it is not a choice worth persisting", () => {
+		expect(normalizeToolbarState({ repo: 'A', layout: 'auto' })).toEqual({ repo: 'A' });
+		expect(setToolbarState({ a: { layout: 'grid' } }, 'a', { layout: 'auto' })).toEqual({});
+	});
+	it('drops junk rather than persisting an unknown mode', () => {
+		expect(normalizeToolbarState({ layout: 'diagonal' })).toEqual({});
+		expect(normalizeToolbarState({ layout: 7 })).toEqual({});
+	});
+	it('rides the existing per-workspace machinery — set, replace and prune', () => {
+		const one = setToolbarState({}, 'ws1', { repo: 'A', layout: 'rows' });
+		const two = setToolbarState(one, 'ws2', { layout: 'focus' });
+		expect(two).toEqual({ ws1: { repo: 'A', layout: 'rows' }, ws2: { layout: 'focus' } });
+		expect(pruneToolbars(two, ['ws2'])).toEqual({ ws2: { layout: 'focus' } });
+		expect(normalizeToolbars(two)).toEqual(two);
+	});
+});

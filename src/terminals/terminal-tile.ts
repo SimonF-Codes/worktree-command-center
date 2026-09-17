@@ -11,14 +11,25 @@ import { loadRolePrompt } from './role-loader';
 import type { SessionFact } from './role-library';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { FitThrottle } from './fit-throttle';
+import { MIN_TERM_COLS, MIN_TERM_ROWS, type TileCellMetrics } from './bubble-layout';
 import { HiddenOutputBuffer } from './hidden-buffer';
 import { isUserInput } from './ready-queue';
 import { activeTerminalPalette, activeTerminalFont, type TerminalPalette } from './theme-store';
 import { ctrlClickActivator, openExternalUrl } from './links';
 import { promptForConfirm } from '../ui/prompt-dialog';
 import { stripAnsi } from './usage-parse';
+import { looksDelivered } from './prompt-detect';
 import type { StageTile } from './stage-tile';
 import type { AttentionKind } from './attention';
+import { NoticeGate } from './notice-gate';
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+/** How long a released backlog waits so the keystroke that emptied the box lands first. Nothing
+ *  to do with sendLine's 250/900ms Enter pair. */
+const FLUSH_SETTLE_MS = 250;
 
 export interface TerminalTileOpts {
 	tileId: number;
@@ -71,6 +82,17 @@ export class TerminalTile implements StageTile {
 	private fitThrottle: FitThrottle | null = null;
 	private badgeEl: HTMLElement | null = null;
 	private attnEl: HTMLElement | null = null;
+	private queueEl: HTMLElement | null = null;
+	/** Same gate as Kane's console (notice-gate.ts): a message typed into this session waits
+	 *  while someone is typing into it, instead of landing inside their half-written line. */
+	private gate = new NoticeGate({
+		deliver: (text, kind) => {
+			if (kind === 'immediate') { this.writeLine(text); return; }
+			// Let the keystroke that emptied the box reach the TUI first — see god-console.ts.
+			window.setTimeout(() => this.writeLine(text), FLUSH_SETTLE_MS);
+		},
+		onQueueChange: (n) => this.renderQueueBadge(n),
+	});
 	private lockBtnEl: HTMLButtonElement | null = null;
 	private remoteBtnEl: HTMLButtonElement | null = null;
 	private remoteOn = false;
@@ -81,6 +103,10 @@ export class TerminalTile implements StageTile {
 	private pasting = false;
 	private selected = false;
 	private idle = false; // false = busy/starting; true once the session goes ready (refresh confirms only when busy)
+	// When `idle` last became true. The memory panel ranks sessions by how long they have been
+	// sitting there, and "idle" without a clock behind it can't answer that. Written only
+	// through setIdle so the flag and its timestamp can never disagree.
+	private idleSinceTs: number | null = null;
 	private ended = false; // true once the claude process has exited and nothing is listening on the pty
 	// Output pacing: only the CENTERED tile parses PTY output in true real time. Visible
 	// satellites batch on a 300ms cadence and hidden/workspace-detached tiles on 2s —
@@ -106,6 +132,10 @@ export class TerminalTile implements StageTile {
 		this.badgeEl = head.createSpan({ cls: 'cos-term-badge' });
 		this.attnEl = head.createSpan({ cls: 'cos-term-attn' });
 		this.attnEl.style.display = 'none';
+		// Out-of-band "N waiting" badge for messages held back while someone types here.
+		this.queueEl = head.createSpan({ cls: 'cos-notice-queue' });
+		this.queueEl.style.display = 'none';
+		this.queueEl.addEventListener('click', (e) => { e.stopPropagation(); this.gate.flushNow(); });
 		this.nameEl = head.createSpan({ cls: 'cos-term-name', text: this.displayName, attr: { title: 'Double-click to rename' } });
 		this.nameEl.addEventListener('dblclick', (e) => { e.stopPropagation(); this.opts.onRequestRename?.(this, this.displayName); });
 		// Right-clustered controls: remote, lock, minimize (hide), close.
@@ -217,8 +247,8 @@ export class TerminalTile implements StageTile {
 			// resize / satellite count). Clamp to ≥80 cols so output is never wrapped tiny.
 			propose: () => (this.centered ? this.fit?.proposeDimensions() ?? null : null),
 			apply: (cols, rows) => { this.term?.resize(cols, rows); this.bridge?.resize(cols, rows); },
-			minCols: 80,
-			minRows: 20,
+			minCols: MIN_TERM_COLS,
+			minRows: MIN_TERM_ROWS,
 		});
 		this.fitSoon();
 
@@ -231,13 +261,16 @@ export class TerminalTile implements StageTile {
 			// not revive a dead session with nobody at the keyboard.
 			if (this.ended && isUserInput(d)) { this.ended = false; this.term?.reset(); this.startSession(true, true); return; }
 			this.bridge?.write(d); // always forwarded — Claude asked for these reports
+			// Track the input box AFTER forwarding, so a message released by this very keystroke
+			// (their Enter) reaches the PTY behind it, never in front of it.
+			this.gate.input(d, this.pasting);
 			if (this.pasting) return; // pasted content (incl. its newlines) is NOT a submit
 			// Only a HUMAN keystroke means "this session is being worked on". xterm answers
 			// Claude's focus reporting (DECSET 1004) on the same channel, so the focus/blur
 			// WE cause by centering a tile would otherwise clear its idle flag and bounce the
 			// spotlight to the next tile — forever, with nobody at the keyboard (2026-07-28).
 			if (!isUserInput(d)) return;
-			if (d.includes('\r')) { this.idle = false; this.opts.onEnter?.(this); }
+			if (d.includes('\r')) { this.setIdle(false); this.opts.onEnter?.(this); }
 			else this.opts.onInput?.(this, d);
 		});
 		// If resuming, also enable the fallback: a --continue that finds no conversation
@@ -257,7 +290,8 @@ export class TerminalTile implements StageTile {
 			this.readyWatcher = fs.watch(this.opts.worktree.worktreePath, (_evt, file) => {
 				if (file === '.cos-ready') {
 					try { fs.unlinkSync(path.join(this.opts.worktree.worktreePath, '.cos-ready')); } catch { /* ignore */ }
-					this.idle = true;
+					this.setIdle(true);
+					this.gate.ready();   // bound draft-tracker drift to one turn (see notice-gate.ts)
 					this.opts.onReady?.(this);
 				}
 			});
@@ -416,8 +450,32 @@ export class TerminalTile implements StageTile {
 		this.term?.blur();
 	}
 
-	/** Type a line into the session (text + Enter) — used by the chat broadcast/relay. */
+	/** Type a line into the session (text + Enter) — used by the chat broadcast/relay and by an
+	 *  overseer-spawned terminal's initial task.
+	 *
+	 *  Gated: if someone has unsubmitted text in THIS terminal's input box, the line waits (the
+	 *  header shows "N waiting") instead of being typed into the middle of their sentence and
+	 *  submitted with it. An empty box behaves exactly as it always did. */
 	sendLine(text: string): void {
+		this.gate.notify(text);
+	}
+
+	/** True while this terminal's input box appears to hold unsubmitted typing. deliverLine uses
+	 *  it to refuse rather than type over someone. */
+	get isDrafting(): boolean { return this.gate.drafting; }
+
+	/** Show/hide the "N waiting" badge in this tile's header. */
+	private renderQueueBadge(n: number): void {
+		const el = this.queueEl;
+		if (!el) return;
+		el.style.display = n > 0 ? '' : 'none';
+		if (n === 0) return;
+		el.setText(`⏳ ${n} waiting`);
+		el.setAttr('title', `${n} message${n === 1 ? '' : 's'} waiting for ${this.displayName} — press Enter or clear the line (Esc / Ctrl+U) and ${n === 1 ? 'it' : 'they'} will be delivered. Click to deliver now (into whatever is in the box).`);
+	}
+
+	/** The actual injection. Only the gate calls this. */
+	private writeLine(text: string): void {
 		this.bridge?.write(text);
 		// Submit Enter as a SEPARATE write on a later tick. Bundling "text\r" into one PTY
 		// write makes Claude's input treat the trailing \r as a pasted newline — it lands in
@@ -434,6 +492,42 @@ export class TerminalTile implements StageTile {
 		// empty input box and is a no-op.
 		window.setTimeout(() => this.bridge?.write('\r'), 900);
 	}
+
+	/** Like sendLine, but VERIFIES the text actually landed on screen instead of firing and
+	 *  hoping — the single seam both `tell` doors route through (terminals-grid.ts
+	 *  deliverTellQueued), so Kane's own `cos-coord tell` (which blocks on it) and the connector
+	 *  channel's `tell` (`handleConnectorRequest`, whose receipt now waits on the same result)
+	 *  are both told whether delivery actually worked, not just that it was attempted.
+	 *  `clearFirst` sends Ctrl+U before typing, to wipe out whatever a previous failed retry may
+	 *  have left sitting in the input box unsubmitted.
+	 *
+	 *  Trust boundary: this confirms the text reached the screen SOMEWHERE (input box or
+	 *  submitted transcript), not that it was specifically submitted — recentOutput() can't
+	 *  cheaply tell those apart. That's fine for the one failure this exists to catch (a
+	 *  compacting/booting/otherwise-unresponsive TUI that swallows keystrokes and shows no
+	 *  trace of them at all); it does not further prove the message was ACTED on, same as
+	 *  the sendLine dance it replaces never did either. */
+	async deliverLine(text: string, clearFirst = false): Promise<boolean> {
+		// Someone is typing in here. Do not type over them, and do NOT clear the box either --
+		// `clearFirst` would wipe their draft outright. Report "not delivered" so the caller's
+		// retry loop comes back in a few seconds; if the window runs out, the tell is reported
+		// as undelivered, which is the truth. Queuing it instead would be wrong here: this path
+		// exists to tell the sender whether the message actually landed.
+		if (this.gate.drafting) return false;
+		if (clearFirst) this.bridge?.write('\x15'); // Ctrl+U: clear a stale unsubmitted retry
+		this.bridge?.write(text);
+		await delay(250);
+		this.bridge?.write('\r'); // see sendLine's comment: a separate write, not bundled with the text
+		await delay(650); // 250 + 650 = 900, matching sendLine's belt-and-braces second Enter
+		this.bridge?.write('\r');
+		await delay(500); // let the TUI redraw before reading the screen
+		return looksDelivered(this.recentOutput(), text);
+	}
+
+	/** True once the underlying claude process has exited — deliverLine's retry loop uses this
+	 *  to give up immediately on a session that plainly isn't coming back, instead of burning
+	 *  its whole retry window on it. */
+	get isEnded(): boolean { return this.ended; }
 
 	/** Send raw keystrokes verbatim (no auto-Enter) — used to answer prompts from the
 	 *  chat (Approve = Enter "\r", Deny = Escape "\x1b"). */
@@ -457,10 +551,52 @@ export class TerminalTile implements StageTile {
 		return lines.join('\n');
 	}
 
+	/** px per character cell, plus the part of the tile box that is NOT character cells, read from
+	 *  the LIVE terminal. The stage layout needs this to reason in columns and rows: cell size
+	 *  moves with the font size and the display DPI, so a layout built on pixel constants is
+	 *  correct on one screen and wrong on the next — which is the bug adaptive layout exists to
+	 *  fix, so it must not be rebuilt on a pixel constant here.
+	 *
+	 *  The chrome is derived from what the fit addon says currently fits rather than from the CSS,
+	 *  so cellsInTile() predicts the same cols/rows the addon would propose for a tile of that size —
+	 *  header, borders, padding and xterm's own scrollbar gutter are all inside the difference. */
+	cellMetrics(): TileCellMetrics | null {
+		const core = (this.term as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } } } | null)?._core;
+		const cell = core?._renderService?.dimensions?.css?.cell;
+		// A hidden tile (display:none) measures 0 and would under-report the chrome — skip it and let
+		// the grid ask the next tile.
+		if (!this.el || this.el.offsetWidth <= 0 || this.el.offsetHeight <= 0) return null;
+		if (!cell || !(cell.width > 0) || !(cell.height > 0)) return null;
+		const fitted = this.fit?.proposeDimensions();
+		if (!fitted) return null;   // not laid out yet — the caller falls back to the defaults
+		return {
+			cw: cell.width,
+			ch: cell.height,
+			chromeW: Math.max(0, this.el.offsetWidth - fitted.cols * cell.width),
+			chromeH: Math.max(0, this.el.offsetHeight - fitted.rows * cell.height),
+		};
+	}
+
 	/** This terminal's display name (matches COS_TERMINAL_NAME used by cos-coord chat). */
 	get name(): string {
 		return this.displayName;
 	}
+
+	/** Single writer for the idle flag, so its timestamp stays in step. Re-entering idle while
+	 *  already idle does NOT restart the clock — a session that has sat untouched for four hours
+	 *  should say four hours, not reset every time a hook marker lands. */
+	private setIdle(v: boolean): void {
+		if (v && !this.idle) this.idleSinceTs = Date.now();
+		if (!v) this.idleSinceTs = null;
+		this.idle = v;
+	}
+
+	/** Mid-response. Closing one of these loses the turn; closing an idle one loses nothing. */
+	get isBusy(): boolean { return !this.idle; }
+	/** When this session last went idle, or null while it is working. */
+	get idleSince(): number | null { return this.idleSinceTs; }
+	/** Pid of this session's sidecar — the root of the process subtree it is accountable for. */
+	get sidecarPid(): number | null { return this.bridge?.pid ?? null; }
 
 	get worktreePath(): string { return this.opts.worktree.worktreePath; }
 	get branch(): string { return this.opts.worktree.branch; }
@@ -662,10 +798,10 @@ export class TerminalTile implements StageTile {
 				return;
 			}
 			this.ended = true;
-			this.idle = true; // nothing running — a ⟳/keypress revival shouldn't ask "still working?"
+			this.setIdle(true); // nothing running — a ⟳/keypress revival shouldn't ask "still working?"
 			this.writeOut(`\r\n[session ended (code ${code ?? '?'}) — press any key, or ⟳ above, to start a new one]\r\n`);
 		});
-		this.bridge.onReady(() => { this.idle = true; this.opts.onReady?.(this); });
+		this.bridge.onReady(() => { this.setIdle(true); this.opts.onReady?.(this); });
 		this.bridge.start();
 	}
 
@@ -691,7 +827,8 @@ export class TerminalTile implements StageTile {
 		this.bridge?.kill();
 		this.hiddenBuf.clear(); // old-session output must not replay into the fresh screen
 		this.term?.reset();
-		this.idle = false;
+		this.setIdle(false);
+		this.gate.reset(); // fresh TUI, empty box — anything queued waits for the next ready marker
 		this.startSession(true, true);
 	}
 }

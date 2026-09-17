@@ -67,7 +67,12 @@ that; `spawn` has never had one either, and adding one only for `tell` would be 
 inconsistent mechanism for the same risk the receipt trail already surfaces. A `tell` into a
 terminal that's mid-task is still accepted and delivered — the message is typed into that
 terminal exactly like Kane's own `tell`, which a running Claude Code session queues rather than
-drops; "accepted" means "typed and submitted," not "acted on immediately."
+drops; "accepted" means "typed and submitted," not "acted on immediately." That's now a promise,
+not a hope: `accepted` is written only once the app has confirmed the text actually landed on the
+target's screen (routed through the same delivery-verification seam as Kane's own `tell` —
+`TerminalTile.deliverLine`), retrying for up to ~40s against a target that can't take input right
+now (e.g. mid-`/compact`). Until then no receipt file exists yet for that `id` — poll for it rather
+than assuming absence means failure.
 
 Write a request atomically — a temp file in `requests/`, then `rename()` over the final name —
 and give it a v1 envelope with an id you choose (the receipt refers back to it, so you can
@@ -155,6 +160,17 @@ technically stops a local process from writing the same shapes into `god-outbox/
 `COS_ROLE=god` gate only guards the `cos-coord` *command*, not the file format), but doing so
 means impersonating the overseer's full authority over the floor, not requesting work — treat that
 as unsupported, not as a shortcut.
+
+`cos-coord tell` itself additionally **blocks and reports honestly**: it doesn't return until the
+app confirms the message actually landed on the target's screen (retried for up to
+`COS_COORD_TELL_WAIT_MS`, default 45s — override for scripting/tests), then exits 0 only if it
+did. Anything else — the target name didn't resolve, the session couldn't take input for the whole
+retry window (e.g. mid-`/compact`), it closed while the message was queued, or the app never
+answered at all — exits non-zero with the reason on stderr; dropping the outbox file was never
+proof of delivery, only proof the file was written. A `watch`/`rename`/`spawn` that fails after
+`cos-coord` already returned (an unresolved target name, an unknown repo) writes the same kind of
+note to `<coordDir>/god-inbox/` and pings Kane directly, rather than leaving him to discover it by
+reading an undocumented file.
 
 ### Agent role files
 

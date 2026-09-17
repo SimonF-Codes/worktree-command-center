@@ -6,6 +6,11 @@ const WAIT_MS = 20000;              // default acquire poll window
 const POLL_MS = 500;                // poll interval while waiting
 const CLI_TTL_MS = 30 * 60 * 1000;  // default lifetime for explicit CLI locks
 const GIT_TTL_MS = 10 * 60 * 1000;  // default lifetime for auto git locks
+// How long `cos-coord tell` blocks for the app's delivery receipt before giving up and
+// reporting failure itself. Must exceed the app's own give-up bound (terminals-grid.ts'
+// TELL_MAX_WAIT_MS) so a slow-but-eventually-successful delivery gets an honest "accepted"
+// receipt instead of the CLI's generic 'timeout' fallback.
+const TELL_WAIT_MS = 45000;
 const SEP = '\t';
 
 function slug(resource) {
@@ -89,7 +94,7 @@ function parseChatLine(line) {
 }
 
 module.exports = {
-  WAIT_MS, POLL_MS, CLI_TTL_MS, GIT_TTL_MS, SEP,
+  WAIT_MS, POLL_MS, CLI_TTL_MS, GIT_TTL_MS, TELL_WAIT_MS, SEP,
   slug, parseGitOp, baseName, resolveTargetPath, gitResource,
   lockStatus, formatBoardLine, parseBoardLine, mergeEvents, taskLabel,
   formatChatLine, parseChatLine,
