@@ -35,7 +35,7 @@ export interface GaugeState {
 	fill: number;
 	level: GaugeLevel;
 	reason: GaugeReason;
-	/** What sits beside the bar: "2.3 GB · 7", with a ⚠ when something is wrong. */
+	/** What sits beside the bar: "2.3/32 GB", with a ⚠ when something is wrong. */
 	label: string;
 	/** Hover text — the whole story, since the widget itself is four characters wide. */
 	title: string;
@@ -69,12 +69,29 @@ export function warningState(report: MemoryReport, ramBytes: number): { level: G
 	return { level: 'ok', reason: null };
 }
 
+/** The label beside the bar: what the floor holds over the size of the machine, "2.3/32 GB".
+ *
+ *  A ratio rather than a bare total, for the reason `barFraction` is denominated in the machine:
+ *  2.3 GB is noise on a 64 GB box and a third of a 16 GB one, and the denominator is what makes
+ *  the bar's fill legible as a number. Deliberately NOT `formatBytes` — that formatter serves
+ *  the panel, where each figure stands alone; here both sides must share one unit or the ratio
+ *  stops being one. The used side keeps a decimal because it moves; the machine is rounded
+ *  because it does not, and "31.9 GB" is a worse name for a 32 GB machine than "32 GB". */
+function ratioLabel(totalBytes: number, ramBytes: number): string {
+	const used = Number.isFinite(totalBytes) && totalBytes > 0 ? totalBytes / GB : 0;
+	// No denominator to divide by — fall back to the used figure alone rather than "2.3/0 GB".
+	if (!Number.isFinite(ramBytes) || ramBytes <= 0) return `${used.toFixed(1)} GB`;
+	return `${used.toFixed(1)}/${Math.round(ramBytes / GB)} GB`;
+}
+
 /** The whole widget state from one report. `ramBytes` is `os.totalmem()`, read once. */
 export function gaugeFrom(report: MemoryReport, ramBytes: number): GaugeState {
 	const { level, reason } = warningState(report, ramBytes);
 	const fill = barFraction(report.totalBytes, ramBytes);
 	const n = report.sessions.length;
-	const label = `${formatBytes(report.totalBytes)} · ${n}${level === 'ok' ? '' : ' ⚠'}`;
+	// The session count moves to the tooltip; the ⚠ stays, because it is the signal the widget
+	// exists for and it is a glyph, not prose.
+	const label = `${ratioLabel(report.totalBytes, ramBytes)}${level === 'ok' ? '' : ' ⚠'}`;
 
 	const pct = Math.round(fill * 100);
 	const bits = [

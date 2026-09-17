@@ -91,15 +91,28 @@ describe('warningState', () => {
 });
 
 describe('gaugeFrom', () => {
-	it('labels total and session count, with no warning glyph when healthy', () => {
+	it('labels the used figure over the machine, with no warning glyph when healthy', () => {
 		const g = gaugeFrom(report({ total: 2.3 * GB, unattributed: 40 * MB, sessions: 7 }), RAM);
-		expect(g.label).toBe('2.3 GB · 7');
+		expect(g.label).toBe('2.3/32 GB');
 		expect(g.level).toBe('ok');
 		expect(g.fill).toBeCloseTo(2.3 / 32, 4);
 	});
+	it('keeps the denominator when the same total sits on a different machine', () => {
+		// The ratio is the point: 2.3 GB is noise on 64 GB and a third of a 16 GB box. Pinned
+		// against two denominators so no future formatter can quietly drop back to a bare total.
+		expect(gaugeFrom(report({ total: 2.3 * GB, sessions: 7 }), 16 * GB).label).toBe('2.3/16 GB');
+		expect(gaugeFrom(report({ total: 2.3 * GB, sessions: 7 }), 64 * GB).label).toBe('2.3/64 GB');
+	});
+	it('rounds the machine — a 32 GB box does not read as 31.9 GB', () => {
+		// os.totalmem() reports the real 31.9 GiB, not the number on the box.
+		expect(gaugeFrom(report({ total: 2.3 * GB, sessions: 7 }), 31.9 * GB).label).toBe('2.3/32 GB');
+	});
+	it('drops to the used figure alone when the machine size is unknown', () => {
+		expect(gaugeFrom(report({ total: 2.3 * GB, sessions: 7 }), 0).label).toBe('2.3 GB');
+	});
 	it('adds the warning glyph and names the leak in the tooltip', () => {
 		const g = gaugeFrom(report({ total: 4 * GB, unattributed: 1 * GB, sessions: 7 }), RAM);
-		expect(g.label).toBe('4.0 GB · 7 ⚠');
+		expect(g.label).toBe('4.0/32 GB ⚠');
 		expect(g.reason).toBe('unattributed');
 		expect(g.title).toContain('Unattributed memory is high');
 		expect(g.title).toContain('7 sessions');
