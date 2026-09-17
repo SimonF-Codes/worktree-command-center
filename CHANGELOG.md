@@ -3,7 +3,7 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
-## Unreleased
+## 0.7.0 — 2026-09-16
 
 **🧹 The memory panel can close unattributed processes — but only ones old enough to be safe**
 - The unattributed row reported a leak and offered nothing to do about it, deliberately: those
