@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { MemoryMonitor } from '../src/terminals/memory-monitor';
+import { WIDGET_POLL_MS } from '../src/ui/memory-widget';
+import { PANEL_POLL_MS } from '../src/ui/memory-panel';
 import type { ProcRow } from '../src/terminals/process-snapshot';
 import type { MemoryReport, SessionClaim } from '../src/terminals/session-memory';
 
@@ -132,6 +134,40 @@ describe('MemoryMonitor — exactly one poller, in every state', () => {
 		off(); off();
 		expect(timers.live.size).toBe(1);
 		expect(monitor.intervalMs()).toBe(60_000);
+	});
+});
+
+/** The same assertions again, but against the cadences the app actually ships, so a change to
+ *  either constant has to face this test rather than slipping past made-up numbers. */
+describe('the shipped two-cadence wiring', () => {
+	it('the panel is the faster of the two — otherwise opening it would slow the gauge down', () => {
+		expect(PANEL_POLL_MS).toBeLessThan(WIDGET_POLL_MS);
+	});
+
+	it('is one poller in every state the app can be in', () => {
+		const { monitor, timers } = build();
+
+		// App launched: the gauge is always on.
+		const offWidget = monitor.subscribe(WIDGET_POLL_MS, () => {});
+		expect(monitor.pollerCount()).toBe(1);
+		expect(monitor.intervalMs()).toBe(WIDGET_POLL_MS);
+
+		// Panel opened on top of it: still one, now at the panel's rate.
+		const offPanel = monitor.subscribe(PANEL_POLL_MS, () => {});
+		expect(monitor.pollerCount()).toBe(1);
+		expect(timers.live.size).toBe(1);
+		expect(monitor.intervalMs()).toBe(PANEL_POLL_MS);
+
+		// Panel closed: back down to the gauge's rate, still one.
+		offPanel();
+		expect(monitor.pollerCount()).toBe(1);
+		expect(timers.live.size).toBe(1);
+		expect(monitor.intervalMs()).toBe(WIDGET_POLL_MS);
+
+		// App shutting down: none.
+		offWidget();
+		expect(monitor.pollerCount()).toBe(0);
+		expect(timers.live.size).toBe(0);
 	});
 });
 

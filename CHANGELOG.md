@@ -5,6 +5,30 @@ landed on `main`.
 
 ## Unreleased
 
+**🧠 Session memory is a gauge in the top bar, not a panel behind a button**
+- The memory tracker shipped behind a `🧠 Memory` button, so you only saw the number once you
+  already suspected something — exactly backwards for the bug it was built for. The usage-probe
+  leak ran for hours at 3 GB/hour while the floor looked healthy, and nobody opens a memory panel
+  on a machine that seems fine. **A number you have to ask for cannot warn you.**
+- A compact gauge now sits beside the usage battery and borrows its idiom: `🧠 ▓▓▓▓░░░░ 2.3 GB · 7`
+  — a small bar, a number, click for detail. Clicking opens the same panel, which is unchanged.
+  The `🧠 Memory` button is **gone**, not hidden: two entry points to one panel is clutter.
+- **The bar is denominated in physical RAM** (`os.totalmem()`, read once). Without a denominator
+  "2.3 GB" means nothing — noise on a 64 GB box, a third of the machine on a 16 GB one.
+- **It colours on UNATTRIBUTED memory first, total second.** Unattributed is the leak signal:
+  memory the app holds that no session on the floor accounts for. A high total is perfectly
+  legitimate with twelve sessions open, so a warning on total alone would have stayed quiet right
+  through the probe leak. The usage battery's own probe is claimed by name, so a healthy probe
+  never lands in unattributed — only a leaked one does.
+- **Two cadences, one poller.** The tracker's rule was "poll only while the panel is open", for a
+  good reason: a memory tracker that itself spawns a process every few seconds is the bug it is
+  reporting. An always-visible gauge can't honour that as written, so the gauge polls at 60s, the
+  panel raises the shared rate to 20s while open and drops it back on close, and there is never
+  more than one `Win32_Process` query in flight.
+- **60s was measured, not guessed**: one snapshot on a 16-core machine with ~416 processes costs
+  ~300 ms wall and ~280 ms of CPU (~155 ms of that is PowerShell startup, ~130 ms the query
+  itself) — about 0.5% of one core at 60s, 1.4% at the panel's 20s.
+
 **🪟 The stage lays tiles out by the SHAPE of the space, not just how many there are**
 - Both layout functions picked their shape from the tile count alone — `ceil(sqrt(n))`, with the
   stage width and height used only to size cells inside a shape already decided. Four terminals

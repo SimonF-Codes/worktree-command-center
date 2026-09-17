@@ -176,6 +176,21 @@ html, body {
 .wcc-usage-popval { color: var(--text-normal); }
 .wcc-usage-popnote { margin-top: 4px; padding: 2px 4px; font-size: 10.5px; color: var(--text-faint); }
 
+/* 🧠 Memory gauge — beside the usage battery, borrowing its idiom: a small bar, a number,
+   click for detail. The host is left unstyled, like `.wcc-usage-host`; both are plain flex
+   items of the top bar and take their place from DOM order. */
+.wcc-mem-widget { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer; padding: 0 2px; }
+.wcc-mem-widget-icon { font-size: 12px; line-height: 1; }
+.wcc-membar { position: relative; width: 38px; height: 16px; border: 1px solid var(--text-muted); border-radius: 3px; padding: 1px; box-sizing: border-box; }
+/* Filling, not draining: unlike the battery this is CONSUMPTION — more bar is worse. */
+.wcc-membar-fill { height: 100%; width: 0%; border-radius: 2px; background: #2fae6e; transition: width .3s ease, background .3s ease; }
+.wcc-mem-widget-label { color: var(--text-normal); white-space: nowrap; }
+.wcc-mem-widget[data-level='warn'] .wcc-membar-fill { background: #e0a92e; }
+.wcc-mem-widget[data-level='crit'] .wcc-membar-fill { background: #d2453e; }
+.wcc-mem-widget[data-level='warn'] .wcc-mem-widget-label { color: #e0a92e; }
+.wcc-mem-widget[data-level='crit'] .wcc-mem-widget-label { color: #d2453e; font-weight: 600; }
+.wcc-mem-widget:hover .wcc-mem-widget-label { color: var(--text-normal); }
+
 /* "claude not found on PATH" banner — full-width strip under the top bar. */
 .wcc-claude-warn-host { flex: 0 0 auto; }
 .wcc-claude-warn {

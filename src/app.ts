@@ -19,6 +19,7 @@ import { WorkspaceBar } from './ui/workspace-bar';
 import { SettingsPanel } from './ui/settings-panel';
 import { ChangelogPanel } from './ui/changelog-panel';
 import { MemoryPanel } from './ui/memory-panel';
+import { MemoryWidget } from './ui/memory-widget';
 import { MemoryMonitor } from './terminals/memory-monitor';
 import type { SessionClaim } from './terminals/session-memory';
 import { RolesView } from './ui/roles-view';
@@ -147,6 +148,11 @@ async function main(): Promise<void> {
 
 		// Usage battery (follows the ACTIVE workspace's session env; restartable by the overlay).
 		const usageHost = topBar.createDiv({ cls: 'wcc-usage-host' });
+		// The memory gauge goes immediately after the battery, and is filled in further down —
+		// once the grids whose claims it reads exist. The host div is created HERE rather than
+		// there so it takes its place in the top bar's flex order next to the battery, instead
+		// of after the Phone/Settings/Changelog buttons that follow.
+		const memHost = topBar.createDiv({ cls: 'wcc-mem-host' });
 		let usageProbe: UsageProbe | null = null;
 		let usageWidget: UsageWidget | null = null;
 		const startUsageProbe = (): void => {
@@ -272,11 +278,10 @@ async function main(): Promise<void> {
 		// the tile list, so it can contradict the floor — which is the only way it could ever
 		// have caught the usage-probe leak.
 		//
-		// ONE poller, which everything that wants to know about memory subscribes to. Today that
-		// is only the panel, at 20s while it is open; the monitor exists so a second reader can
-		// be added at its own cadence without a second `Win32_Process` query — which would be
-		// the bug this tracker reports.
-		const memoryBtn = topBar.createEl('button', { cls: 'wcc-changelog-btn', text: '🧠 Memory' });
+		// ONE poller, shared by the top-bar gauge and the panel. The gauge asks for 60s, the
+		// panel for 20s while it is open, and the monitor runs a single timer at the faster of
+		// the two — a tracker that spawned two `Win32_Process` queries would be the bug it
+		// reports.
 		const memoryMonitor = new MemoryMonitor({
 			claims: () => {
 				const out: SessionClaim[] = [];
@@ -307,8 +312,12 @@ async function main(): Promise<void> {
 			},
 			toast,
 		});
-		memoryBtn.addEventListener('click', () => memoryPanel.toggle(appEl));
-		window.addEventListener('beforeunload', () => { memoryPanel.close(); memoryMonitor.dispose(); });
+		// The gauge is the ONLY way into the panel now. The old `🧠 Memory` button is gone: a
+		// number you have to ask for cannot warn you, and two entry points to one panel is
+		// clutter.
+		const memoryWidget = new MemoryWidget(memoryMonitor, { onOpen: () => memoryPanel.toggle(appEl) });
+		memoryWidget.render(memHost);
+		window.addEventListener('beforeunload', () => { memoryPanel.close(); memoryWidget.dispose(); memoryMonitor.dispose(); });
 
 
 		// --- workspace tab bar ---
