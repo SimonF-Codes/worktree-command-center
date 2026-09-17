@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { attributeMemory, idleLongerThan, formatBytes, formatIdle, closeConfirm, bulkConfirm, type SessionClaim, type MemoryRow } from '../src/terminals/session-memory';
+import { attributeMemory, idleLongerThan, formatBytes, formatIdle, closeConfirm, bulkConfirm, unattributedConfirm, type SessionClaim, type MemoryRow } from '../src/terminals/session-memory';
+import type { CloseablePlan, TrackedProc } from '../src/terminals/unattributed-tracker';
 import type { ProcRow } from '../src/terminals/process-snapshot';
 
 const MB = 1024 * 1024;
@@ -172,5 +173,66 @@ describe('confirm copy', () => {
 
 	it('states that working sessions are excluded, so the button can be trusted', () => {
 		expect(bulkConfirm([row({ key: 'a' })], '2 hours', 0).body).toMatch(/working are NOT included/);
+	});
+});
+
+describe('unattributedConfirm', () => {
+	const NOW = 1_700_000_000_000;
+	const tracked = (over: Partial<TrackedProc> & { pid: number }): TrackedProc => ({
+		name: 'claude.exe', rssBytes: 254 * MB, startedAt: NOW - 4 * 3_600_000,
+		firstSeen: NOW - 24 * 60_000, polls: 60, ...over,
+	});
+	const plan = (over: Partial<CloseablePlan> = {}): CloseablePlan => {
+		const victims = over.victims ?? [tracked({ pid: 501 }), tracked({ pid: 502, name: 'node.exe', rssBytes: 50 * MB })];
+		return {
+			victims,
+			trees: over.trees ?? victims.map((v) => ({ root: v.pid, pids: [v.pid], rssBytes: v.rssBytes })),
+			totalBytes: over.totalBytes ?? victims.reduce((a, v) => a + v.rssBytes, 0),
+		};
+	};
+
+	it('names EVERY process, with what it is, how long, and what it holds', () => {
+		const c = unattributedConfirm(plan(), NOW, '3 minutes');
+		expect(c.body).toContain('claude.exe (pid 501)');
+		expect(c.body).toContain('node.exe (pid 502)');
+		expect(c.body).toContain('unattributed 24m');
+		expect(c.body).toContain('running 4h');
+		expect(c.body).toContain('254 MB');
+		// One line per process: a list you can read down, not a sentence you skim.
+		expect(c.body.split('\n').filter((l) => l.startsWith('•'))).toHaveLength(2);
+	});
+
+	it('states the total and the count in the title, so the size of the act is never implicit', () => {
+		const c = unattributedConfirm(plan(), NOW, '3 minutes');
+		expect(c.title).toBe('Close 2 unattributed processes?');
+		expect(c.okLabel).toBe('Close 2');
+		expect(c.body).toContain('304 MB in total');
+	});
+
+	it('says plainly that younger processes are being left alone, and why', () => {
+		const c = unattributedConfirm(plan(), NOW, '3 minutes');
+		expect(c.body).toContain('over 3 minutes');
+		expect(c.body).toContain('LEFT ALONE');
+		expect(c.body).toContain('git from the coordination hooks');
+		expect(c.body).toContain('Nothing a session claims is ever included');
+	});
+
+	it('warns that a tree takes its children when fewer trees than processes are being killed', () => {
+		const victims = [tracked({ pid: 501 }), tracked({ pid: 502 })];
+		const c = unattributedConfirm(
+			plan({ victims, trees: [{ root: 501, pids: [501, 502], rssBytes: 508 * MB }] }),
+			NOW, '3 minutes',
+		);
+		expect(c.body).toContain('1 process tree');
+		expect(c.body).toContain('children go with their parents');
+	});
+
+	it('leaves the tree note out when every process is killed on its own', () => {
+		expect(unattributedConfirm(plan(), NOW, '3 minutes').body).not.toContain('process tree');
+	});
+
+	it('reads correctly for exactly one process', () => {
+		const c = unattributedConfirm(plan({ victims: [tracked({ pid: 501 })] }), NOW, '3 minutes');
+		expect(c.title).toBe('Close 1 unattributed process?');
 	});
 });

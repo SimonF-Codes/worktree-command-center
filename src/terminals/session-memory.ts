@@ -1,4 +1,5 @@
 import { indexProcesses, subtreePids, type ProcRow } from './process-snapshot';
+import type { CloseablePlan } from './unattributed-tracker';
 
 /** What a session tells the tracker about itself.
  *
@@ -132,6 +133,40 @@ export function bulkConfirm(victims: readonly MemoryRow[], thresholdLabel: strin
 		body: `${shown}${rest}\n\nAbout ${formatBytes(freed)}. Sessions that are working are NOT included. `
 			+ 'Each conversation, worktree and branch is kept; uncommitted work is parked.',
 		okLabel: `Close ${victims.length}`,
+	};
+}
+
+/** What the panel asks before closing unattributed processes.
+ *
+ *  Every single one is NAMED, with what it is, how long it has been unattributed, how long it
+ *  has been alive at all, and what it is holding. Same rule as the tab-close and the bulk-idle
+ *  confirms, for the same reason — "close 31 processes" is not something anyone can agree to
+ *  honestly — but here it carries more weight, because this is the last gate before a kill that
+ *  no session asked for.
+ *
+ *  The copy also says what is NOT in the list and why. The reason a list is short is as
+ *  important as the list: `git` from the coordination hooks lives in this same set and is gone
+ *  within seconds, and its absence here is the feature working, not the feature missing things.
+ *
+ *  Pure, so the wording is a test rather than something buried in a click handler. */
+export function unattributedConfirm(plan: CloseablePlan, now: number, thresholdLabel: string): ConfirmCopy {
+	const n = plan.victims.length;
+	const lines = plan.victims
+		.map((v) => `• ${v.name || 'unnamed'} (pid ${v.pid}) — unattributed ${formatIdle(now - v.firstSeen)}, `
+			+ `running ${formatIdle(now - v.startedAt)} · ${formatBytes(v.rssBytes)}`)
+		.join('\n');
+	const trees = plan.trees.length < n
+		? ` They are killed as ${plan.trees.length} process tree${plan.trees.length === 1 ? '' : 's'}, so the children go with their parents.`
+		: '';
+	return {
+		title: `Close ${n} unattributed process${n === 1 ? '' : 'es'}?`,
+		body: `${lines}\n\nAbout ${formatBytes(plan.totalBytes)} in total.${trees}\n\n`
+			+ `Listed only because each has been unattributed in EVERY snapshot for over ${thresholdLabel} `
+			+ 'and across several polls. Anything younger is LEFT ALONE: git from the coordination hooks, '
+			+ 'cos-coord and their conhosts live in this same set and are gone within seconds, and killing '
+			+ 'one mid-write can leave a lock in a repo the other terminals share. Nothing a session claims '
+			+ 'is ever included, and nothing here is ever closed automatically.',
+		okLabel: `Close ${n}`,
 	};
 }
 
