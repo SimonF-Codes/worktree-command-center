@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from 'child_process';
+import { killProcessTree, type KillResult } from './kill-tree';
 
 export interface Frame { t: string; [k: string]: unknown; }
 
@@ -30,6 +31,8 @@ export class SessionBridge {
 	private onDataCb: ((utf8: string) => void) | null = null;
 	private onExitCb: ((code: number | null) => void) | null = null;
 	private onReadyCb: (() => void) | null = null;
+	private onKillFailCb: ((r: KillResult & { ok: false }) => void) | null = null;
+	private killing: Promise<KillResult> | null = null;
 
 	constructor(
 		private sidecarPath: string,
@@ -39,10 +42,17 @@ export class SessionBridge {
 		private extraEnv: Record<string, string> = {},
 	) {}
 
+	/** Pid of the sidecar process, or null once its death is confirmed. Exposed so a session's
+	 *  memory can be attributed by rolling up this pid's subtree — exact ownership, with no
+	 *  command-line string matching. */
+	get pid(): number | null { return this.proc?.pid ?? null; }
+
 	onData(cb: (utf8: string) => void): void { this.onDataCb = cb; }
 	onExit(cb: (code: number | null) => void): void { this.onExitCb = cb; }
 	/** Fired when the sidecar detects the session has gone idle (waiting for input). */
 	onReady(cb: () => void): void { this.onReadyCb = cb; }
+	/** Fired when a kill could not be confirmed, so the failure is visible instead of silent. */
+	onKillFailure(cb: (r: KillResult & { ok: false }) => void): void { this.onKillFailCb = cb; }
 
 	start(): void {
 		const node = process.platform === 'win32' ? 'node.exe' : 'node';
@@ -65,12 +75,26 @@ export class SessionBridge {
 		this.send({ t: 'resize', cols, rows });
 	}
 
-	kill(): void {
+	/** Fire-and-forget entry point, kept because most call sites tear down synchronously.
+	 *  The KILL itself is no longer fire-and-forget — see killTree(). */
+	kill(): void { void this.killTree(); }
+
+	/** Kill the sidecar and its whole process tree, VERIFYING that it took effect.
+	 *
+	 *  `this.proc` is deliberately NOT cleared until the kill is confirmed. The old code
+	 *  cleared it unconditionally, so a kill that silently failed left a live process whose
+	 *  pid nothing in the app still held — unreachable by anything but Task Manager. */
+	killTree(): Promise<KillResult> {
+		if (this.killing) return this.killing;
 		const pid = this.proc?.pid;
-		if (pid === undefined) return;
-		if (process.platform === 'win32') spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-		else { try { process.kill(-pid, 'SIGKILL'); } catch { this.proc?.kill('SIGKILL'); } }
-		this.proc = null;
+		if (pid === undefined) { this.proc = null; return Promise.resolve({ ok: true, pid: null }); }
+		this.killing = killProcessTree(pid, () => this.proc?.kill('SIGKILL')).then((r) => {
+			this.killing = null;
+			if (r.ok) this.proc = null; // only now is it safe to forget the pid
+			else this.onKillFailCb?.(r);
+			return r;
+		});
+		return this.killing;
 	}
 
 	private send(frame: Frame): void {

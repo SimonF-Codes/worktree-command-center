@@ -12,10 +12,10 @@
 
 import {
 	emptyToasts, pushToast, expireToasts, dismissToast, holdToast, overflowCount,
-	type ToastState, type ToastVariant,
+	type ToastState, type ToastVariant, type ToastPushOptions,
 } from './toast-queue';
 
-export type { ToastVariant } from './toast-queue';
+export type { ToastVariant, ToastAction, ToastPushOptions } from './toast-queue';
 
 const TICK_MS = 100;
 
@@ -55,6 +55,19 @@ function render(): void {
 			n.textContent = `×${t.count}`;
 			el.appendChild(n);
 		}
+		if (t.action) {
+			const btn = document.createElement('button');
+			btn.className = 'wcc-toast-action';
+			btn.textContent = t.action.label;
+			const run = t.action.run;
+			btn.addEventListener('click', (e) => {
+				e.stopPropagation(); // the toast body's own handler would only dismiss it
+				state = dismissToast(state, t.id, Date.now());
+				render();
+				try { run(); } catch { /* an action must never break the toast stack */ }
+			});
+			el.appendChild(btn);
+		}
 		el.title = 'Click to dismiss';
 		el.addEventListener('click', () => { state = dismissToast(state, t.id, Date.now()); render(); });
 		// Hovering holds the toast open: you moved the mouse there to read it, so the
@@ -91,9 +104,12 @@ function startClock(): void {
 
 /** Show a toast. `variant` picks the colour + how long it stays:
  *  `success` · `error` · `warn` · `info` (default), plus the attention aliases
- *  `done`/`help`/`input`. Anything past three stacks up behind a "+N more" pill. */
-export function toast(msg: string, variant?: ToastVariant): void {
-	state = pushToast(state, msg, variant, Date.now());
+ *  `done`/`help`/`input`. Anything past three stacks up behind a "+N more" pill.
+ *
+ *  `opts.action` adds one button (an Undo), and `opts.durationMs` gives it long enough to be
+ *  clicked. Hovering holds the toast open, so a slow reader does not lose the offer. */
+export function toast(msg: string, variant?: ToastVariant, opts?: ToastPushOptions): void {
+	state = pushToast(state, msg, variant, Date.now(), opts);
 	render();
 	startClock();
 }

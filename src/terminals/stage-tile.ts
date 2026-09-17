@@ -1,4 +1,5 @@
 import type { AttentionKind } from './attention';
+import type { TileCellMetrics } from './bubble-layout';
 
 /** The structural contract the terminal grid relies on for any tile it places in the stage —
  *  satisfied by both TerminalTile (a Claude session) and JournalTile (a notes editor). */
@@ -22,4 +23,7 @@ export interface StageTile {
   blur(): void;
   kill(): void;
   recentOutput(): string;
+  /** px per character cell + tile chrome, if this tile has a live terminal to measure. The grid
+   *  asks any one tile so the layout can reason in columns and rows instead of in pixels. */
+  cellMetrics?(): TileCellMetrics | null;
 }

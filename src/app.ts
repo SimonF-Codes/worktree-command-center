@@ -1,6 +1,6 @@
 import { installDomShim } from './ui/dom-shim';
 import { toast } from './ui/toast';
-import { promptForTopic, promptForConfirm } from './ui/prompt-dialog';
+import { promptForTopic, promptForConfirm, promptForChoice } from './ui/prompt-dialog';
 import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/terminals-grid';
 import { parseGodSelfImprove } from './terminals/god';
 import { parseRoleLibrary } from './terminals/role-library';
@@ -10,6 +10,7 @@ import { SerialWriter } from './serial-writer';
 import { normalizeToolbars, setToolbarState, pruneToolbars, type WorkspaceToolbars } from './terminals/toolbar-state';
 import { createGitRepo } from './create-repo';
 import { UsageProbe } from './terminals/usage-probe';
+import { reapUsageProbeStrays } from './terminals/stray-reaper';
 import { UsageWidget } from './ui/usage-widget';
 import { ClaudeWarning } from './ui/claude-warning';
 import { PerfMonitor } from './ui/perf-monitor';
@@ -17,9 +18,21 @@ import { AttentionWidget } from './ui/attention-widget';
 import { WorkspaceBar } from './ui/workspace-bar';
 import { SettingsPanel } from './ui/settings-panel';
 import { ChangelogPanel } from './ui/changelog-panel';
+import { MemoryPanel } from './ui/memory-panel';
+import { MemoryWidget } from './ui/memory-widget';
+import { MemoryMonitor } from './terminals/memory-monitor';
+import type { SessionClaim } from './terminals/session-memory';
 import { RolesView } from './ui/roles-view';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
 import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, type Workspace } from './terminals/workspace-store';
+import { pickCloseRecords, summarizeClose, riskProbeTargets, buildCloseConfirm } from './terminals/close-summary';
+import { probeWorktreeRisks } from './terminals/close-risk';
+import {
+	normalizeClosedWorkspaces, archiveWorkspace, archiveSessionsKey, takeClosedWorkspace, insertAt,
+	type ClosedWorkspace,
+} from './terminals/closed-workspaces';
+import { uniqueId } from './terminals/workspace-store';
+import { relAge } from './terminals/worktree-registry';
 import { THEMES, normalizeTheme, setActiveTheme, activeTerminalPalette } from './terminals/theme-store';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -47,6 +60,10 @@ declare global {
 }
 
 let repos: RepoConfig[] = [];
+
+/** How long the close toast keeps its Undo on screen. Longer than an info toast: the offer has
+ *  to survive noticing it and reaching for the mouse. Hovering holds it open indefinitely. */
+const UNDO_TOAST_MS = 9000;
 
 async function main(): Promise<void> {
 	try {
@@ -118,6 +135,9 @@ async function main(): Promise<void> {
 		// Per-tab spawn-toolbar selection (toolbar-state.ts). Pruned to live workspaces on load so
 		// a config that accumulated entries for deleted tabs cleans itself up.
 		let workspaceToolbars: WorkspaceToolbars = pruneToolbars(normalizeToolbars(cfg.workspaceToolbars), workspaces.map((w) => w.id));
+		// Tombstones for closed tabs (closed-workspaces.ts). Capped, most recent first; each one
+		// points at the tiles it left behind in .terminal-sessions.json under a `closed:` key.
+		let closedWorkspaces: ClosedWorkspace[] = normalizeClosedWorkspaces(cfg.closedWorkspaces);
 		let activeId = workspaces.some((w) => w.id === cfg.activeWorkspace) ? (cfg.activeWorkspace as string) : workspaces[0]!.id;
 		const grids = new Map<string, TerminalsGrid>();
 
@@ -128,6 +148,11 @@ async function main(): Promise<void> {
 
 		// Usage battery (follows the ACTIVE workspace's session env; restartable by the overlay).
 		const usageHost = topBar.createDiv({ cls: 'wcc-usage-host' });
+		// The memory gauge goes immediately after the battery, and is filled in further down —
+		// once the grids whose claims it reads exist. The host div is created HERE rather than
+		// there so it takes its place in the top bar's flex order next to the battery, instead
+		// of after the Phone/Settings/Changelog buttons that follow.
+		const memHost = topBar.createDiv({ cls: 'wcc-mem-host' });
 		let usageProbe: UsageProbe | null = null;
 		let usageWidget: UsageWidget | null = null;
 		const startUsageProbe = (): void => {
@@ -148,6 +173,18 @@ async function main(): Promise<void> {
 		startUsageProbe();
 		window.addEventListener('beforeunload', () => { usageWidget?.dispose(); usageProbe?.dispose(); });
 
+		// Reap probe sidecars left behind by an earlier run. Each one pins a live `claude`
+		// (~250 MB) that nothing else can reach any more — its owner's pid died with the old
+		// renderer — so they accumulate until the machine reboots. Deferred past first paint:
+		// it costs one process snapshot and must not sit in front of the UI.
+		window.setTimeout(() => {
+			void reapUsageProbeStrays(path.join(userData, 'usage-probe'), usageProbe?.ownedPids() ?? [])
+				.then((r) => {
+					if (r.reaped.length) console.info(`[wcc] reaped ${r.reaped.length} stray usage-probe session(s):`, r.reaped);
+					for (const f of r.failed) console.error(`[wcc] could NOT kill stray pid ${f.pid}: ${f.detail}`);
+				});
+		}, 3000);
+
 		// Kane self-improvement (see docs/superpowers/specs/2026-07-15-kane-self-improvement-design.md):
 		// config names the app's own source repo; toolsDir defaults beside the user's home.
 		const siCfg = parseGodSelfImprove(cfg.god);
@@ -162,6 +199,7 @@ async function main(): Promise<void> {
 		// compiled-in builder. Absent key = built-ins, which is every existing config.
 		const roleLibrary = parseRoleLibrary(cfg.roleLibrary);
 
+		const sessionsFile = path.join(userData, '.terminal-sessions.json');
 		const depsFor = (id: string): GridDeps => ({
 			// Scoped, not the whole list: a repo tagged with a `group` belongs to that workspace
 			// alone. Untagged repos (every existing config) still appear everywhere.
@@ -173,7 +211,7 @@ async function main(): Promise<void> {
 			sidecarPath: path.join(sidecarDir, 'sidecar.cjs'),
 			notifyScriptPath: path.join(sidecarDir, 'notify-ready.cjs'),
 			coordHookPath: path.join(sidecarDir, 'coord-hook.cjs'),
-			sessionsFile: path.join(userData, '.terminal-sessions.json'),
+			sessionsFile,
 			bypassPermissions: true,
 			godSelfImprove,
 			roleLibrary,
@@ -208,7 +246,7 @@ async function main(): Promise<void> {
 		const configWriter = new SerialWriter();
 		const persist = (): void => void configWriter.push(async () => {
 			const fresh = await window.wcc.getConfig();
-			await window.wcc.setConfig({ ...fresh, repos, workspaces, activeWorkspace: activeId, theme: themeId, workspaceToolbars });
+			await window.wcc.setConfig({ ...fresh, repos, workspaces, activeWorkspace: activeId, theme: themeId, workspaceToolbars, closedWorkspaces });
 		});
 
 		// Attention queue reads whichever grid is ACTIVE (closures over the mutable activeGrid).
@@ -235,6 +273,52 @@ async function main(): Promise<void> {
 		const changelogPanel = new ChangelogPanel({ appRoot, version });
 		changelogBtn.addEventListener('click', () => changelogPanel.toggle(appEl));
 
+		// 🧠 Session memory → what every live session costs in RAM, ACROSS EVERY WORKSPACE, and
+		// what is running under this app that no session claims. It reads the process tree, not
+		// the tile list, so it can contradict the floor — which is the only way it could ever
+		// have caught the usage-probe leak.
+		//
+		// ONE poller, shared by the top-bar gauge and the panel. The gauge asks for 60s, the
+		// panel for 20s while it is open, and the monitor runs a single timer at the faster of
+		// the two — a tracker that spawned two `Win32_Process` queries would be the bug it
+		// reports.
+		const memoryMonitor = new MemoryMonitor({
+			claims: () => {
+				const out: SessionClaim[] = [];
+				// Every grid, not just the active one. Grids are created lazily per workspace, so
+				// this covers exactly the tabs that have ever had sessions — which is exactly the
+				// set that can be holding memory.
+				for (const [id, g] of grids) {
+					out.push(...g.memoryClaims(workspaces.find((w) => w.id === id)?.name ?? id));
+				}
+				// The usage battery's own probe, named rather than left anonymous. Without this it
+				// would land in "unattributed" every five minutes and train you to ignore the one
+				// row that matters. A LEAKED probe still shows there, which is the point.
+				for (const pid of usageProbe?.ownedPids() ?? []) {
+					out.push({
+						key: `app:usage-probe:${pid}`, name: 'usage battery', workspaceId: '', workspaceName: 'app',
+						repo: 'usage probe', branch: '', pid, busy: true, idleSince: null, hidden: true, system: true,
+					});
+				}
+				return out;
+			},
+		});
+		const memoryPanel = new MemoryPanel({
+			monitor: memoryMonitor,
+			endSession: async (workspaceId, key) => {
+				const tileId = Number(key.slice(key.lastIndexOf(':') + 1));
+				if (!Number.isFinite(tileId)) return false;
+				return (await grids.get(workspaceId)?.endSessionKeepingWork(tileId)) ?? false;
+			},
+			toast,
+		});
+		// The gauge is the ONLY way into the panel now. The old `🧠 Memory` button is gone: a
+		// number you have to ask for cannot warn you, and two entry points to one panel is
+		// clutter.
+		const memoryWidget = new MemoryWidget(memoryMonitor, { onOpen: () => memoryPanel.toggle(appEl) });
+		memoryWidget.render(memHost);
+		window.addEventListener('beforeunload', () => { memoryPanel.close(); memoryWidget.dispose(); memoryMonitor.dispose(); });
+
 
 		// --- workspace tab bar ---
 		const bar = new WorkspaceBar({
@@ -242,7 +326,9 @@ async function main(): Promise<void> {
 			activeId: () => activeId,
 			onSwitch: (id) => void switchTo(id),
 			onAdd: () => void onAdd(),
-			onClose: (id) => onClose(id),
+			onClose: (id) => void onClose(id),
+			closedCount: () => closedWorkspaces.length,
+			onRecentlyClosed: () => void onRecentlyClosed(),
 		});
 		bar.render(terminalRoot);
 
@@ -330,22 +416,104 @@ async function main(): Promise<void> {
 			await switchTo(r.id);
 		}
 
-		function onClose(id: string): void {
+		/** ALWAYS confirms — an empty tab gets one line, a tab with dirty worktrees gets a warning.
+		 *  The count comes from the PERSISTED sessions file unless the grid has actually restored
+		 *  its sessions: the old guard asked the live grid, which reports zero tiles for any tab
+		 *  not visited this launch, so the confirm never fired for exactly the tabs most at risk
+		 *  (that is how the QMK-Flasher tab was lost). */
+		async function onClose(id: string): Promise<void> {
 			if (workspaces.length <= 1) return;
 			const ws = workspaces.find((w) => w.id === id);
 			const g = grids.get(id);
-			const count = g ? g.terminalCount() : 0;
-			if (count > 0 && !window.confirm(`Close workspace "${ws?.name ?? id}"? Its ${count} terminal(s) will be stopped.`)) return;
+			const live = g && g.sessionsAreLive() ? g.closeRecords() : null;
+			const persisted = await TerminalsGrid.readGroupRecords(sessionsFile, id);
+			const picked = pickCloseRecords(live, persisted);
+			const summary = summarizeClose(picked.records, picked.source);
+			// Two git commands per worktree, and a busy tab has eighteen of them — enough of a pause
+			// before the dialog opens that a silent one reads as a dead button. Say what it is doing.
+			const targets = riskProbeTargets(summary);
+			if (targets.length > 4) toast(`Checking ${targets.length} worktrees for unsaved work…`, 'info');
+			const risks = await probeWorktreeRisks(targets);
+			const dlg = buildCloseConfirm(ws?.name ?? id, summary, risks);
+			if (!await promptForConfirm(dlg.title, dlg.message, dlg.okLabel)) return;
+			// State can have moved while the dialog was open (a spawn, another close).
+			if (!workspaces.some((w) => w.id === id) || workspaces.length <= 1) return;
 			const target = nextActiveAfter(workspaces, id, activeId);
+			const closedAt = Date.now();
+			const entry: ClosedWorkspace = {
+				id, name: ws?.name ?? id, closedAt,
+				sessionsKey: archiveSessionsKey(id, closedAt),
+				index: Math.max(0, workspaces.findIndex((w) => w.id === id)),
+				tileCount: summary.total,
+				...(workspaceToolbars[id] ? { toolbar: workspaceToolbars[id] } : {}),
+			};
+			// Queue the rename BEFORE tearing the grid down: everything here shares one persist
+			// chain, so archiving first guarantees the tombstone captures the real records rather
+			// than whatever an emptied grid might write afterwards.
+			void TerminalsGrid.renameGroup(sessionsFile, id, entry.sessionsKey);
+			const archived = archiveWorkspace(closedWorkspaces, entry);
+			closedWorkspaces = archived.list;
+			// The archive is capped, so something eventually falls off the end — and an evicted
+			// tombstone MUST take its sessions key with it. Closing a tab used to leak its bucket
+			// forever (the live file still carries a `test-2` bucket for a tab deleted weeks ago);
+			// that cleanup was right, and keeping records nothing can reach would restore the leak.
+			for (const e of archived.evicted) void TerminalsGrid.forgetGroup(sessionsFile, e.sessionsKey);
 			g?.dispose();
 			grids.delete(id);
 			workspaces = closeWorkspace(workspaces, id);
-			// Closing a tab used to leave its sessions bucket and its toolbar state behind for
-			// good — the live sessions file still carries a `test-2` bucket for a tab deleted
-			// weeks ago. Clean up both now that the workspace is really gone.
-			void TerminalsGrid.forgetGroup(path.join(userData, '.terminal-sessions.json'), id);
+			// The toolbar state rides on the tombstone, so pruning the live map still just drops a
+			// dead id rather than throwing the selection away.
 			workspaceToolbars = pruneToolbars(workspaceToolbars, workspaces.map((w) => w.id));
 			if (id === activeId) { void switchTo(target); } else { persist(); bar.refresh(); }
+			// The near-range half of restore: an Undo right where the misclick happened. Hovering
+			// holds the toast open, and clicking Undo twice is a no-op (takeClosedWorkspace).
+			toast(`Closed "${entry.name}"`, 'info', {
+				durationMs: UNDO_TOAST_MS,
+				action: { label: 'Undo', run: () => void restoreWorkspace(entry.sessionsKey) },
+			});
+		}
+
+		/** Bring a closed tab back: its entry (at the index it sat at), its toolbar state and its
+		 *  tiles, which move back out of the `closed:` bucket under the tab's id.
+		 *
+		 *  It does NOT start its sessions. The grid is CONSTRUCTED and not mounted, which is
+		 *  exactly how every workspace comes back after an app restart — tiles present, sessions
+		 *  unrestored until you switch to the tab. Eighteen claude processes launching because
+		 *  someone clicked Restore would be a worse surprise than the bug this fixes. */
+		async function restoreWorkspace(sessionsKey: string): Promise<void> {
+			const taken = takeClosedWorkspace(closedWorkspaces, sessionsKey);
+			if (!taken) { toast('That workspace has already been restored', 'warn'); return; }
+			closedWorkspaces = taken.list;
+			const entry = taken.entry;
+			// A new tab may have claimed the old id in the meantime; the tiles follow the new one.
+			const id = uniqueId(entry.id, workspaces.map((w) => w.id));
+			const movedTiles = await TerminalsGrid.renameGroup(sessionsFile, entry.sessionsKey, id);
+			workspaces = insertAt(workspaces, { id, name: entry.name }, entry.index);
+			// Before gridFor: depsFor reads initialToolbar when it constructs the grid.
+			if (entry.toolbar) workspaceToolbars = setToolbarState(workspaceToolbars, id, entry.toolbar);
+			gridFor(id);
+			persist();
+			bar.refresh();
+			toast(movedTiles
+				? `Restored "${entry.name}" — its terminals are saved, not started. Open the tab to resume them.`
+				: `Restored "${entry.name}" — it had no saved terminals.`, 'success');
+		}
+
+		/** The far-range half: pick any tab still in the archive. promptForChoice is the app's own
+		 *  list dialog, so this needs no popup of its own. */
+		async function onRecentlyClosed(): Promise<void> {
+			if (!closedWorkspaces.length) { toast('Nothing has been closed yet', 'info'); return; }
+			const now = Date.now();
+			const chosen = await promptForChoice(
+				'Recently closed',
+				'Reopen a closed workspace. Its terminals come back saved but not started — switch to the tab to resume them.',
+				closedWorkspaces.map((e) => ({
+					id: e.sessionsKey,
+					label: e.name,
+					sublabel: `${e.tileCount} session${e.tileCount === 1 ? '' : 's'} · closed ${relAge(Math.max(0, now - e.closedAt))} ago`,
+				})),
+			);
+			if (chosen) await restoreWorkspace(chosen);
 		}
 
 		// Private overlay (see README "Private extensions"): must never take down the app.

@@ -14,7 +14,7 @@ import { openExternalUrl, revealInFileManager } from './links';
 import { EDITORS, FILE_BROWSER, CUSTOM_EDITOR, resolveEditorCommand, type EditorDef } from './editor-launch';
 import { ChatRoom } from './chat-room';
 import { ChatTile } from './chat-tile';
-import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight } from './bubble-layout';
+import { settledLayout, centeredLayout, keyForIndex, keyToIndex, physicalKeyLabel, nextSpotlight, autoBand, autoShape, shapeForBand, LAYOUT_OPTIONS, DEFAULT_CELL_METRICS, MIN_TERM_COLS, MIN_TERM_ROWS, type CellMetrics, type LayoutBand, type LayoutMode } from './bubble-layout';
 import { emptyState, applyKeystroke, onReady as rqReady, onSubmit as rqSubmit, onClose as rqClose, onClick as rqClick, onOverview as rqOverview } from './ready-queue';
 import { decideCenter, type SpotlightState } from './focus-decider';
 import { partitionByHidden } from './session-partition';
@@ -28,6 +28,7 @@ import type { RoleLibraryConfig } from './role-library';
 import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
 import { looksLikePrompt } from './chat-room';
 import { classifyAttention, classifyOne, attentionKind, type AttentionItem, type AttentionKind } from './attention';
+import type { CloseRecord } from './close-summary';
 import type { ToastVariant } from '../ui/toast';
 import { JournalTile } from './journal-tile';
 import { JournalStore } from './journal-store';
@@ -35,6 +36,7 @@ import { FormatProbe } from './format-probe';
 import { ConvertProbe } from './convert-probe';
 import { vaultNoteFilename, vaultNoteContent, type ConvertDestination, type VaultDestination } from './convert-destinations';
 import type { StageTile } from './stage-tile';
+import type { SessionClaim } from './session-memory';
 
 /** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
  *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
@@ -84,7 +86,7 @@ export interface GridDeps {
 	/** Called when the user changes a toolbar dropdown, so the app can persist it per workspace. */
 	onToolbarChange?: (state: ToolbarState) => void;
 }
-interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string; }
+export interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string; }
 
 // Effort options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
 const SPAWN_EFFORTS: { label: string; value: string }[] = [
@@ -118,6 +120,11 @@ export class TerminalsGrid {
 	private branchSel: HTMLSelectElement | null = null;
 	private modelSel: HTMLSelectElement | null = null;
 	private effortSel: HTMLSelectElement | null = null;
+	private layoutSel: HTMLSelectElement | null = null;
+	/** The Auto band currently on screen. Remembered between frames so autoBand() has something
+	 *  to be hysteretic ABOUT — without it, dragging a window edge across a boundary flips the
+	 *  layout back and forth for the whole drag. Cleared when the preference changes. */
+	private layoutBand: LayoutBand | null = null;
 	private stageEl: HTMLElement | null = null;
 	private maxBtn: HTMLElement | null = null;
 	private controlsEl: HTMLElement | null = null;
@@ -276,6 +283,18 @@ export class TerminalsGrid {
 		if (saved.effort && SPAWN_EFFORTS.some((m) => m.value === saved.effort)) this.effortSel.value = saved.effort;
 		this.effortSel.addEventListener('change', () => this.rememberToolbar());
 
+		// Tile layout for THIS tab. Auto follows the window as it resizes; the rest pin a shape.
+		this.layoutSel = controls.createEl('select');
+		for (const o of LAYOUT_OPTIONS) this.layoutSel.createEl('option', { text: o.label, value: o.value, attr: { title: o.title } });
+		this.layoutSel.value = saved.layout ?? 'auto';
+		this.layoutSel.title = LAYOUT_OPTIONS.find((o) => o.value === this.layoutSel!.value)?.title ?? '';
+		this.layoutSel.addEventListener('change', () => {
+			this.layoutSel!.title = LAYOUT_OPTIONS.find((o) => o.value === this.layoutSel!.value)?.title ?? '';
+			this.layoutBand = null;   // a deliberate change re-reads the window instead of inheriting the old band
+			this.rememberToolbar();
+			this.applyLayout();
+		});
+
 		const newBranchBtn = controls.createEl('button', { text: '+ New branch' });
 		newBranchBtn.addEventListener('click', () => {
 			void this.deps.promptForTopic('New branch', 'branch name (based on the selected branch)', '', 'Create').then((name) => {
@@ -361,6 +380,7 @@ export class TerminalsGrid {
 			this.stageResizeObs.observe(this.stageEl);
 			await this.refreshBranches();
 			await this.restoreSessions();
+			this.sessionsRestored = true;
 		} else {
 			// Re-mount (tab switch back): re-attach the live dock row — sessions kept running.
 			this.stageEl.toggleClass('cos-terminals-max', this.maximized);
@@ -545,6 +565,7 @@ export class TerminalsGrid {
 			branch: this.branchSel?.value,
 			model: this.modelSel?.value,
 			effort: this.effortSel?.value,
+			layout: this.layoutSel?.value,
 		});
 		this.toolbar = next;
 		this.deps.onToolbarChange?.(next);
@@ -835,8 +856,108 @@ export class TerminalsGrid {
 	/** Every live session GOD should see / be able to message (foreground + hidden background). */
 	private allSessions(): StageTile[] { return [...this.tiles, ...this.hidden]; }
 
-	/** Number of live terminals (foreground + hidden) — for the close-workspace confirm. */
+	/** What this workspace's sessions are, for the memory panel to roll process memory onto.
+	 *
+	 *  Includes hidden tiles: a hidden session is still a live `claude` holding its RAM, and the
+	 *  sessions you forget are exactly the ones you are not looking at. Journals are skipped —
+	 *  they have no process. */
+	memoryClaims(workspaceName: string): SessionClaim[] {
+		const out: SessionClaim[] = [];
+		for (const t of [...this.tiles, ...this.hidden]) {
+			if (t.isJournal) continue;
+			const tt = t as TerminalTile;
+			out.push({
+				key: `${this.deps.group}:${tt.tileId}`,
+				name: tt.name,
+				workspaceId: this.deps.group,
+				workspaceName,
+				repo: tt.repoName,
+				branch: tt.isFolder ? '(folder)' : tt.branch,
+				pid: tt.sidecarPid,
+				busy: tt.isBusy,
+				idleSince: tt.idleSince,
+				hidden: this.hidden.includes(t),
+			});
+		}
+		return out;
+	}
+
+	/** End a session from the memory panel WITHOUT destroying its work.
+	 *
+	 *  Deliberately not the tile's × , which deletes the worktree and branch. The panel's whole
+	 *  premise is that closing is cheap and reversible: the transcript in ~/.claude/projects is
+	 *  keyed by worktree PATH, so deleting the worktree is exactly what would make it
+	 *  unresumable. Uncommitted work is parked first (the same `wip:` commit used on teardown,
+	 *  undone by Reopen), then the process is killed and the tile leaves the floor. The branch
+	 *  and worktree stay, so Reopen in the Coordination panel brings the whole thing back.
+	 *
+	 *  Returns false if there was no such tile. Callers do the confirming — this does not ask. */
+	async endSessionKeepingWork(tileId: number): Promise<boolean> {
+		const tile = [...this.tiles, ...this.hidden].find((t) => t.tileId === tileId);
+		if (!tile || tile.isJournal) return false;
+		const tt = tile as TerminalTile;
+		// A folder target's directory is the user's own; `git add -A` there would commit THEIR
+		// working tree into whatever repo happens to contain it. Never park one — same reason
+		// parkAll() skips them.
+		if (!tt.isFolder) {
+			try { await parkWorktree(tt.worktreePath, new Date().toISOString()); }
+			catch { /* parking is a safety net, not a precondition for ending the session */ }
+		}
+		this.tiles = this.tiles.filter((t) => t !== tile);
+		this.hidden = this.hidden.filter((t) => t !== tile);
+		this.idleTiles.delete(tileId);
+		if (this.lockedTileId === tileId) this.lockedTileId = null;
+		if (this.centeredId === tileId) this.centeredId = null;
+		this.q = rqClose(this.q, tileId).state;
+		tile.kill();
+		await this.persist();
+		this.applyLayout();
+		this.autoCenter();
+		this.board?.refresh();
+		return true;
+	}
+
+	/** Number of live terminals (foreground + hidden). NOT a safe basis for "does this workspace
+	 *  hold anything" — see sessionsAreLive(). */
 	terminalCount(): number { return this.tiles.length + this.hidden.length; }
+
+	private sessionsRestored = false;
+
+	/** True once this grid has mounted and restored its persisted sessions, i.e. once the live
+	 *  tile list actually reflects what is on disk. A grid that has only been CONSTRUCTED (app.ts
+	 *  does that for every workspace at startup) reports zero tiles for a tab holding eighteen
+	 *  saved terminals, which is how the close confirm went blind. */
+	sessionsAreLive(): boolean { return this.sessionsRestored; }
+
+	/** What closing this workspace would destroy, from LIVE state. Only meaningful when
+	 *  sessionsAreLive(); callers read the persisted records otherwise. */
+	closeRecords(): CloseRecord[] {
+		const out: CloseRecord[] = [...this.tiles, ...this.hidden].map((t) => t.isJournal
+			? { kind: 'journal' as const, name: t.name }
+			: {
+				kind: 'terminal' as const, name: t.name,
+				repoName: this.repoNameFor(t), branch: (t as TerminalTile).branch,
+				worktreePath: (t as TerminalTile).worktreePath,
+				baseBranch: (t as TerminalTile).baseBranch, folder: (t as TerminalTile).isFolder,
+			});
+		for (let i = 0; i < (this.godConsole ? 1 : 0) + this.extraKanes.length; i++) out.push({ kind: 'god' });
+		return out;
+	}
+
+	/** A group's persisted records, straight off disk — the honest answer for a workspace whose
+	 *  grid has never been mounted. Queued on the same chain as every other sessions-file access
+	 *  so it can never read the file mid-persist. */
+	static readGroupRecords(sessionsFile: string, group: string): Promise<SessionRecord[]> {
+		const run = TerminalsGrid.persistChain.then(async () => {
+			try {
+				const all = JSON.parse(await fs.readFile(sessionsFile, 'utf8')) as Record<string, SessionRecord[]>;
+				const recs = all[group];
+				return Array.isArray(recs) ? recs : [];
+			} catch { return []; }
+		});
+		TerminalsGrid.persistChain = run.then(() => undefined, () => undefined);
+		return run;
+	}
 
 	/** Snapshot of which terminals need attention, for the topbar queue. */
 	attentionItems(): AttentionItem[] {
@@ -1380,7 +1501,13 @@ export class TerminalsGrid {
 			}
 			if (await tile.deliverLine(message, attempt > 1)) return { ok: true };
 			if (Date.now() >= deadline) {
-				return { ok: false, reason: `not accepted within ${Math.round(TELL_MAX_WAIT_MS / 1000)}s — the session may be unable to take input right now (e.g. mid-/compact)` };
+				// Name the draft case specifically: "held back because someone is typing in that
+				// terminal" is a different thing to act on than a compacting TUI, and the sender
+				// can see the "N waiting" badge on the tile for the rest.
+				const why = tile.isDrafting
+					? 'someone has unsubmitted typing in its input box — it was NOT typed over'
+					: 'the session may be unable to take input right now (e.g. mid-/compact)';
+				return { ok: false, reason: `not accepted within ${Math.round(TELL_MAX_WAIT_MS / 1000)}s — ${why}` };
 			}
 			await delay(TELL_RETRY_INTERVAL_MS);
 		}
@@ -1443,6 +1570,19 @@ export class TerminalsGrid {
 		tile.focus();
 	}
 
+	/** px per character cell + tile chrome, measured from whichever tile has a live terminal. The
+	 *  layout is decided in columns and rows, so it has to be told what a column costs HERE — font
+	 *  size and DPI both move that, and the same pixel box is a comfortable terminal on one screen
+	 *  and an unusable one on another. Falls back to the 12px defaults when nothing is measurable
+	 *  yet (first layout, or a tab holding only a journal tile). */
+	private cellMetrics(): CellMetrics {
+		for (const t of this.tiles) {
+			const m = t.cellMetrics?.();
+			if (m) return { ...m, minCols: MIN_TERM_COLS, minRows: MIN_TERM_ROWS };
+		}
+		return DEFAULT_CELL_METRICS;
+	}
+
 	private applyLayout(): void {
 		if (!this.stageEl || (this.tiles.length === 0 && !this.chatTile)) return;
 		const W = this.stageEl.clientWidth || 800;
@@ -1451,7 +1591,20 @@ export class TerminalsGrid {
 		const ids = [...this.tiles.map((t) => t.tileId), ...(chatId !== undefined ? [chatId] : [])];
 		// The chat tile is a normal movable participant — centered only when it IS centeredId.
 		const centerId = this.centeredId !== null && ids.includes(this.centeredId) ? this.centeredId : null;
-		const rects = centerId !== null ? centeredLayout(ids, W, H, 8, centerId) : settledLayout(ids, W, H, 8);
+		const metrics = this.cellMetrics();
+		const mode: LayoutMode = this.toolbar.layout ?? 'auto';
+		// Track the Auto band on every layout, whatever the mode: it is what the centred layout uses
+		// to pick its satellite edges, and keeping it live means switching back to Auto does not
+		// inherit a stale band.
+		const band = autoBand(W / Math.max(1, H), this.layoutBand);
+		this.layoutBand = band;
+		// Auto and Focus honour the spotlight (Focus just gives it more room); Grid/Columns/Rows are
+		// the explicit "lay everything out equally, whatever is centred" modes. Nothing here changes
+		// WHICH tile is centred — that stays with the ready queue and focus-decider.
+		const spotlight = centerId !== null && (mode === 'auto' || mode === 'focus');
+		const rects = spotlight
+			? centeredLayout(ids, W, H, 8, centerId!, { metrics, band, focus: mode === 'focus' })
+			: settledLayout(ids, W, H, 8, { metrics, shape: mode === 'auto' || mode === 'focus' ? autoShape(band, ids.length, W, H, 8, metrics) : shapeForBand(mode, ids.length, W, H, 8, metrics) });
 		for (const t of this.tiles) {
 			const r = rects.find((x) => x.id === t.tileId);
 			if (r) t.setRect(r);
@@ -1756,10 +1909,34 @@ export class TerminalsGrid {
 		return run;
 	}
 
-	/** Drop a workspace's session bucket when its tab is closed. Closing a workspace removed the
-	 *  tab but left its records in the sessions file forever — the live file still carries a
-	 *  `test-2` bucket for a tab deleted weeks ago. Goes through the same chain as every other
-	 *  write so it can never race a grid's persist. */
+	/** Rename a group's session bucket in place — how a closed tab's tiles are TOMBSTONED rather
+	 *  than deleted (`closed:<id>:<ts>`), and how a restore moves them back. The records never
+	 *  leave the file the serializer already writes, so config.json stays a pointer and the same
+	 *  persist chain keeps protecting them. Returns whether the source key existed.
+	 *
+	 *  An empty bucket is still moved: "this tab held nothing" is a fact worth keeping, and the
+	 *  caller's archive entry would otherwise point at nothing. */
+	static renameGroup(sessionsFile: string, from: string, to: string): Promise<boolean> {
+		const run = TerminalsGrid.persistChain.then(async () => {
+			if (from === to) return false;
+			let all: Record<string, unknown>;
+			try { all = JSON.parse(await fs.readFile(sessionsFile, 'utf8')) as Record<string, unknown>; } catch { return false; }
+			if (!(from in all)) return false;
+			all[to] = all[from];
+			delete all[from];
+			try { await fs.writeFile(sessionsFile, JSON.stringify(all, null, 2), 'utf8'); } catch { return false; }
+			return true;
+		}).catch(() => false);
+		TerminalsGrid.persistChain = run.then(() => undefined, () => undefined);
+		return run;
+	}
+
+	/** Drop a workspace's session bucket outright. Still the right thing for an EVICTED tombstone
+	 *  (the archive is capped, and an evicted entry that kept its records would be the old leak
+	 *  under a new name) and for a bucket no archive entry points at. Closing a workspace used to
+	 *  leave its records in the file forever — the live file still carries a `test-2` bucket for a
+	 *  tab deleted weeks ago. Goes through the same chain as every other write so it can never
+	 *  race a grid's persist. */
 	static forgetGroup(sessionsFile: string, group: string): Promise<void> {
 		const run = TerminalsGrid.persistChain.then(async () => {
 			let all: Record<string, unknown>;
