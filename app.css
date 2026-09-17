@@ -206,9 +206,21 @@ html, body {
 /* The unit, not a control: small, faint and spaced so it reads as an axis label on the bar
    rather than as something to click. It stays put on hover for the same reason. */
 .wcc-mem-widget-tag { font-size: 10px; line-height: 1; letter-spacing: .07em; color: var(--text-faint); }
-.wcc-membar { position: relative; width: 38px; height: 16px; border: 1px solid var(--text-muted); border-radius: 3px; padding: 1px; box-sizing: border-box; }
+/* Three segments in one track, left to right: this app, other processes, free. Flex, so the
+   third one needs no width of its own — free is simply what the first two did not take. */
+.wcc-membar { position: relative; width: 38px; height: 16px; border: 1px solid var(--text-muted); border-radius: 3px; padding: 1px; box-sizing: border-box; display: flex; overflow: hidden; transition: background .3s ease; }
 /* Filling, not draining: unlike the battery this is CONSUMPTION — more bar is worse. */
-.wcc-membar-fill { height: 100%; width: 0%; border-radius: 2px; background: #2fae6e; transition: width .3s ease, background .3s ease; }
+.wcc-membar-fill { height: 100%; width: 0%; flex: 0 0 auto; border-radius: 2px 0 0 2px; background: #2fae6e; transition: width .3s ease, background .3s ease; }
+/* Everything else on the machine. Present and legible, clearly not ours — and it never takes
+   a warning colour, because it is not something anyone can act on from in here. Solid rather
+   than translucent, so the free segment's pressure tint cannot bleed through it. */
+.wcc-membar-other { height: 100%; width: 0%; flex: 0 0 auto; background: var(--text-faint, #6b6f80); transition: width .3s ease; }
+/* Machine pressure rides on the FREE segment — the empty track — and nowhere else. It is a
+   separate attribute from data-level for the reason spelled out in memory-widget.ts: the
+   gauge's warning colour must keep meaning "this app", not "Chrome is open". The border and
+   the label are deliberately untouched here. */
+.wcc-mem-widget[data-pressure='warn'] .wcc-membar { background: color-mix(in srgb, #e0a92e 26%, transparent); }
+.wcc-mem-widget[data-pressure='crit'] .wcc-membar { background: color-mix(in srgb, #d2453e 32%, transparent); }
 .wcc-mem-widget-label { color: var(--text-normal); white-space: nowrap; }
 .wcc-mem-widget[data-level='warn'] .wcc-membar-fill { background: #e0a92e; }
 .wcc-mem-widget[data-level='crit'] .wcc-membar-fill { background: #d2453e; }

@@ -19,7 +19,12 @@ export const WIDGET_POLL_MS = 60_000;
 const PRIME_DELAY_MS = 4_000;
 
 /** The machine, read ONCE. It does not change, and re-reading it per paint would be the kind
- *  of small pointless cost this whole feature is about. */
+ *  of small pointless cost this whole feature is about.
+ *
+ *  Free memory is the opposite: it is the fastest-moving of the three numbers on the bar, so
+ *  `os.freemem()` is re-read on every paint. It reads a counter the kernel already keeps and
+ *  spawns nothing, so it costs nothing against the budget this tracker is careful about — the
+ *  ~300 ms `Win32_Process` query is the price of a poll, and this is not part of it. */
 const TOTAL_RAM_BYTES = os.totalmem();
 
 export interface MemoryWidgetDeps {
@@ -28,17 +33,28 @@ export interface MemoryWidgetDeps {
 	onOpen: () => void;
 	/** Override the denominator in tests. Defaults to this machine's physical RAM. */
 	totalRamBytes?: number;
+	/** Override free memory in tests. A FUNCTION, not a number, because unlike the total it is
+	 *  re-read on every paint. Defaults to `os.freemem()`. */
+	freeRamBytes?: () => number;
 }
 
-/** Top-bar memory gauge: `RAM ▓▓▓▓░░░░ 2.3/32 GB`, beside the usage battery and mirroring its
- *  idiom — a small bar, a number, click for detail.
+/** Top-bar memory gauge: `RAM ██▓▓▓▓▓▓░░░ 1.1 GB · 18.2/31 used`, beside the usage battery and
+ *  mirroring its idiom — a small bar, a number, click for detail.
  *
  *  It exists because the tracker shipped as a panel behind a button, and a number you have to
  *  ask for cannot warn you. The usage-probe leak ran for hours at 3 GB/hour while the floor
- *  looked healthy, and nobody opens a memory panel on a machine that seems fine. */
+ *  looked healthy, and nobody opens a memory panel on a machine that seems fine.
+ *
+ *  THREE SEGMENTS, because one fill answered the gauge's own question wrong. It drew the app's
+ *  share and left the rest as empty track, which reads as headroom: on 2026-09-17 that was
+ *  `1.1/31 GB` — a 3% bar — on a machine with 12.9 GB actually free and 17.1 GB held by other
+ *  processes. The empty 97% was conflating "free" with "someone else's", and it erred in the
+ *  dangerous direction, since the one question a pressure gauge exists to answer is whether
+ *  there is room for another terminal. */
 export class MemoryWidget {
 	private el: HTMLElement | null = null;
 	private fillEl: HTMLElement | null = null;
+	private otherEl: HTMLElement | null = null;
 	private labelEl: HTMLElement | null = null;
 	private unsubscribe: (() => void) | null = null;
 	private primeTimer: number | null = null;
@@ -52,7 +68,12 @@ export class MemoryWidget {
 		// instrument readings, and "RAM" says what the bar beside it is measuring.
 		el.createSpan({ cls: 'wcc-mem-widget-tag', text: 'RAM' });
 		const bar = el.createDiv({ cls: 'wcc-membar' });
+		// This app FIRST, against the bar's fixed left edge: its size is the quantity being
+		// compared over time, and at 38px wide a segment that floats is unreadable. Other
+		// processes follow, muted. Free is whatever is left — the unfilled track, which already
+		// reads as empty without a third colour or a legend to explain it.
 		this.fillEl = bar.createDiv({ cls: 'wcc-membar-fill' });
+		this.otherEl = bar.createDiv({ cls: 'wcc-membar-other' });
 		this.labelEl = el.createSpan({ cls: 'wcc-mem-widget-label' });
 		el.addEventListener('click', (e) => { e.stopPropagation(); this.deps.onOpen(); });
 
@@ -68,15 +89,22 @@ export class MemoryWidget {
 		// Nothing measured at all — a platform with no process snapshot. Show a dash, not "0 MB",
 		// which would read as a healthy floor.
 		if (!r.sessions.length && !r.unattributed.procCount && !r.appSelfBytes) return gaugePending();
-		return gaugeFrom(r, this.deps.totalRamBytes ?? TOTAL_RAM_BYTES);
+		const free = this.deps.freeRamBytes ? this.deps.freeRamBytes() : os.freemem();
+		return gaugeFrom(r, this.deps.totalRamBytes ?? TOTAL_RAM_BYTES, free);
 	}
 
 	private apply(g: GaugeState): void {
-		if (this.fillEl) this.fillEl.style.width = `${(g.fill * 100).toFixed(1)}%`;
+		if (this.fillEl) this.fillEl.style.width = `${(g.split.appFrac * 100).toFixed(1)}%`;
+		if (this.otherEl) this.otherEl.style.width = `${(g.split.otherFrac * 100).toFixed(1)}%`;
 		if (this.labelEl) this.labelEl.textContent = g.label;
 		// One attribute on the root drives the colour of both bar and label, the way the
 		// battery's data-level does.
 		this.el?.setAttribute('data-level', g.level);
+		// A SECOND, INDEPENDENT attribute, and it tints the free segment only. data-level means
+		// "this app needs attention"; if a machine full of someone else's memory could turn it
+		// red, the one reading that has to be trusted would start crying wolf about things
+		// nobody can fix from here.
+		this.el?.setAttribute('data-pressure', g.pressure);
 		this.el?.setAttribute('title', g.title);
 	}
 
