@@ -800,8 +800,12 @@ html, body {
 .wcc-mem-refresh:hover { color: var(--text-normal); }
 .wcc-mem-body { overflow-y: auto; font-size: 12.5px; line-height: 1.45; }
 .wcc-mem-empty { color: var(--text-muted); font-size: 12px; padding: 8px 0; }
-.wcc-mem-total { display: flex; justify-content: space-between; align-items: baseline; font-weight: 600; padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid var(--background-modifier-border); }
-.wcc-mem-total-sub { font-weight: 400; font-size: 11.5px; color: var(--text-muted); }
+/* The three-way split, same order as the top-bar gauge: this app, other, free. The headline
+   row is the split; the count, the app's own process and the working-set caveat sit under it. */
+.wcc-mem-total { padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid var(--background-modifier-border); }
+.wcc-mem-total-line { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-weight: 600; }
+.wcc-mem-total-sub { font-weight: 400; font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
+.wcc-mem-total-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
 .wcc-mem-row { position: relative; padding: 7px 78px 7px 0; border-bottom: 1px solid var(--background-modifier-border); }
 .wcc-mem-row:last-child { border-bottom: none; }
 .wcc-mem-rowmain { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }

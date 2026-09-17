@@ -1,4 +1,6 @@
+import * as os from 'os';
 import type { MemoryMonitor } from '../terminals/memory-monitor';
+import { splitMemory, splitDetail } from '../terminals/memory-gauge';
 import {
 	idleLongerThan, formatBytes, formatIdle, closeConfirm, bulkConfirm, unattributedConfirm,
 	unattributedResult, type KillOutcome, type MemoryReport, type MemoryRow,
@@ -45,6 +47,11 @@ export interface MemoryPanelDeps {
 	/** How an unattributed process tree is ended. The app's ONE kill path, injectable only so a
 	 *  test never has to spawn taskkill. */
 	killTree?: (pid: number) => Promise<KillResult>;
+	/** The machine, for the total row's three-way split. Defaults to `os.totalmem()`. */
+	totalRamBytes?: number;
+	/** Free memory, re-read on every render for the reason the widget re-reads it: unlike the
+	 *  total it moves. A function, not a number. Defaults to `os.freemem()`. */
+	freeRamBytes?: () => number;
 }
 
 /** "Session memory": what every live session is costing in RAM, across every workspace, and
@@ -142,9 +149,25 @@ export class MemoryPanel {
 		}
 
 		const now = Date.now();
-		const totalRow = body.createDiv({ cls: 'wcc-mem-total' });
-		totalRow.createSpan({ text: `${formatBytes(r.totalBytes)} total` });
-		totalRow.createSpan({ cls: 'wcc-mem-total-sub', text: `${r.sessions.length} session${r.sessions.length === 1 ? '' : 's'} · app itself ${formatBytes(r.appSelfBytes)}` });
+		// "X total" carried the same ambiguity the top-bar gauge did — it said nothing about
+		// whether the rest of the machine was free or spoken for. Same three quantities, same
+		// order, same clamp, from the same pure function the gauge uses.
+		const split = splitMemory(
+			this.deps.totalRamBytes ?? os.totalmem(),
+			this.deps.freeRamBytes ? this.deps.freeRamBytes() : os.freemem(),
+			r.totalBytes,
+		);
+		const detail = splitDetail(split);
+		const box = body.createDiv({ cls: 'wcc-mem-total' });
+		const totalRow = box.createDiv({ cls: 'wcc-mem-total-line' });
+		totalRow.createSpan({ text: detail.main });
+		totalRow.createSpan({ cls: 'wcc-mem-total-sub', text: detail.sub });
+		box.createDiv({
+			cls: 'wcc-mem-total-meta',
+			text: `${r.sessions.length} session${r.sessions.length === 1 ? '' : 's'} · app itself ${formatBytes(r.appSelfBytes)}`
+				+ ' · this app\'s figure is a sum of process working sets, so pages shared between them are counted'
+				+ ' once each — it reads slightly high, and "other" is the remainder.',
+		});
 
 		// The unattributed row goes FIRST when it has anything in it. It is the leak detector,
 		// and a leak detector below the fold detects nothing.
