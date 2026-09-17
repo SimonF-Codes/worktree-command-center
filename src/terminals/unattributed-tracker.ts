@@ -153,8 +153,9 @@ export function closeableUnattributed(
 	for (const [pid, pids] of closeable) {
 		const ppid = ix.byPid.get(pid)?.ppid;
 		// Only the immediate parent needs checking: closeability is inherited downwards, so a
-		// closeable grandparent implies a closeable parent.
-		if (ppid !== undefined && closeable.has(ppid)) continue; // an ancestor's kill covers it
+		// closeable grandparent implies a closeable parent. A row claiming to be its own parent —
+		// which a snapshot can contain — is its own root, not something an ancestor covers.
+		if (ppid !== undefined && ppid !== pid && closeable.has(ppid)) continue; // an ancestor's kill covers it
 		trees.push({
 			root: pid,
 			startedAt: ripe.get(pid)!.startedAt,

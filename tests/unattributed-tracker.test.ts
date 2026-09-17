@@ -159,6 +159,12 @@ describe('closeableUnattributed', () => {
 		expect(closeableUnattributed([recycled], after, now).trees).toEqual([]);
 	});
 
+	it('still offers a row that claims to be its own parent instead of silently dropping it', () => {
+		const odd = proc({ pid: 500, ppid: 500 });
+		const { state, now } = steady([odd], 12, 20_000);
+		expect(closeableUnattributed([odd], state, now).trees.map((t) => t.root)).toEqual([500]);
+	});
+
 	it('drops a pid that died between the last poll and the click', () => {
 		const leak = proc({ pid: 500 });
 		const { state, now } = steady([leak], 12, 20_000);
