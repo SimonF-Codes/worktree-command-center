@@ -25,6 +25,8 @@ function send(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
 
 let term;
 try {
+  // process.env is already stripped of any parent Claude session's identity by SessionBridge
+  // (src/terminals/session-env.ts) — pass it through as-is.
   term = pty.spawn(file, args, { name: 'xterm-256color', cols: 80, rows: 24, cwd, env: process.env });
 } catch (e) {
   send({ t: 'data', d: Buffer.from('failed to spawn ' + command + ': ' + e.message + '\r\n').toString('base64') });

@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 import { killProcessTree, type KillResult } from './kill-tree';
+import { sanitizeSessionEnv } from './session-env';
 
 export interface Frame { t: string; [k: string]: unknown; }
 
@@ -58,7 +59,11 @@ export class SessionBridge {
 		const node = process.platform === 'win32' ? 'node.exe' : 'node';
 		this.proc = spawn(node, [this.sidecarPath, this.cwd, this.command, ...this.args], {
 			windowsHide: true,
-			env: { ...process.env, ...this.extraEnv },
+			// Every spawn path — worker and folder tiles, the overseer console, the usage/format/
+			// convert probes — comes through here, and the sidecar hands this env to claude as-is.
+			// Strip the parent session's identity first (see session-env.ts); extraEnv is the app's
+			// own and is applied after, so what the app sets deliberately still wins.
+			env: { ...sanitizeSessionEnv(process.env), ...this.extraEnv },
 			...(process.platform !== 'win32' ? { detached: true } : {}),
 		});
 		this.proc.stdout?.on('data', (d) => this.handleRx(d.toString('utf8')));
