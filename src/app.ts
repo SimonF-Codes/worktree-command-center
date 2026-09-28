@@ -22,7 +22,7 @@ import { MemoryPanel } from './ui/memory-panel';
 import { MemoryWidget } from './ui/memory-widget';
 import { MemoryMonitor } from './terminals/memory-monitor';
 import { buildFloorReport } from './terminals/floor-report';
-import { FloorReportPublisher } from './terminals/floor-report-publisher';
+import { FloorReportPublisher, vaultReportTarget } from './terminals/floor-report-publisher';
 import type { SessionClaim } from './terminals/session-memory';
 import { RolesView } from './ui/roles-view';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
@@ -342,8 +342,22 @@ async function main(): Promise<void> {
 		// worktree scan, the memory tracker's claims and LAST snapshot, config and the sessions
 		// file. It never scans or snapshots anything itself, and it keeps no timer: it refreshes
 		// when a grid's scan lands, and when the 📊 Report button asks.
+		//
+		// The vault copy (Personal/Code/Floor Report.md + floor-report.json) is how Brain 2.0 sees
+		// it: Brain 2.0 already indexes the vault, so no new protocol on either side — and NOT the
+		// connector channel, which is a narrow request/receipt path for asking this app to act. It
+		// is the app's first write into the vault: two fixed files, no folder created, throttled
+		// to one write per few minutes, every failure swallowed. Off without a role library.
+		const vaultTarget = vaultReportTarget(roleLibrary?.path);
 		const floorReport = new FloorReportPublisher({
 			coordRoot: path.join(userData, '.coordination'),
+			vault: {
+				target: vaultTarget,
+				fs: {
+					isDirectory: async (d) => { try { return (await fs.promises.stat(d)).isDirectory(); } catch { return false; } },
+					writeFile: (f, data) => fs.promises.writeFile(f, data, 'utf8'),
+				},
+			},
 			fs: {
 				mkdir: async (d) => { await fs.promises.mkdir(d, { recursive: true }); },
 				writeFile: (f, data) => fs.promises.writeFile(f, data, 'utf8'),
@@ -370,10 +384,11 @@ async function main(): Promise<void> {
 		});
 		const publishFloorReportNow = async (): Promise<void> => {
 			await activeGrid.rescanWorktrees(); // its scan hook publishes too; this one reports back
-			const r = await floorReport.publish();
+			const r = await floorReport.publish({ onDemand: true });
 			if (!r) { toast('Floor report could not be built — see the console', 'error'); return; }
 			const t = r.totals;
-			toast(`Floor report: ${t.worktrees} worktrees, ${t.terminals} terminals → ${path.join(userData, '.coordination', 'floor-report.md')}`, 'info');
+			const vaultNote = vaultTarget ? ' (and to the vault, Personal/Code/Floor Report.md)' : '';
+			toast(`Floor report: ${t.worktrees} worktrees, ${t.terminals} terminals → ${path.join(userData, '.coordination', 'floor-report.md')}${vaultNote}`, 'info');
 		};
 
 

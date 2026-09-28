@@ -331,7 +331,8 @@ function ago(s: string | null, generatedAt: string): string {
 function floorReportMarkdown(r: FloorReport): string {
 	const t = r.totals;
 	const L: string[] = [];
-	L.push('---', 'type: report', `generated: ${r.generatedAt}`, `schema: ${r.schema}`, 'source: Worktree Command Center', '---', '');
+	// Frontmatter the vault accepts: its notes must carry a `type:` from a fixed set and a `created:` date.
+	L.push('---', 'type: reference', `created: ${r.generatedAt.slice(0, 10)}`, `generated: ${r.generatedAt}`, `schema: ${r.schema}`, 'source: Worktree Command Center', '---', '');
 	L.push('# Floor Report', '');
 	L.push(`_Generated ${r.generatedAt.replace('T', ' ').slice(0, 16)} UTC by Worktree Command Center. Overwritten in place; `
 		+ 'the same data is in `floor-report.json` beside this note._', '');

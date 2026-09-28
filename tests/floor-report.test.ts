@@ -150,7 +150,7 @@ describe('renderFloorReport', () => {
 
 	it('the markdown carries the facts a person needs', () => {
 		const md = renderFloorReport(buildFloorReport(fixture())).markdown;
-		expect(md).toMatch(/^---\ntype: report\n/);
+		expect(md.startsWith('---\ntype: reference\ncreated: 2026-09-27\ngenerated: 2026-09-27T22:00:00.000Z\n')).toBe(true);
 		expect(md).toContain('**2** tabs · **4** targets · **5** worktrees (2 clean, 1 dirty, 1 ahead, 1 parked)');
 		expect(md).toContain('1.3 GB this app · 18.7 GB other · 12.0 GB free of 32.0 GB');
 		expect(md).toContain('Session groups with no tab: `test-2` (0 saved)');
