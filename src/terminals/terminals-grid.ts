@@ -3,7 +3,8 @@ import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import { listBranches, createWorktree, writeWorktreeSettings, ensureClaudeSettingsIgnored, defaultBranch, parkWorktree, reopenWorktree, type WorktreeInfo } from './worktree-manager';
-import { nextWorktreeBranch, parseWorktreeList, parseStatusPorcelain, parseAheadBehind, isParkCommitSubject, formatRegistryMarkdown, type WorktreeEntry } from './worktree-registry';
+import { nextWorktreeBranch, parseWorktreeList, parseStatusPorcelain, parseAheadBehind, isParkCommitSubject, formatRegistryMarkdown, parseBranchTips, BRANCH_TIPS_FORMAT, type WorktreeEntry } from './worktree-registry';
+import type { GridScan, RepoScan } from './floor-report';
 import { repoOptionLabel } from '../workspace';
 import { runCommand } from '../command-runner';
 import type { TerminalPalette } from './theme-store';
@@ -87,6 +88,11 @@ export interface GridDeps {
 	initialToolbar?: ToolbarState;
 	/** Called when the user changes a toolbar dropdown, so the app can persist it per workspace. */
 	onToolbarChange?: (state: ToolbarState) => void;
+	/** Called after every worktree scan lands — the floor report's refresh rides on the scan the
+	 *  grid already runs, rather than keeping a timer of its own. */
+	onWorktreesScanned?: () => void;
+	/** The toolbar's 📊 Report button: rescan, rebuild the floor report and publish it now. */
+	requestFloorReport?: () => void;
 }
 export interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string; }
 
@@ -140,6 +146,8 @@ export class TerminalsGrid {
 	private nextTileId = 1;
 	private pendingNewBranch: string | null = null;
 	private lastEntries: WorktreeEntry[] = [];
+	private lastRepoScans: RepoScan[] = [];
+	private lastScanDoneAt = 0; // 0 = this grid has never finished a scan (never mounted this launch)
 	private claudeSettingsIgnoredFor = new Set<string>(); // repo paths already patched into .git/info/exclude
 	private centeredId: number | null = null;
 	private maximized = false;
@@ -336,6 +344,11 @@ export class TerminalsGrid {
 
 		const refreshBtn = controls.createEl('button', { text: '⟳ Refresh' });
 		refreshBtn.addEventListener('click', () => { void this.scanWorktrees().then(() => this.board?.refresh()); });
+
+		if (this.deps.requestFloorReport) {
+			const reportBtn = controls.createEl('button', { text: '📊 Report', attr: { title: 'Rescan and write the floor report — every tab, target, worktree and terminal in one place (also copied to the vault when a role library is configured)' } });
+			reportBtn.addEventListener('click', () => this.deps.requestFloorReport?.());
+		}
 
 		const journalBtn = controls.createEl('button', { text: '📓 Journal Entry', cls: 'cos-journal-btn', attr: { title: 'Open a new journal entry tile (Alt+J)' } });
 		journalBtn.addEventListener('click', () => this.spawnJournal());
@@ -2101,11 +2114,30 @@ export class TerminalsGrid {
 
 	private registryPath(): string { return path.join(this.coordDir, 'worktrees.md'); }
 
+	/** This grid's last finished scan, for the floor report to join. Null before the first one —
+	 *  a tab not opened this launch has never scanned, and the report says so rather than
+	 *  presenting nothing as "no worktrees". */
+	floorScan(): GridScan | null {
+		if (!this.lastScanDoneAt) return null;
+		return { workspaceId: this.deps.group, scannedAt: this.lastScanDoneAt, entries: this.lastEntries, repos: this.lastRepoScans };
+	}
+
+	/** Rescan now (the 📊 Report button). Same scan the timer runs; resolves when it has landed. */
+	rescanWorktrees(): Promise<void> {
+		return this.scanWorktrees().then(() => this.board?.refresh());
+	}
+
 	/** Scan every added repo's worktrees, map ownership from live tiles, write worktrees.md.
-	 *  Best-effort: any git failure degrades that entry and never throws. */
+	 *  Best-effort: any git failure degrades that entry and never throws.
+	 *
+	 *  Per repo: one `worktree list`, one `for-each-ref`; per worktree: `status` and `rev-list`.
+	 *  The `for-each-ref` replaced a per-worktree `git log -1` — it answers the park check for every
+	 *  worktree at once and also gives the floor report its branch count and last-commit date, so
+	 *  the report costs the scan fewer spawns, not more. */
 	private async scanWorktrees(): Promise<void> {
 		this.lastScanAt = Date.now();
 		const entries: WorktreeEntry[] = [];
+		const repoScans: RepoScan[] = [];
 		const now = Date.now();
 		for (const repo of this.repos) {
 			if (repo.folder) continue; // no git → no worktrees to list, and nothing to exclude
@@ -2115,29 +2147,47 @@ export class TerminalsGrid {
 			}
 			const wl = await runCommand('git', ['worktree', 'list', '--porcelain'], { cwd: repo.path, timeoutMs: 8000 });
 			if (wl.code !== 0) continue;
+			const refs = await runCommand('git', ['for-each-ref', `--format=${BRANCH_TIPS_FORMAT}`, 'refs/heads'], { cwd: repo.path, timeoutMs: 8000 });
+			const tips = refs.code === 0 ? parseBranchTips(refs.stdout) : null;
+			repoScans.push({
+				repo: repo.name,
+				branches: tips ? tips.size : null,
+				lastCommitAt: tips && tips.size ? Math.max(...[...tips.values()].map((t) => t.committedAt)) : null,
+			});
 			for (const wt of parseWorktreeList(wl.stdout)) {
 				if (path.resolve(wt.path) === path.resolve(repo.path)) continue; // skip the primary checkout
 				const status = await runCommand('git', ['status', '--porcelain'], { cwd: wt.path, timeoutMs: 8000 });
 				const tile = ([...this.tiles, ...this.hidden].filter((t) => !t.isJournal) as TerminalTile[]).find((t) => path.resolve(t.worktreePath) === path.resolve(wt.path));
 				const baseRef = tile ? tile.baseBranch : this.baseOf(wt.branch);
 				const ab = await runCommand('git', ['rev-list', '--left-right', '--count', `${baseRef}...HEAD`], { cwd: wt.path, timeoutMs: 8000 });
-				const subj = await runCommand('git', ['log', '-1', '--pretty=%s'], { cwd: wt.path, timeoutMs: 8000 });
+				// A detached worktree has no branch tip to look up, and neither does a scan whose
+				// for-each-ref failed — only those still pay for their own `git log`.
+				let head = tips?.get(wt.branch) ?? null;
+				if (!head) {
+					const log = await runCommand('git', ['log', '-1', '--pretty=%ct%x09%s'], { cwd: wt.path, timeoutMs: 8000 });
+					const tab = log.stdout.indexOf('	');
+					if (log.code === 0 && tab > 0) head = { committedAt: (parseInt(log.stdout.slice(0, tab), 10) || 0) * 1000, subject: log.stdout.slice(tab + 1).trim() };
+				}
 				const counts = parseAheadBehind(ab.code === 0 ? ab.stdout : '');
 				entries.push({
 					repo: repo.name, branch: wt.branch, path: wt.path,
 					terminal: tile ? tile.name : null,
 					dirtyFiles: status.code === 0 ? parseStatusPorcelain(status.stdout) : [],
 					ahead: counts.ahead, behind: counts.behind,
-					parked: subj.code === 0 ? isParkCommitSubject(subj.stdout.trim()) : false,
+					parked: head ? isParkCommitSubject(head.subject.trim()) : false,
 					lastActivity: now,
+					lastCommitAt: head && head.committedAt > 0 ? head.committedAt : null,
 				});
 			}
 		}
 		this.lastEntries = entries; // persisted so Reopen (Task 11) can resolve repo+path by branch
+		this.lastRepoScans = repoScans;
+		this.lastScanDoneAt = Date.now();
 		try {
 			await fs.mkdir(this.coordDir, { recursive: true });
 			await fs.writeFile(this.registryPath(), formatRegistryMarkdown(entries, now), 'utf8');
 		} catch { /* best effort */ }
+		try { this.deps.onWorktreesScanned?.(); } catch { /* a report failure must never break the scan */ }
 	}
 
 	/** The base branch a wt/<base>-N was cut from, for ahead/behind. Falls back to 'HEAD~0'

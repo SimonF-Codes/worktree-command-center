@@ -21,6 +21,8 @@ import { ChangelogPanel } from './ui/changelog-panel';
 import { MemoryPanel } from './ui/memory-panel';
 import { MemoryWidget } from './ui/memory-widget';
 import { MemoryMonitor } from './terminals/memory-monitor';
+import { buildFloorReport } from './terminals/floor-report';
+import { FloorReportPublisher } from './terminals/floor-report-publisher';
 import type { SessionClaim } from './terminals/session-memory';
 import { RolesView } from './ui/roles-view';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
@@ -220,6 +222,9 @@ async function main(): Promise<void> {
 			group: id,
 			initialToolbar: workspaceToolbars[id],
 			onToolbarChange: (state) => { workspaceToolbars = setToolbarState(workspaceToolbars, id, state); persist(); },
+			// Lazy: both fire long after startup, once floorReport below exists.
+			onWorktreesScanned: () => void floorReport.publish(),
+			requestFloorReport: () => void publishFloorReportNow(),
 			coordDir: path.join(userData, '.coordination', id),
 			sidecarPath: path.join(sidecarDir, 'sidecar.cjs'),
 			notifyScriptPath: path.join(sidecarDir, 'notify-ready.cjs'),
@@ -295,27 +300,26 @@ async function main(): Promise<void> {
 		// panel for 20s while it is open, and the monitor runs a single timer at the faster of
 		// the two — a tracker that spawned two `Win32_Process` queries would be the bug it
 		// reports.
-		const memoryMonitor = new MemoryMonitor({
-			claims: () => {
-				const out: SessionClaim[] = [];
-				// Every grid, not just the active one. Grids are created lazily per workspace, so
-				// this covers exactly the tabs that have ever had sessions — which is exactly the
-				// set that can be holding memory.
-				for (const [id, g] of grids) {
-					out.push(...g.memoryClaims(workspaces.find((w) => w.id === id)?.name ?? id));
-				}
-				// The usage battery's own probe, named rather than left anonymous. Without this it
-				// would land in "unattributed" every five minutes and train you to ignore the one
-				// row that matters. A LEAKED probe still shows there, which is the point.
-				for (const pid of usageProbe?.ownedPids() ?? []) {
-					out.push({
-						key: `app:usage-probe:${pid}`, name: 'usage battery', workspaceId: '', workspaceName: 'app',
-						repo: 'usage probe', branch: '', pid, busy: true, idleSince: null, hidden: true, system: true,
-					});
-				}
-				return out;
-			},
-		});
+		const allClaims = (): SessionClaim[] => {
+			const out: SessionClaim[] = [];
+			// Every grid, not just the active one. Grids are created lazily per workspace, so
+			// this covers exactly the tabs that have ever had sessions — which is exactly the
+			// set that can be holding memory.
+			for (const [id, g] of grids) {
+				out.push(...g.memoryClaims(workspaces.find((w) => w.id === id)?.name ?? id));
+			}
+			// The usage battery's own probe, named rather than left anonymous. Without this it
+			// would land in "unattributed" every five minutes and train you to ignore the one
+			// row that matters. A LEAKED probe still shows there, which is the point.
+			for (const pid of usageProbe?.ownedPids() ?? []) {
+				out.push({
+					key: `app:usage-probe:${pid}`, name: 'usage battery', workspaceId: '', workspaceName: 'app',
+					repo: 'usage probe', branch: '', pid, busy: true, idleSince: null, hidden: true, system: true,
+				});
+			}
+			return out;
+		};
+		const memoryMonitor = new MemoryMonitor({ claims: allClaims });
 		const memoryPanel = new MemoryPanel({
 			monitor: memoryMonitor,
 			endSession: async (workspaceId, key) => {
@@ -331,6 +335,46 @@ async function main(): Promise<void> {
 		const memoryWidget = new MemoryWidget(memoryMonitor, { onOpen: () => memoryPanel.toggle(appEl) });
 		memoryWidget.render(memHost);
 		window.addEventListener('beforeunload', () => { memoryPanel.close(); memoryWidget.dispose(); memoryMonitor.dispose(); });
+
+		// 📊 Floor report (see the vault's "Floor Report and Task Extrapolation" design): one
+		// object joining every tab, target, worktree and terminal, written as floor-report.json
+		// and floor-report.md. A JOIN over what the app already gathers — each grid's last
+		// worktree scan, the memory tracker's claims and LAST snapshot, config and the sessions
+		// file. It never scans or snapshots anything itself, and it keeps no timer: it refreshes
+		// when a grid's scan lands, and when the 📊 Report button asks.
+		const floorReport = new FloorReportPublisher({
+			coordRoot: path.join(userData, '.coordination'),
+			fs: {
+				mkdir: async (d) => { await fs.promises.mkdir(d, { recursive: true }); },
+				writeFile: (f, data) => fs.promises.writeFile(f, data, 'utf8'),
+				rename: (a, b) => fs.promises.rename(a, b),
+			},
+			gather: async () => {
+				let sessionGroups: Record<string, number> | null = null;
+				try {
+					const all = JSON.parse(await fs.promises.readFile(sessionsFile, 'utf8')) as Record<string, unknown>;
+					sessionGroups = Object.fromEntries(Object.entries(all).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0]));
+				} catch { /* unreadable → the report says "—" rather than guessing */ }
+				return buildFloorReport({
+					now: Date.now(),
+					workspaces,
+					activeWorkspaceId: activeId,
+					targets: repos,
+					scans: [...grids.values()].map((g) => g.floorScan()).filter((s) => s !== null),
+					claims: allClaims(),
+					memory: memoryMonitor.latest(),
+					machine: { totalBytes: os.totalmem(), freeBytes: os.freemem() },
+					sessionGroups,
+				});
+			},
+		});
+		const publishFloorReportNow = async (): Promise<void> => {
+			await activeGrid.rescanWorktrees(); // its scan hook publishes too; this one reports back
+			const r = await floorReport.publish();
+			if (!r) { toast('Floor report could not be built — see the console', 'error'); return; }
+			const t = r.totals;
+			toast(`Floor report: ${t.worktrees} worktrees, ${t.terminals} terminals → ${path.join(userData, '.coordination', 'floor-report.md')}`, 'info');
+		};
 
 
 		// --- workspace tab bar ---

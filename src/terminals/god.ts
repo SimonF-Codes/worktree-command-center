@@ -154,6 +154,8 @@ export function godSystemPrompt(repos: GodRepo[], coordDir: string, overseerName
 		`  - ${coordDir}/floor/*.md — each terminal's recent on-screen output (refreshed every few seconds).`,
 		`  - ${coordDir}/board.md — the coordination board: locks, START/DONE/NOTE activity.`,
 		`  - ${coordDir}/worktrees.md — every worktree's branch, dirty/unpushed counts, and parked work.`,
+		`  - ${coordDir}/../floor-report.md (and .json) — every tab, target, worktree and terminal`,
+		'    across ALL tabs, joined in one place; refreshed with each worktree scan.',
 		`  - ${coordDir}/god-inbox/ — errors from a tell/watch/rename/spawn that failed after you ran it`,
 		'    (e.g. a target name that matched no live terminal); you are also pinged here directly when one lands.',
 		'',

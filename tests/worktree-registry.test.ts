@@ -2,7 +2,25 @@ import { describe, it, expect } from 'vitest';
 import { nextWorktreeBranch } from '../src/terminals/worktree-registry';
 import { parseWorktreeList, parseStatusPorcelain, parseAheadBehind } from '../src/terminals/worktree-registry';
 import { computeState, isParkCommitSubject, parkCommitSubject, relAge, summarizeFiles, type WorktreeEntry } from '../src/terminals/worktree-registry';
-import { formatRegistryMarkdown } from '../src/terminals/worktree-registry';
+import { formatRegistryMarkdown, parseBranchTips } from '../src/terminals/worktree-registry';
+
+describe('parseBranchTips', () => {
+  it('maps each local branch to its tip date (ms) and subject, from one for-each-ref call', () => {
+    const out = [
+      "refs/heads/main\t1790563466\tMerge remote-tracking branch 'origin/main'",
+      'refs/heads/wt/main-7\t1789623019\twip: auto-parked 2026-09-17T05:30:19.706Z (Worktree Command Center)',
+      'refs/heads/odd\t1789000000\tsubject\twith a tab',
+      'garbage line',
+      'refs/heads/bad\tnotanumber\tx',
+      '',
+    ].join('\r\n');
+    const tips = parseBranchTips(out);
+    expect([...tips.keys()]).toEqual(['main', 'wt/main-7', 'odd']);
+    expect(tips.get('main')!.committedAt).toBe(1790563466000);
+    expect(isParkCommitSubject(tips.get('wt/main-7')!.subject)).toBe(true);
+    expect(tips.get('odd')!.subject).toBe('subject\twith a tab');
+  });
+});
 
 describe('nextWorktreeBranch', () => {
   it('returns the next free wt/<base>-N from real branches (never an existing name)', () => {
@@ -46,7 +64,7 @@ describe('parseAheadBehind', () => {
 
 const base = (o: Partial<WorktreeEntry>): WorktreeEntry => ({
   repo: 'r', branch: 'wt/main-1', path: '/p', terminal: 'T1',
-  dirtyFiles: [], ahead: 0, behind: 0, parked: false, lastActivity: 0, ...o,
+  dirtyFiles: [], ahead: 0, behind: 0, parked: false, lastActivity: 0, lastCommitAt: null, ...o,
 });
 
 describe('computeState', () => {

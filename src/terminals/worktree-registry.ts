@@ -58,6 +58,34 @@ export interface WorktreeEntry {
   behind: number;
   parked: boolean;           // HEAD is an auto-park commit
   lastActivity: number;      // epoch ms
+  lastCommitAt: number | null; // epoch ms of HEAD's commit; null when git could not say
+}
+
+/** The format for the ONE per-repo `git for-each-ref refs/heads` call a scan makes. */
+export const BRANCH_TIPS_FORMAT = '%(refname)%09%(committerdate:unix)%09%(contents:subject)';
+
+export interface BranchTip { committedAt: number; subject: string }
+
+/** Parse that call into branch → tip.
+ *
+ *  One call per repo answers three questions the scan used to ask once per worktree, or not at
+ *  all: each worktree's HEAD subject (a worktree on a branch has that branch's tip as HEAD, so
+ *  this is the answer `git log -1 --pretty=%s` gave), when anything was last committed, and how
+ *  many branches exist. `committedAt` is epoch ms. Lines that do not parse are skipped, never
+ *  guessed at. */
+export function parseBranchTips(s: string): Map<string, BranchTip> {
+  const out = new Map<string, BranchTip>();
+  for (const raw of String(s).split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    const a = line.indexOf('\t');
+    const b = a < 0 ? -1 : line.indexOf('\t', a + 1);
+    if (b < 0) continue;
+    const ref = line.slice(0, a);
+    const secs = parseInt(line.slice(a + 1, b), 10);
+    if (!ref.startsWith('refs/heads/') || !Number.isFinite(secs)) continue;
+    out.set(ref.slice('refs/heads/'.length), { committedAt: secs * 1000, subject: line.slice(b + 1) });
+  }
+  return out;
 }
 
 const PARK_PREFIX = 'wip: auto-parked';
