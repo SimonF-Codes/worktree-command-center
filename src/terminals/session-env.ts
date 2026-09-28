@@ -29,12 +29,19 @@ const KEEP = new Set([
 	'CLAUDE_CODE_USE_FOUNDRY',
 ]);
 
+/** The same leak one layer up: cos-coord identity. An app launched from the overseer's console
+ *  inherited COS_ROLE=god, COS_TERMINAL_ID=0 and COS_TERMINAL_NAME=Alpha. Worker tiles overwrite
+ *  the id, name and coord dir but never set COS_ROLE, so every worker ran with god authority —
+ *  `tell`, `watch` and `spawn` all unlocked. Each spawn path sets exactly the COS_* it means in
+ *  its own extraEnv, so none is ever needed from the app's environment. */
+const COS_PREFIX = 'COS_';
+
 /** True for a variable a spawned session must not inherit. Case-insensitive: Windows env
  *  names are, and a `Claude_Code_Child_Session` would be honoured all the same. */
 export function isParentSessionVar(name: string): boolean {
 	const n = name.toUpperCase();
 	if (KEEP.has(n)) return false;
-	return n.startsWith('CLAUDE_CODE_') || PARENT_SESSION_NAMES.has(n);
+	return n.startsWith('CLAUDE_CODE_') || n.startsWith(COS_PREFIX) || PARENT_SESSION_NAMES.has(n);
 }
 
 /** A copy of `env` with every parent-session variable removed. Never mutates its input;

@@ -43,8 +43,13 @@ describe('sanitizeSessionEnv', () => {
 		expect(sanitizeSessionEnv(env)).toEqual({ CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Git\\bin\\bash.exe', CLAUDE_CODE_USE_BEDROCK: '1' });
 	});
 
+	it("removes the overseer's cos-coord identity, so a worker is never god", () => {
+		const env = { COS_ROLE: 'god', COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Alpha', COS_COORD_DIR: 'd', PATH: 'p' };
+		expect(sanitizeSessionEnv(env)).toEqual({ PATH: 'p' });
+	});
+
 	it('changes nothing in an env without markers', () => {
-		const env = { PATH: 'C:\\bin', USERPROFILE: 'C:\\Users\\x', CLAUDE_CONFIG_DIR: 'C:\\cfg', ANTHROPIC_API_KEY: 'k', COS_COORD_DIR: 'd' };
+		const env = { PATH: 'C:\\bin', USERPROFILE: 'C:\\Users\\x', CLAUDE_CONFIG_DIR: 'C:\\cfg', ANTHROPIC_API_KEY: 'k', COSTS: '1' };
 		expect(sanitizeSessionEnv(env)).toEqual(env);
 	});
 

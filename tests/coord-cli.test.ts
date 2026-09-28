@@ -3,8 +3,12 @@ import { execFileSync, execFile } from 'node:child_process';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { sanitizeSessionEnv } from '../src/terminals/session-env';
 
 const CLI = path.join(__dirname, '..', 'pty-sidecar', 'coord-cli.cjs');
+// The outer shell's COS_* must not leak in: run from a worker the app spawned before the
+// session-env fix, COS_ROLE=god was inherited and the "worker is refused" cases ran as god and failed.
+const BASE_ENV = sanitizeSessionEnv(process.env);
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-')); });
 
@@ -34,7 +38,7 @@ function writeTellReceipt(coordDir: string, id: string, receipt: { ok: boolean; 
 function run(args: string[], id = '1', name = 'termA') {
   try {
     const out = execFileSync('node', [CLI, ...args], {
-      env: { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: id, COS_TERMINAL_NAME: name, COS_COORD_WAIT_MS: '0' },
+      env: { ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: id, COS_TERMINAL_NAME: name, COS_COORD_WAIT_MS: '0' },
       encoding: 'utf8',
     });
     return { code: 0, out, err: '' };
@@ -80,7 +84,7 @@ describe('cos-coord CLI', () => {
   it('tell from GOD drops a message file', () => {
     // Nothing plays the app's part here, so with a short wait `tell` gives up honestly (exit 2)
     // instead of the old exit-0-on-drop behavior — dropping the file was never proof of delivery.
-    const env = { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god', COS_COORD_TELL_WAIT_MS: '80' };
+    const env = { ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god', COS_COORD_TELL_WAIT_MS: '80' };
     try {
       execFileSync('node', [CLI, 'tell', 'A', 'hello'], { env, encoding: 'utf8' });
       throw new Error('expected tell to exit non-zero when nothing confirms delivery');
@@ -96,7 +100,7 @@ describe('cos-coord CLI', () => {
   });
 
   it('tell reports success (exit 0) once the app confirms delivery via a receipt', async () => {
-    const env = { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god', COS_COORD_TELL_WAIT_MS: '3000' };
+    const env = { ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god', COS_COORD_TELL_WAIT_MS: '3000' };
     const child = execFile('node', [CLI, 'tell', 'A', 'hello'], { env, encoding: 'utf8' });
     await waitFor(() => fs.existsSync(path.join(dir, 'god-outbox')) && fs.readdirSync(path.join(dir, 'god-outbox')).some((f) => f.endsWith('.json')));
     writeTellReceipt(dir, outboxIdFor(dir), { ok: true });
@@ -110,7 +114,7 @@ describe('cos-coord CLI', () => {
   });
 
   it('tell reports failure (exit 2) with the app\'s own reason when the receipt says it was NOT delivered', async () => {
-    const env = { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god', COS_COORD_TELL_WAIT_MS: '3000' };
+    const env = { ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god', COS_COORD_TELL_WAIT_MS: '3000' };
     const child = execFile('node', [CLI, 'tell', 'A', 'hello'], { env, encoding: 'utf8' });
     await waitFor(() => fs.existsSync(path.join(dir, 'god-outbox')) && fs.readdirSync(path.join(dir, 'god-outbox')).some((f) => f.endsWith('.json')));
     writeTellReceipt(dir, outboxIdFor(dir), { ok: false, reason: 'not accepted within 40s — mid-/compact' });
@@ -129,7 +133,7 @@ describe('cos-coord CLI', () => {
     expect(denied.code).toBe(2);
     expect(fs.existsSync(path.join(dir, 'god-outbox'))).toBe(false);
     // As god → files appear
-    const god = { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Able', COS_ROLE: 'god' };
+    const god = { ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Able', COS_ROLE: 'god' };
     execFileSync('node', [CLI, 'watch', 'A', '--note', 'run tests'], { env: god, encoding: 'utf8' });
     execFileSync('node', [CLI, 'spawn', 'app', '--base', 'main', '--task', 'do X'], { env: god, encoding: 'utf8' });
     execFileSync('node', [CLI, 'spawn', 'app', '--base', 'main', '--task', 'do Y', '--model', 'opus', '--effort', 'max', '--name', 'Linehaul'], { env: god, encoding: 'utf8' });
@@ -143,7 +147,7 @@ describe('cos-coord CLI', () => {
     expect(msgs.find((m) => m.kind === 'rename')).toMatchObject({ target: 'wt-1', name: 'Linehaul fix' });
   });
   it('as GOD, a required arg left empty is refused (exit 2) instead of silently dropping nothing', () => {
-    const god = { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god' };
+    const god = { ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god' };
     const cases: Array<[string[], string]> = [
       [['tell', 'A'], 'tell requires'],
       [['watch', 'A'], 'watch requires'],
