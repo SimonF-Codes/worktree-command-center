@@ -5,6 +5,29 @@ landed on `main`.
 
 ## Unreleased
 
+**📊 A floor report: the whole floor in one file, for tools and for people**
+- `floor-report.json` + `floor-report.md` in `<userData>/.coordination/` join what was scattered
+  across `worktrees.md`, `floor/*.md`, config and the sessions file: every **tab** (live and saved
+  sessions, repos touched), **target** (branches, worktrees by state, how many a terminal holds,
+  last commit), **worktree** (state, ahead/behind *and the base they were counted against*, dirty
+  files, who holds it), **terminal** (busy/idle, idle time, memory), and the gauge's three-way
+  memory split. Session groups that no tab owns are listed, so a leftover like `test-2` shows up.
+- **A join, not a scan.** It is built from each grid's last worktree scan and the memory tracker's
+  last snapshot, and refreshes when a scan lands or when you press **📊 Report**. No timer of its
+  own. The scan itself got *cheaper*: one `git for-each-ref` per repo now answers the park check
+  that used to cost a `git log` per worktree, and supplies the branch counts and commit dates.
+- **Ahead/behind no longer implies "merged" when it wasn't measured.** A branch outside
+  `wt/<base>-N` that no terminal holds was compared with itself and always read `↑0 ↓0`. The
+  report shows `—` for those instead.
+- **Visible in Brain 2.0 through the vault.** When `roleLibrary.path` points at a vault's
+  `_meta/agents`, the report is also written to `Personal/Code/Floor Report.md` + `floor-report.json`.
+  This is the app's first vault write, so it is kept narrow: those two files only, overwritten in
+  place, no folder created, every failure swallowed. It is throttled to once every five minutes
+  (or immediately on 📊 Report), so OneDrive and Brain 2.0's indexer are not woken every 30s.
+- **`/floor-tasks` skill** reads the report and proposes candidate tasks, each citing the report
+  facts behind it and carrying a `cos-coord spawn` brief. **It never spawns anything**: some of
+  these repos are dormant on purpose, and deciding what is worth doing stays with you.
+
 **🧠 The RAM gauge shows three quantities instead of one, because one was answering its own
 question wrong**
 - The bar drew this app's share of physical RAM and left the rest as empty track. Measured on
