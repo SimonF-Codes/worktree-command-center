@@ -99,8 +99,13 @@ export interface ReportWorktree {
 	branch: string;
 	path: string;
 	state: WorktreeState;
-	ahead: number;
-	behind: number;
+	/** The ref ahead/behind are counted against, or null when the scan did not record one. */
+	base: string | null;
+	/** Commits on this branch its base lacks, and the reverse. BOTH NULL when the branch was
+	 *  compared with itself — a branch outside `wt/<base>-N` that no tile holds has no known base
+	 *  — because a 0 there would read as "merged" when it means "not measured". */
+	ahead: number | null;
+	behind: number | null;
 	dirtyFiles: number;
 	lastCommitAt: string | null;
 	/** The terminal holding it, or null when nothing is. */
@@ -188,18 +193,22 @@ export function buildFloorReport(i: FloorInputs): FloorReport {
 		userClaims.find((c) => c.repo === e.repo && c.branch === e.branch)?.name ?? e.terminal ?? null;
 
 	const worktrees: ReportWorktree[] = [...newestEntry.values()]
-		.map(({ e, at }) => ({
-			repo: e.repo,
-			branch: e.branch,
-			path: e.path,
-			state: computeState(e),
-			ahead: e.ahead,
-			behind: e.behind,
-			dirtyFiles: e.dirtyFiles.length,
-			lastCommitAt: iso(e.lastCommitAt),
-			heldBy: holder(e),
-			scannedAt: iso(at)!,
-		}))
+		.map(({ e, at }) => {
+			const measured = e.base !== undefined && e.base !== e.branch;
+			return {
+				repo: e.repo,
+				branch: e.branch,
+				path: e.path,
+				state: computeState(e),
+				base: e.base ?? null,
+				ahead: measured ? e.ahead : null,
+				behind: measured ? e.behind : null,
+				dirtyFiles: e.dirtyFiles.length,
+				lastCommitAt: iso(e.lastCommitAt),
+				heldBy: holder(e),
+				scannedAt: iso(at)!,
+			};
+		})
 		.sort((a, b) => a.repo.localeCompare(b.repo) || a.branch.localeCompare(b.branch, undefined, { numeric: true }));
 
 	const targets: ReportTarget[] = i.targets.map((t) => {
@@ -221,7 +230,7 @@ export function buildFloorReport(i: FloorInputs): FloorReport {
 			byState,
 			held: wts.filter((w) => w.heldBy !== null).length,
 			dirtyFiles: wts.reduce((a, w) => a + w.dirtyFiles, 0),
-			aheadCommits: wts.reduce((a, w) => a + w.ahead, 0),
+			aheadCommits: wts.reduce((a, w) => a + (w.ahead ?? 0), 0),
 			lastCommitAt: iso(rs?.r.lastCommitAt ?? null),
 		};
 	});
@@ -372,12 +381,17 @@ function floorReportMarkdown(r: FloorReport): string {
 	if (!r.worktrees.length) L.push('_None scanned._');
 	for (const repo of [...new Set(r.worktrees.map((w) => w.repo))]) {
 		L.push(`### ${repo}`, '');
-		L.push('| Branch | State | ↑ | ↓ | Dirty | Last commit | Held by |', '|---|---|--:|--:|--:|---|---|');
+		L.push('| Branch | State | Base | ↑ | ↓ | Dirty | Last commit | Held by |', '|---|---|---|--:|--:|--:|---|---|');
 		for (const w of r.worktrees.filter((x) => x.repo === repo)) {
 			const state = w.state === 'clean' ? 'clean' : `**${w.state}**`;
-			L.push(`| \`${cell(w.branch)}\` | ${state} | ${w.ahead} | ${w.behind} | ${w.dirtyFiles} | ${day(w.lastCommitAt)} | ${w.heldBy ? cell(w.heldBy) : '—'} |`);
+			const base = w.ahead === null || !w.base ? '—' : `\`${cell(w.base)}\``;
+			L.push(`| \`${cell(w.branch)}\` | ${state} | ${base} | ${w.ahead ?? '—'} | ${w.behind ?? '—'} | ${w.dirtyFiles} | ${day(w.lastCommitAt)} | ${w.heldBy ? cell(w.heldBy) : '—'} |`);
 		}
 		L.push('');
+	}
+	if (r.worktrees.some((w) => w.ahead === null)) {
+		L.push('_↑/↓: commits the branch has that its base lacks, and the reverse. "—" means no base was known — a branch '
+			+ 'outside `wt/<base>-N` that no terminal holds — so nothing is claimed about whether it is merged._', '');
 	}
 
 	L.push('## Terminals', '');

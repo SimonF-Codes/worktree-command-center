@@ -59,6 +59,9 @@ export interface WorktreeEntry {
   parked: boolean;           // HEAD is an auto-park commit
   lastActivity: number;      // epoch ms
   lastCommitAt: number | null; // epoch ms of HEAD's commit; null when git could not say
+  /** The ref ahead/behind were counted against. Equal to `branch` when no base could be told —
+   *  a non-wt/ branch no tile holds — and then ahead/behind say nothing about merging. */
+  base?: string;
 }
 
 /** The format for the ONE per-repo `git for-each-ref refs/heads` call a scan makes. */

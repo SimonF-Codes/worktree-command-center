@@ -2177,6 +2177,7 @@ export class TerminalsGrid {
 					parked: head ? isParkCommitSubject(head.subject.trim()) : false,
 					lastActivity: now,
 					lastCommitAt: head && head.committedAt > 0 ? head.committedAt : null,
+					base: baseRef,
 				});
 			}
 		}
