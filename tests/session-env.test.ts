@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeSessionEnv, isParentSessionVar } from '../src/terminals/session-env';
+import { sanitizeSessionEnv, isParentSessionVar, reportsTranscriptOff, TranscriptOffWatch } from '../src/terminals/session-env';
 
 // The app's real environment on 2026-09-27, launched from inside a Claude Code session
 // (plus CLAUDE_EFFORT, which a session exports to its own tools).
@@ -66,5 +66,33 @@ describe('isParentSessionVar', () => {
 		expect(isParentSessionVar('CLAUDE_CONFIG_DIR')).toBe(false);
 		expect(isParentSessionVar('MY_CLAUDE_CODE_THING')).toBe(false);
 		expect(isParentSessionVar('CLAUDE_CODEX')).toBe(false);
+	});
+});
+
+// The banner as the TUI printed it on 2026-09-27, plus the renderings it can arrive in.
+const BANNER = '⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker';
+
+describe('reportsTranscriptOff', () => {
+	it('spots the banner', () => { expect(reportsTranscriptOff(`welcome\r\n${BANNER}\r\n`)).toBe(true); });
+	it('spots it through colour codes and cursor-justified words with no spaces', () => {
+		expect(reportsTranscriptOff('\x1b[33m⚠ Transcript\x1b[12Gsaving\x1b[19Gis\x1b[22Goff\x1b[0m')).toBe(true);
+	});
+	it('ignores an ordinary opening screen', () => {
+		expect(reportsTranscriptOff('Welcome to Claude Code\r\n/help for help · cwd: C:/dev/x')).toBe(false);
+	});
+});
+
+describe('TranscriptOffWatch', () => {
+	it('fires once, on the chunk that completes a banner split across chunks', () => {
+		const w = new TranscriptOffWatch();
+		expect(w.feed('⚠ Transcript sav')).toBe(false);
+		expect(w.feed('ing is \x1b[1')).toBe(false);
+		expect(w.feed('moff — inherited')).toBe(true);
+		expect(w.feed(BANNER)).toBe(false);
+	});
+	it('stops scanning once the opening screen is long past', () => {
+		const w = new TranscriptOffWatch();
+		expect(w.feed('x'.repeat(70 * 1024))).toBe(false);
+		expect(w.feed(BANNER)).toBe(false);
 	});
 });

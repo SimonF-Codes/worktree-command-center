@@ -63,6 +63,9 @@ export interface TerminalTileOpts {
 	/** Fired when a resume found no conversation and the tile fell back to a fresh session.
 	 *  Reported OUTSIDE the terminal — see startSession's fallback branch for why. */
 	onFreshFallback?: (tile: TerminalTile) => void;
+	/** Fired once if this session's claude reports transcript saving is off: closing it would lose
+	 *  the conversation, --continue cannot bring it back. Reported outside the terminal, same reason. */
+	onTranscriptOff?: (tile: TerminalTile) => void;
 	resume?: boolean;
 	bypassPermissions?: boolean;
 	model?: string;
@@ -802,6 +805,7 @@ export class TerminalTile implements StageTile {
 			this.writeOut(`\r\n[session ended (code ${code ?? '?'}) — press any key, or ⟳ above, to start a new one]\r\n`);
 		});
 		this.bridge.onReady(() => { this.setIdle(true); this.opts.onReady?.(this); });
+		this.bridge.onTranscriptOff(() => this.opts.onTranscriptOff?.(this));
 		this.bridge.start();
 	}
 

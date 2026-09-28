@@ -1,3 +1,5 @@
+import { stripAnsi } from './usage-parse';
+
 /** Pure: the environment a spawned `claude` is allowed to inherit from this app.
  *
  *  Why this exists: when the app is launched from inside a Claude Code session (a Bash tool,
@@ -53,4 +55,33 @@ export function sanitizeSessionEnv(env: Record<string, string | undefined>): Rec
 		out[k] = v;
 	}
 	return out;
+}
+
+/** How much of a session's opening output is scanned for the banner. The warning is part of
+ *  Claude's welcome screen; anything past this is a session long since under way. */
+const TRANSCRIPT_SCAN_BYTES = 64 * 1024;
+
+/** Pure: does this output carry Claude's "⚠ Transcript saving is off" banner? ANSI is stripped
+ *  first and words may run together — the TUI justifies text with cursor moves instead of
+ *  spaces (see terminal-tile's "no conversation found" probe for the same trap). */
+export function reportsTranscriptOff(output: string): boolean {
+	return /transcript\s*saving\s*is\s*off/i.test(stripAnsi(output));
+}
+
+/** Watches the start of one session's output for the banner, across chunk boundaries.
+ *  feed() returns true exactly once — on the chunk that completes the match — and false
+ *  forever after, and after the scan cap. The session keeps running either way; this only
+ *  exists so the app can SAY so, instead of leaving it as one line on the terminal's own
+ *  screen, which is how it went unnoticed for ten days. */
+export class TranscriptOffWatch {
+	private buf = '';
+	private done = false;
+
+	feed(chunk: string): boolean {
+		if (this.done) return false;
+		this.buf += chunk;
+		if (reportsTranscriptOff(this.buf)) { this.done = true; this.buf = ''; return true; }
+		if (this.buf.length >= TRANSCRIPT_SCAN_BYTES) { this.done = true; this.buf = ''; }
+		return false;
+	}
 }

@@ -1,6 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 import { killProcessTree, type KillResult } from './kill-tree';
-import { sanitizeSessionEnv } from './session-env';
+import { sanitizeSessionEnv, TranscriptOffWatch } from './session-env';
 
 export interface Frame { t: string; [k: string]: unknown; }
 
@@ -33,6 +33,8 @@ export class SessionBridge {
 	private onExitCb: ((code: number | null) => void) | null = null;
 	private onReadyCb: (() => void) | null = null;
 	private onKillFailCb: ((r: KillResult & { ok: false }) => void) | null = null;
+	private onTranscriptOffCb: (() => void) | null = null;
+	private transcriptWatch = new TranscriptOffWatch();
 	private killing: Promise<KillResult> | null = null;
 
 	constructor(
@@ -54,6 +56,9 @@ export class SessionBridge {
 	onReady(cb: () => void): void { this.onReadyCb = cb; }
 	/** Fired when a kill could not be confirmed, so the failure is visible instead of silent. */
 	onKillFailure(cb: (r: KillResult & { ok: false }) => void): void { this.onKillFailCb = cb; }
+	/** Fired once if claude's opening screen says transcript saving is off — the session will
+	 *  not be resumable with --continue, so the caller should say so somewhere it will be seen. */
+	onTranscriptOff(cb: () => void): void { this.onTranscriptOffCb = cb; }
 
 	start(): void {
 		const node = process.platform === 'win32' ? 'node.exe' : 'node';
@@ -111,7 +116,9 @@ export class SessionBridge {
 		this.rxBuf = rest;
 		for (const f of frames) {
 			if (f.t === 'data' && typeof f.d === 'string') {
-				this.onDataCb?.(Buffer.from(f.d, 'base64').toString('utf8'));
+				const text = Buffer.from(f.d, 'base64').toString('utf8');
+				this.onDataCb?.(text);
+				if (this.transcriptWatch.feed(text)) this.onTranscriptOffCb?.();
 			} else if (f.t === 'exit') {
 				this.onExitCb?.(typeof f.code === 'number' ? f.code : 0);
 			} else if (f.t === 'ready') {

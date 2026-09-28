@@ -29,7 +29,7 @@ import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
 import { looksLikePrompt } from './chat-room';
 import { classifyAttention, classifyOne, attentionKind, type AttentionItem, type AttentionKind } from './attention';
 import type { CloseRecord } from './close-summary';
-import type { ToastVariant } from '../ui/toast';
+import type { ToastVariant, ToastPushOptions } from '../ui/toast';
 import { JournalTile } from './journal-tile';
 import { JournalStore } from './journal-store';
 import { FormatProbe } from './format-probe';
@@ -55,6 +55,8 @@ interface TellResult { ok: boolean; reason?: string; }
 // (the CLI's own give-up bound) so the CLI gets an honest receipt instead of its generic timeout.
 const TELL_RETRY_INTERVAL_MS = 5000;
 const TELL_MAX_WAIT_MS = 40000;
+/** How long the transcript-off warning stays up — long enough to be seen from across the room. */
+const TRANSCRIPT_OFF_TOAST_MS = 60_000;
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -78,7 +80,7 @@ export interface GridDeps {
 	/** Connectors registered in config.json — a request from an unregistered id gets a rejected
 	 *  receipt rather than being honoured. See README "External dispatch". */
 	connectors?: ConnectorConfig[];
-	toast: (msg: string, variant?: ToastVariant) => void;
+	toast: (msg: string, variant?: ToastVariant, opts?: ToastPushOptions) => void;
 	promptForTopic: (title: string, placeholder: string, initial?: string, okLabel?: string) => Promise<string | null>;
 	openSettings: () => void;
 	/** This workspace's remembered spawn-toolbar selection, restored on mount. */
@@ -1039,12 +1041,25 @@ export class TerminalsGrid {
 		for (const k of this.extraKanes) k.console.setTerminalPalette(p);
 	}
 
+	/** A session's claude said transcript saving is off. Closing it loses the conversation for
+	 *  good and Reopen's --continue cannot bring it back, so this must not stay one line on the
+	 *  terminal's own screen — that is how every worker ran without a transcript for ten days.
+	 *  Long-lived on purpose; identical toasts from several sessions collapse into one with a count. */
+	private warnTranscriptOff(name: string): void {
+		this.deps.toast(
+			`${name} — transcript saving is OFF: closing it loses the conversation, and Reopen cannot bring it back. Commit its work before you close it.`,
+			'error',
+			{ durationMs: TRANSCRIPT_OFF_TOAST_MS },
+		);
+		console.warn(`[wcc] ${name}: claude reports transcript saving is off`);
+	}
+
 	/** Toggle the GOD console: spawn on first open, then just show/hide (session persists). */
 	private toggleGod(): void {
 		if (!this.godConsole) {
 			const godHomeDir = path.join(this.coordDir, '..', '.god', this.deps.group);
 			const kane: GodConsole = new GodConsole(
-				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, roleLibraryPath: this.deps.roleLibrary?.path, resume: true, onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
+				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, roleLibraryPath: this.deps.roleLibrary?.path, resume: true, onTranscriptOff: () => this.warnTranscriptOff(this.overseerName), onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
 				() => this.hideGod(),
 			);
 			this.godConsole = kane;
@@ -1093,6 +1108,7 @@ export class TerminalsGrid {
 				resume: true,
 				onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); },
 				instanceName: `${this.overseerName} ${n}`,
+				onTranscriptOff: () => this.warnTranscriptOff(`${this.overseerName} ${n}`),
 				terminalId: String(-n),
 			},
 			() => {
@@ -1868,6 +1884,7 @@ export class TerminalsGrid {
 			// A restored tile whose transcript is gone comes back as a blank welcome screen that
 			// looks exactly like a broken start. Say so where the new session can't paint over it.
 			onFreshFallback: (t) => this.deps.toast(`${t.name} — no saved conversation to resume, so it started fresh`, 'warn'),
+			onTranscriptOff: (t) => this.warnTranscriptOff(t.name),
 			onInput: (t, data) => { this.idleTiles.delete(t.tileId); this.lastActivityAt = Date.now(); this.q.composingLen = applyKeystroke(this.q.composingLen, data); },
 			onEnter: (t) => this.handleSubmit(t),
 			// Reset the typing-hold on ANY focus change: gaining focus starts a fresh box,

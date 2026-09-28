@@ -36,6 +36,8 @@ export interface GodConsoleOpts {
 	instanceName?: string;   // head label + COS_TERMINAL_NAME (default 'Kane')
 	terminalId?: string;     // COS_TERMINAL_ID for cos-coord identity (default '0')
 	resume?: boolean;        // reopen this home's conversation (fresh fallback) — the main Kane sets this
+	/** Fired once if this console's claude reports transcript saving is off (see TerminalTile's). */
+	onTranscriptOff?: () => void;
 }
 
 /** GOD: a single privileged claude session in a docked side panel. Real terminal — the
@@ -248,6 +250,7 @@ export class GodConsole {
 		const startedAt = Date.now();
 		this.bridge = new SessionBridge(this.opts.sidecarPath, this.opts.godHomeDir, 'claude', args, env);
 		this.bridge.onData((d) => { if (fallbackFresh && probe.length < 2048) probe += d; this.term?.write(d); this.markBusy(); });
+		this.bridge.onTranscriptOff(() => this.opts.onTranscriptOff?.());
 		this.bridge.onExit((code) => {
 			const name = this.opts.instanceName ?? 'Kane';
 			if (shouldStartFresh({ fallbackFresh, probe, elapsedMs: Date.now() - startedAt })) {
