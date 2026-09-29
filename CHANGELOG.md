@@ -28,6 +28,25 @@ landed on `main`.
   parked as a `wip:` commit, the worktree and branch are kept, only the process is killed.
   Coordination panel → the branch → Reopen brings the conversation back.
 
+**🜲 Kane can end a worker's session without losing it: `cos-coord close "<name>"`**
+- Goes through the memory panel's End (`endSessionKeepingWork`), not the tile's ×. Uncommitted
+  work is parked as a `wip:` commit and the process is killed. The worktree and branch are
+  **kept**, because the transcript is keyed by worktree path. Reopen in the Coordination panel
+  brings the session back.
+- **Refuses, with the reason and exit 2**, when:
+  - no terminal has that name
+  - the name matches more than one terminal. `tell` delivers to the first match, but ending a
+    session on a guess is a different kind of act.
+  - the target is a journal
+  - the target is an overseer console. That includes a Kane closing itself.
+- **A mid-turn session is closed, and the result says so**, as `closed <name> (was mid-turn)`.
+  The overseer named the terminal on purpose, which is not the same as a bulk sweep, so this
+  does not refuse. It does say what it interrupted.
+- **Blocks for a receipt, like `tell`.** `tell` and the connector channel got this guard after
+  they reported success for things that never happened. `close` has it from the start. It exits
+  0 only after the app says the session ended. If the app gives no answer in 45s, it exits 2 as
+  *not confirmed*.
+
 ## 0.8.0 — 2026-09-29
 
 **📊 A floor report: the whole floor in one file, for tools and for people**

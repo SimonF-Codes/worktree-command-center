@@ -51,7 +51,7 @@ trust boundary between the user's own apps, not authentication. A request from a
 registered gets a rejected receipt, not silence.
 
 This is deliberately narrower than Kane's own channel (below): connectors get **`spawn` and
-`tell`, and nothing else**. Not `watch` or `rename` or `personality` — those act on the
+`tell`, and nothing else**. Not `watch`, `rename`, `close` or `personality` — those act on the
 operator's own workspace (Kane's watchers, Kane's own mode), not on requesting work from a
 terminal, so they stay the overseer's alone.
 
@@ -152,7 +152,7 @@ immediately.
 
 #### Kane's own channel (internal, not an external integration point)
 
-`god-outbox/` is where Kane's `cos-coord tell/watch/spawn/rename/personality` writes — it carries
+`god-outbox/` is where Kane's `cos-coord tell/watch/spawn/rename/close/personality` writes — it carries
 the overseer's own privileged intent (typing into *any* terminal, renaming *anything*, toggling
 `personality`), because the overseer console *is* the app's own trusted UI. It is **not** the
 channel for an external app to use — that's what the connector channel above is for. Nothing
@@ -171,6 +171,20 @@ proof of delivery, only proof the file was written. A `watch`/`rename`/`spawn` t
 `cos-coord` already returned (an unresolved target name, an unknown repo) writes the same kind of
 note to `<coordDir>/god-inbox/` and pings Kane directly, rather than leaving him to discover it by
 reading an undocumented file.
+
+`cos-coord close "<name>"` blocks and reports the same way. It ends one worker session through the
+memory panel's End path, not the tile's ×. Uncommitted work is parked as a `wip:` commit and the
+process is killed. The worktree and branch stay, because the transcript in `~/.claude/projects` is
+keyed by worktree path, and Reopen in the Coordination panel brings the session back with it.
+It refuses, exiting 2 with the reason, when:
+- no terminal has that name
+- the name matches more than one terminal
+- the target is a journal
+- the target is an overseer console, which includes a Kane closing itself
+
+A session that was mid-turn is still closed, and the result says `(was mid-turn)`. If the app
+gives no answer within `COS_COORD_CLOSE_WAIT_MS` (default 45s), the command exits 2 and reports
+the close as *not confirmed*. It never reports that as success.
 
 ### Agent role files
 

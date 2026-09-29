@@ -175,6 +175,12 @@ describe('godSystemPrompt', () => {
     expect(p).toContain('--name');
     expect(p).toContain('cos-coord rename');
   });
+  it('documents close as work-keeping, and what it refuses', () => {
+    expect(p).toContain('cos-coord close "<exact terminal name>"');
+    expect(p).toMatch(/KEEPS the worktree and branch/);
+    expect(p).toMatch(/refuses journals and overseer consoles/);
+    expect(p).toContain('(was mid-turn)');
+  });
 });
 
 describe('godSystemPrompt self-improvement', () => {

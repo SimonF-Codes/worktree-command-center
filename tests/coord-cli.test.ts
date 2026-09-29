@@ -146,6 +146,53 @@ describe('cos-coord CLI', () => {
     expect(msgs.find((m) => m.kind === 'spawn' && m.task === 'do Y')).toMatchObject({ model: 'opus', effort: 'max', name: 'Linehaul' });
     expect(msgs.find((m) => m.kind === 'rename')).toMatchObject({ target: 'wt-1', name: 'Linehaul fix' });
   });
+  describe('close', () => {
+    const godEnv = (waitMs: string) => ({ ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Kane', COS_ROLE: 'god', COS_COORD_CLOSE_WAIT_MS: waitMs });
+    /** Start `close`, play the app's part by filing `receipt` once the request lands, and collect the exit. */
+    async function closeWith(receipt: Record<string, unknown>) {
+      const child = execFile('node', [CLI, 'close', 'wt-1'], { env: godEnv('3000'), encoding: 'utf8' });
+      let out = '', err = '';
+      child.stdout?.on('data', (d) => { out += d; });
+      child.stderr?.on('data', (d) => { err += d; });
+      const exited = new Promise<number | null>((resolve) => child.on('exit', resolve));
+      await waitFor(() => fs.existsSync(path.join(dir, 'god-outbox')) && fs.readdirSync(path.join(dir, 'god-outbox')).some((f) => f.endsWith('.json')));
+      const id = outboxIdFor(dir);
+      const msg = JSON.parse(fs.readFileSync(path.join(dir, 'god-outbox', `${id}.json`), 'utf8'));
+      writeTellReceipt(dir, id, receipt as { ok: boolean; reason?: string });
+      return { code: await exited, out, err, msg };
+    }
+
+    it('is refused without COS_ROLE=god: exit 2, nothing dropped', () => {
+      const r = run(['close', 'wt-1'], '1', 'wt-2');
+      expect(r.code).toBe(2);
+      expect(r.err).toContain('close requires COS_ROLE=god');
+      expect(fs.existsSync(path.join(dir, 'god-outbox'))).toBe(false);
+    });
+    it('drops a close request and reports the app\'s result, mid-turn included (exit 0)', async () => {
+      const r = await closeWith({ ok: true, message: 'closed wt-1 (was mid-turn) — worktree and branch kept, reopen it from the Coordination panel' });
+      expect(r.msg).toMatchObject({ kind: 'close', target: 'wt-1' });
+      expect(r.code).toBe(0);
+      expect(r.out).toContain('closed wt-1 (was mid-turn)');
+    });
+    it('reports a refusal as a failure with the app\'s reason (exit 2)', async () => {
+      const r = await closeWith({ ok: false, reason: '"Kane" is an overseer console, not a worker session — refused' });
+      expect(r.code).toBe(2);
+      expect(r.err).toContain('did NOT happen');
+      expect(r.err).toContain('overseer console');
+    });
+    it('never reads silence as success: no receipt → exit 2, "not confirmed"', () => {
+      try {
+        execFileSync('node', [CLI, 'close', 'wt-1'], { env: godEnv('80'), encoding: 'utf8' });
+        throw new Error('expected close to exit non-zero when nothing confirms it');
+      } catch (e: unknown) {
+        const err = e as { status: number; stderr: string };
+        expect(err.status).toBe(2);
+        expect(err.stderr).toContain('was NOT confirmed');
+        expect(err.stderr).toContain('may still happen');
+      }
+    });
+  });
+
   it('as GOD, a required arg left empty is refused (exit 2) instead of silently dropping nothing', () => {
     const god = { ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'GOD', COS_ROLE: 'god' };
     const cases: Array<[string[], string]> = [
@@ -153,6 +200,8 @@ describe('cos-coord CLI', () => {
       [['watch', 'A'], 'watch requires'],
       [['spawn', 'app', '--base', 'main'], 'spawn requires'], // no --task
       [['rename', 'A'], 'rename requires'], // no --to
+      [['close'], 'close requires'], // no target
+      [['close', '  '], 'close requires'], // blank target
     ];
     for (const [args, expectedErr] of cases) {
       try {

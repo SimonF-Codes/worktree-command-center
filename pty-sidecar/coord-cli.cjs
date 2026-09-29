@@ -1,13 +1,14 @@
 'use strict';
 // cos-coord <status|acquire|release|note> — agents call this from Bash.
 // Fail-open: unexpected errors exit 0 (allow). A timed-out acquire exits 1
-// (the lock is working — the && chain should stop). tell/watch/spawn/rename/personality are
-// GOD-only: called without COS_ROLE=god they exit 2 (a refusal is a failure, not a silent no-op).
-// The same commands also exit 2 when called AS god but missing a required argument (empty
+// (the lock is working — the && chain should stop). tell/watch/spawn/rename/close/personality
+// are GOD-only: called without COS_ROLE=god they exit 2 (a refusal is a failure, not a silent
+// no-op). The same commands also exit 2 when called AS god but missing a required argument (empty
 // target/message/task/etc.) — a malformed handoff must fail loud too, not just an unauthorized one.
 // `tell` additionally BLOCKS for the app's delivery receipt before reporting success (see
 // store.waitForTellReceipt) — dropping the outbox file was never proof the message was typed
-// into anything, let alone submitted.
+// into anything, let alone submitted. `close` blocks the same way: it exits 0 only once the app
+// says the session actually ended, and 2 with the app's reason when it refused.
 const path = require('path');
 const core = require('./coord-core.cjs');
 const store = require('./coord-store.cjs');
@@ -107,6 +108,24 @@ function main() {
     process.exit(0);
   }
 
+  if (cmd === 'close') {
+    if (env('COS_ROLE') !== 'god') denyGodOnly('close'); // only GOD may end a worker's session
+    const target = resource;
+    requireArgs('close', Boolean(target && target.trim()), '<target>');
+    const file = store.close(dir, target);
+    const id = path.basename(file, '.json');
+    // Parking runs git status/add/commit first; its worst case (~38s) fits inside tell's window.
+    const waitMs = Number(env('COS_COORD_CLOSE_WAIT_MS', String(core.TELL_WAIT_MS)));
+    const r = store.waitForTellReceipt(dir, id, {
+      waitMs,
+      timeoutReason: 'the app never confirmed the close — it may still happen; check floor/INDEX.md before retrying',
+    });
+    if (r.ok) { console.log(`coord: ${r.message || `closed "${target}"`}`); process.exit(0); }
+    // A refusal is known not to have happened; a timeout is only unconfirmed — say which.
+    console.error(`coord: close "${target}" ${r.timedOut ? 'was NOT confirmed' : 'did NOT happen'} — ${r.reason || 'unknown reason'}`);
+    process.exit(2);
+  }
+
   if (cmd === 'personality') {
     if (env('COS_ROLE') !== 'god') denyGodOnly('personality'); // only Kane toggles his own personality
     store.personality(dir);
@@ -128,7 +147,7 @@ function main() {
     process.exit(0);
   }
 
-  console.error('usage: cos-coord <status|acquire|release|note|chat|tell|watch|spawn|rename|personality> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--to "…"]');
+  console.error('usage: cos-coord <status|acquire|release|note|chat|tell|watch|spawn|rename|close|personality> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--to "…"]');
   process.exit(0);
 }
 

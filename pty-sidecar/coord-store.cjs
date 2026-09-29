@@ -118,6 +118,7 @@ function watch(dir, target, note) { return dropOutbox(dir, { kind: 'watch', targ
 function spawn(dir, repo, base, task, model, effort, name) { return dropOutbox(dir, { kind: 'spawn', repo, base: base || null, task, model: model || null, effort: effort || null, name: name || null }); }
 function rename(dir, target, to) { return dropOutbox(dir, { kind: 'rename', target, name: to }); }
 function personality(dir) { return dropOutbox(dir, { kind: 'personality' }); }
+function close(dir, target) { return dropOutbox(dir, { kind: 'close', target }); }
 
 // A `tell`'s receipt: the app writes one of these to god-outbox/.receipts/<id>.json once it
 // KNOWS whether the message actually landed on the target's screen (see terminals-grid.ts
@@ -130,6 +131,8 @@ function receiptPath(dir, id) { return path.join(dir, 'god-outbox', '.receipts',
 // Block (synchronously — this runs inside a one-shot CLI process, same shape as acquire()'s
 // wait/poll) until that receipt shows up, or waitMs elapses. No receipt within the window is
 // reported the same as an explicit failure: a CLI caller must never read silence as success.
+// `close` files its outcome on the same seam; opts.timeoutReason lets it word the timeout for
+// what it actually is (a close that may still happen), not as a missing delivery.
 function waitForTellReceipt(dir, id, opts = {}) {
   const waitMs = opts.waitMs != null ? opts.waitMs : core.TELL_WAIT_MS;
   const pollMs = opts.pollMs != null ? opts.pollMs : core.POLL_MS;
@@ -141,13 +144,13 @@ function waitForTellReceipt(dir, id, opts = {}) {
       try { fs.unlinkSync(file); } catch { /* best-effort cleanup */ }
       return r;
     } catch { /* not written yet, or unreadable mid-write — keep polling */ }
-    if (Date.now() >= deadline) return { ok: false, reason: 'timed out waiting for the app to confirm delivery — is it running?' };
+    if (Date.now() >= deadline) return { ok: false, timedOut: true, reason: opts.timeoutReason || 'timed out waiting for the app to confirm delivery — is it running?' };
     sleepSync(pollMs);
   }
 }
 
 module.exports = {
   acquire, release, readLocks, readHolder, appendBoard, note, taskEvent, appendChat,
-  tell, watch, spawn, rename, personality, dropOutbox, sleepSync,
+  tell, watch, spawn, rename, personality, close, dropOutbox, sleepSync,
   receiptPath, waitForTellReceipt,
 };
