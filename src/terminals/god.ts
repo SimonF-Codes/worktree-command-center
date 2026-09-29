@@ -20,6 +20,7 @@ export type OutboxMessage =
 	| { kind: 'watch'; target: string; note: string }
 	| { kind: 'spawn'; repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null }
 	| { kind: 'rename'; target: string; name: string }
+	| { kind: 'close'; target: string }
 	| { kind: 'personality' };
 
 /** Parse one god-outbox JSON message into a typed command. An untagged {target,message} is
@@ -51,6 +52,10 @@ export function parseOutboxMessage(text: string): OutboxMessage | null {
 		if (typeof o.target === 'string' && typeof o.name === 'string' && o.target.trim() && o.name.trim()) {
 			return { kind: 'rename', target: o.target, name: o.name.trim() };
 		}
+	} else if (kind === 'close') {
+		if (typeof o.target === 'string' && o.target.trim()) {
+			return { kind: 'close', target: o.target };
+		}
 	}
 	return null;
 }
@@ -60,6 +65,42 @@ export function resolveTellTarget(target: string, names: string[]): string | nul
 	if (names.includes(target)) return target;
 	const lc = target.toLowerCase();
 	return names.find((n) => n.toLowerCase() === lc) ?? null;
+}
+
+/** Everything on a workspace's floor that a `close` target name could match. Overseer consoles
+ *  and journals are listed only so that naming one is refused with the real reason, not a vague
+ *  "no terminal by that name". */
+export interface CloseCandidate { name: string; kind: 'terminal' | 'journal' | 'overseer'; busy: boolean; }
+
+export type ClosePlan = { ok: true; name: string; busy: boolean } | { ok: false; reason: string };
+
+/** Decide what a `close "<target>"` would end. Resolution is resolveTellTarget's: exact match,
+ *  then case-insensitive. Only a worker terminal may be closed. A journal is not a session, and
+ *  an overseer closing an overseer (itself included) is not allowed. A worker that shares a name
+ *  with an overseer or journal wins, because workers are what `close` is for. */
+export function planClose(target: string, candidates: CloseCandidate[]): ClosePlan {
+	const ordered = [...candidates.filter((c) => c.kind === 'terminal'), ...candidates.filter((c) => c.kind !== 'terminal')];
+	const name = resolveTellTarget(target, ordered.map((c) => c.name));
+	const hit = name === null ? undefined : ordered.find((c) => c.name === name);
+	if (!hit) {
+		const live = candidates.filter((c) => c.kind === 'terminal').map((c) => c.name);
+		return { ok: false, reason: `no terminal named "${target}". Live terminals: ${live.join(', ') || '(none)'}` };
+	}
+	if (hit.kind === 'journal') return { ok: false, reason: `"${hit.name}" is a journal, not a worker session — refused` };
+	if (hit.kind === 'overseer') return { ok: false, reason: `"${hit.name}" is an overseer console, not a worker session — refused` };
+	// `tell` delivers to the first of two same-named terminals; ending a session on a guess is a
+	// different matter, so a name that doesn't pick out exactly one worker is refused.
+	const lc = hit.name.toLowerCase();
+	const same = candidates.filter((c) => c.kind === 'terminal' && (name === target ? c.name === target : c.name.toLowerCase() === lc));
+	if (same.length > 1) return { ok: false, reason: `"${target}" matches ${same.length} terminals (${same.map((c) => c.name).join(', ')}) — rename one first; refused` };
+	return { ok: true, name: hit.name, busy: hit.busy };
+}
+
+/** The one-line result `cos-coord close` prints. A session that was mid-turn is said to be, so
+ *  that interrupting work is never reported as a routine close. */
+export function closeResultText(name: string, wasBusy: boolean, watchesDropped = 0): string {
+	const watches = watchesDropped ? `; dropped ${watchesDropped} watch${watchesDropped === 1 ? '' : 'es'} on it` : '';
+	return `closed ${name}${wasBusy ? ' (was mid-turn)' : ''} — worktree and branch kept, reopen it from the Coordination panel${watches}`;
 }
 
 /** Retarget active watchers when a terminal is renamed (watchers match on the name). */

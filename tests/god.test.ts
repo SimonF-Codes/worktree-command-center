@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseOutboxMessage, resolveTellTarget, slug,
   formatFloorSnapshot, formatFloorIndex, godSystemPrompt, EFFORT_LEVELS, remapWatchers, parseGodSelfImprove,
+  planClose, closeResultText, type CloseCandidate,
 } from '../src/terminals/god';
 
 describe('parseOutboxMessage', () => {
@@ -33,6 +34,16 @@ describe('parseOutboxMessage', () => {
     expect(parseOutboxMessage('{"kind":"rename","target":"wt-1","name":"  "}')).toBeNull();
     expect(parseOutboxMessage('{"kind":"rename","target":"","name":"x"}')).toBeNull();
   });
+  it('parses a close and rejects a missing, blank or non-string target', () => {
+    expect(parseOutboxMessage('{"kind":"close","target":"wt-1"}'))
+      .toEqual({ kind: 'close', target: 'wt-1' });
+    expect(parseOutboxMessage('{"ts":1,"kind":"close","target":"Linehaul fix","extra":true}'))
+      .toEqual({ kind: 'close', target: 'Linehaul fix' });
+    expect(parseOutboxMessage('{"kind":"close"}')).toBeNull();
+    expect(parseOutboxMessage('{"kind":"close","target":"   "}')).toBeNull();
+    expect(parseOutboxMessage('{"kind":"close","target":42}')).toBeNull();
+    expect(parseOutboxMessage('{"kind":"close","target":"wt-1"')).toBeNull(); // truncated JSON
+  });
   it('parses a personality toggle (no fields)', () => {
     expect(parseOutboxMessage('{"kind":"personality"}')).toEqual({ kind: 'personality' });
   });
@@ -50,6 +61,60 @@ describe('resolveTellTarget', () => {
     expect(resolveTellTarget('A', ['A', 'B'])).toBe('A');
     expect(resolveTellTarget('improver 1', ['Improver 1', 'B'])).toBe('Improver 1');
     expect(resolveTellTarget('ghost', ['A', 'B'])).toBeNull();
+  });
+});
+
+describe('planClose', () => {
+  const floor: CloseCandidate[] = [
+    { name: 'Linehaul fix', kind: 'terminal', busy: false },
+    { name: 'wt-2', kind: 'terminal', busy: true },
+    { name: 'Journal', kind: 'journal', busy: false },
+    { name: 'Kane', kind: 'overseer', busy: false },
+    { name: 'Kane 2', kind: 'overseer', busy: false },
+  ];
+  it('resolves a worker exactly, then case-insensitively, and carries its busy state', () => {
+    expect(planClose('Linehaul fix', floor)).toEqual({ ok: true, name: 'Linehaul fix', busy: false });
+    expect(planClose('linehaul FIX', floor)).toEqual({ ok: true, name: 'Linehaul fix', busy: false });
+    expect(planClose('wt-2', floor)).toEqual({ ok: true, name: 'wt-2', busy: true });
+  });
+  it('refuses an unknown name and lists the live terminals (workers only)', () => {
+    const r = planClose('ghost', floor);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain('no terminal named "ghost"');
+    expect(r.reason).toContain('Linehaul fix, wt-2');
+    expect(r.reason).not.toContain('Kane');
+    expect(planClose('ghost', [])).toEqual({ ok: false, reason: 'no terminal named "ghost". Live terminals: (none)' });
+  });
+  it('refuses a journal, by name, with the reason', () => {
+    const r = planClose('journal', floor);
+    expect(r).toEqual({ ok: false, reason: '"Journal" is a journal, not a worker session — refused' });
+  });
+  it('refuses an overseer console, including the caller closing itself', () => {
+    expect(planClose('Kane', floor)).toEqual({ ok: false, reason: '"Kane" is an overseer console, not a worker session — refused' });
+    expect(planClose('kane 2', floor)).toEqual({ ok: false, reason: '"Kane 2" is an overseer console, not a worker session — refused' });
+  });
+  it('lets a worker win a name it shares with an overseer', () => {
+    const f: CloseCandidate[] = [{ name: 'Kane', kind: 'overseer', busy: false }, { name: 'Kane', kind: 'terminal', busy: false }];
+    expect(planClose('Kane', f)).toEqual({ ok: true, name: 'Kane', busy: false });
+  });
+  it('refuses a name that picks out more than one worker instead of guessing', () => {
+    const dup: CloseCandidate[] = [{ name: 'A', kind: 'terminal', busy: false }, { name: 'A', kind: 'terminal', busy: true }];
+    const r = planClose('A', dup);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('matches 2 terminals');
+    const cases: CloseCandidate[] = [{ name: 'Foo', kind: 'terminal', busy: false }, { name: 'foo', kind: 'terminal', busy: false }];
+    expect(planClose('Foo', cases)).toEqual({ ok: true, name: 'Foo', busy: false }); // exact match is unambiguous
+    expect(planClose('FOO', cases).ok).toBe(false); // case-insensitive would be a guess
+  });
+});
+
+describe('closeResultText', () => {
+  it('says when the session was mid-turn, and when watches were dropped', () => {
+    expect(closeResultText('wt-1', false)).toMatch(/^closed wt-1 — worktree and branch kept/);
+    expect(closeResultText('wt-1', true)).toMatch(/^closed wt-1 \(was mid-turn\) — /);
+    expect(closeResultText('wt-1', false, 1)).toContain('dropped 1 watch on it');
+    expect(closeResultText('wt-1', false, 2)).toContain('dropped 2 watches on it');
   });
 });
 

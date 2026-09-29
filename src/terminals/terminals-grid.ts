@@ -23,7 +23,7 @@ import { SPAWN_MODELS } from './spawn-models';
 import { normalizeToolbarState, type ToolbarState } from './toolbar-state';
 import { GodConsole } from './god-console';
 import { godIndexOf, godRecords, highestGodIndex, PRIMARY_GOD_INDEX } from './god-sessions';
-import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, EFFORT_LEVELS, type OutboxMessage, type GodSelfImprove } from './god';
+import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, planClose, closeResultText, EFFORT_LEVELS, type OutboxMessage, type CloseCandidate, type GodSelfImprove } from './god';
 import { evaluateConnectorRequest, receiptFilename, isReceiptStale, type ConnectorConfig, type ConnectorReceipt } from './connectors';
 import type { RoleLibraryConfig } from './role-library';
 import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
@@ -1351,9 +1351,42 @@ export class TerminalsGrid {
 			} else {
 				this.writeGodInbox(`cannot rename "${msg.target}" — not a live terminal. Live: ${liveNames.join(', ') || '(none)'}`);
 			}
+		} else if (msg.kind === 'close') {
+			void this.closeFromKane(msg.target, id);
 		} else {
 			void this.spawnFromKane(msg.repo, msg.base, msg.task, msg.model, msg.effort, msg.name);
 		}
+	}
+
+	/** Kane's `close`: end one named worker session through endSessionKeepingWork, the same
+	 *  work-keeping path as the memory panel's End (NOT the tile's ×, which deletes the worktree
+	 *  and with it the transcript's key). The outcome goes on a receipt that `cos-coord close` blocks
+	 *  on, like `tell`'s, so a close that did not happen can't read as success. */
+	private async closeFromKane(target: string, id: string): Promise<void> {
+		const sessions = this.allSessions();
+		const plan = planClose(target, [
+			...sessions.map((t): CloseCandidate => t.isJournal
+				? { name: t.name, kind: 'journal', busy: false }
+				: { name: t.name, kind: 'terminal', busy: (t as TerminalTile).isBusy }),
+			...[...(this.godConsole ? [this.overseerName] : []), ...this.extraKanes.map((k) => `${this.overseerName} ${k.n}`)]
+				.map((name): CloseCandidate => ({ name, kind: 'overseer', busy: false })),
+		]);
+		if (!plan.ok) {
+			this.writeGodInbox(`close refused — ${plan.reason}`);
+			this.writeTellReceipt(id, plan);
+			return;
+		}
+		const tile = sessions.find((t) => t.name === plan.name && !t.isJournal);
+		if (!tile || !(await this.endSessionKeepingWork(tile.tileId))) {
+			const reason = `"${plan.name}" was NOT closed — it left the floor before the close ran`;
+			this.writeGodInbox(`close failed — ${reason}`);
+			this.writeTellReceipt(id, { ok: false, reason });
+			return;
+		}
+		// A watch on a session that no longer exists would never fire; drop it and say so.
+		const dropped = this.watchers.filter((w) => w.target === plan.name).length;
+		this.watchers = this.watchers.filter((w) => w.target !== plan.name);
+		this.writeTellReceipt(id, { ok: true, message: closeResultText(plan.name, plan.busy, dropped) });
 	}
 
 	/** Drain every connector subdirectory's requests, then prune its stale receipts. Both are
@@ -1568,8 +1601,9 @@ export class TerminalsGrid {
 
 	/** File the outcome of one `tell` so the CLI process blocked waiting on it (coord-cli.cjs
 	 *  `waitForTellReceipt`) can report it honestly instead of assuming the outbox drop succeeded.
-	 *  New: no receipt existed for any command before this — see coord-store.cjs's comment. */
-	private writeTellReceipt(id: string, r: TellResult): void {
+	 *  New: no receipt existed for any command before this — see coord-store.cjs's comment.
+	 *  `close` files its outcome here too; `message` is the success line the CLI prints. */
+	private writeTellReceipt(id: string, r: TellResult & { message?: string }): void {
 		try {
 			const dir = path.join(this.outboxDir(), '.receipts');
 			fsSync.mkdirSync(dir, { recursive: true });
