@@ -184,6 +184,18 @@ export async function parkWorktree(worktreePath: string, nowIso: string): Promis
 	return commit.code === 0 ? 'parked' : 'failed';
 }
 
+/** The ONLY git step of ending a session without losing it (TerminalsGrid.endSessionKeepingWork).
+ *  It parks uncommitted work on the worktree's own branch and does nothing else: it never removes
+ *  the worktree or deletes the branch, because the transcript in ~/.claude/projects is keyed by
+ *  worktree PATH and either would make the session unresumable. A folder target is never parked:
+ *  its directory is the user's own, and `git add -A` there would commit their working tree into
+ *  whatever repo happens to contain it (the same reason parkAll() skips them). Never throws. */
+export async function parkForSessionEnd(worktreePath: string, isFolder: boolean, nowIso: string): Promise<'parked' | 'clean' | 'failed' | 'skipped'> {
+	if (isFolder) return 'skipped';
+	try { return await parkWorktree(worktreePath, nowIso); }
+	catch { return 'failed'; } // parking is a safety net, not a precondition for ending the session
+}
+
 /** Restore parked work to uncommitted: if HEAD is a park commit, soft-reset it so the
  *  changes come back as they were. Recreates the worktree from the branch if its folder
  *  is gone. Safe — only ever soft-resets our own park commit. */

@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
-import { listBranches, createWorktree, writeWorktreeSettings, ensureClaudeSettingsIgnored, defaultBranch, parkWorktree, reopenWorktree, type WorktreeInfo } from './worktree-manager';
+import { listBranches, createWorktree, writeWorktreeSettings, ensureClaudeSettingsIgnored, defaultBranch, parkWorktree, parkForSessionEnd, reopenWorktree, type WorktreeInfo } from './worktree-manager';
 import { nextWorktreeBranch, parseWorktreeList, parseStatusPorcelain, parseAheadBehind, isParkCommitSubject, formatRegistryMarkdown, parseBranchTips, BRANCH_TIPS_FORMAT, type WorktreeEntry } from './worktree-registry';
 import type { GridScan, RepoScan } from './floor-report';
 import { repoOptionLabel } from '../workspace';
@@ -939,13 +939,8 @@ export class TerminalsGrid {
 		const tile = [...this.tiles, ...this.hidden].find((t) => t.tileId === tileId);
 		if (!tile || tile.isJournal) return false;
 		const tt = tile as TerminalTile;
-		// A folder target's directory is the user's own; `git add -A` there would commit THEIR
-		// working tree into whatever repo happens to contain it. Never park one — same reason
-		// parkAll() skips them.
-		if (!tt.isFolder) {
-			try { await parkWorktree(tt.worktreePath, new Date().toISOString()); }
-			catch { /* parking is a safety net, not a precondition for ending the session */ }
-		}
+		// Parks and nothing else — never removes the worktree or branch, never parks a folder.
+		await parkForSessionEnd(tt.worktreePath, tt.isFolder, new Date().toISOString());
 		this.tiles = this.tiles.filter((t) => t !== tile);
 		this.hidden = this.hidden.filter((t) => t !== tile);
 		this.idleTiles.delete(tileId);
