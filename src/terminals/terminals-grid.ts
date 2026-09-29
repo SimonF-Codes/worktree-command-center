@@ -38,6 +38,7 @@ import { ConvertProbe } from './convert-probe';
 import { vaultNoteFilename, vaultNoteContent, type ConvertDestination, type VaultDestination } from './convert-destinations';
 import type { StageTile } from './stage-tile';
 import type { SessionClaim } from './session-memory';
+import type { SessionFacts } from './auto-close';
 
 /** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
  *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
@@ -467,6 +468,7 @@ export class TerminalsGrid {
 		const want = nextSpotlight(ids, this.centeredId, dir);
 		if (want === null) { this.centeredId = null; this.applyLayout(); return; } // equal grid
 		this.lastActivityAt = Date.now();
+		this.touchTile(want);
 		// Pin so autoCenter keeps it; the clicked-away ready tile gives up its queue turn.
 		this.q = rqClick(this.q, want, this.centeredId).state;
 		this.doCenter(want);
@@ -807,6 +809,7 @@ export class TerminalsGrid {
 			return;
 		}
 		this.lastActivityAt = Date.now();
+		this.touchTile(id);
 		// Pin the clicked tile; a clicked-away ready center gives up its turn (→ back of queue).
 		this.q = rqClick(this.q, id, this.centeredId).state;
 		this.q.composingLen = 0;
@@ -897,6 +900,32 @@ export class TerminalsGrid {
 		return out;
 	}
 
+	/** What auto-close needs to know about each session that the memory report cannot see,
+	 *  keyed exactly as memoryClaims() keys it. Journals are described too (as journals) so the
+	 *  rule rejects them by what they are rather than by being absent. */
+	autoCloseFacts(): Map<string, SessionFacts> {
+		const out = new Map<string, SessionFacts>();
+		for (const t of [...this.tiles, ...this.hidden]) {
+			const key = `${this.deps.group}:${t.tileId}`;
+			if (t.isJournal) { out.set(key, { kind: 'journal', output: '', touchedAt: null, held: false }); continue; }
+			const tt = t as TerminalTile;
+			out.set(key, {
+				kind: tt.isFolder ? 'folder' : 'worker',
+				output: tt.recentOutput(),
+				touchedAt: tt.touchedAt,
+				held: this.lockedTileId === tt.tileId,
+			});
+		}
+		return out;
+	}
+
+	/** A person chose this tile — center, cycle, lock, reveal. Programmatic centering (a steal,
+	 *  autoCenter) deliberately does NOT count: the app looking at a tile is not Simon looking. */
+	private touchTile(id: number): void {
+		const t = [...this.tiles, ...this.hidden].find((x) => x.tileId === id);
+		if (t && !t.isJournal) (t as TerminalTile).touch();
+	}
+
 	/** End a session from the memory panel WITHOUT destroying its work.
 	 *
 	 *  Deliberately not the tile's × , which deletes the worktree and branch. The panel's whole
@@ -984,6 +1013,7 @@ export class TerminalsGrid {
 
 	/** Jump to a terminal by id: un-hide it if hidden, else center + focus it. */
 	revealTile(id: number): void {
+		this.touchTile(id);
 		if (this.hidden.some((t) => t.tileId === id)) { this.showTile(id); return; }
 		if (this.tiles.some((t) => t.tileId === id)) { this.doCenter(id); this.focusCentered(); }
 	}
@@ -1567,6 +1597,7 @@ export class TerminalsGrid {
 		if (!this.tiles.some((t) => t.tileId === id)) return; // only real terminal tiles
 		if (this.lockedTileId === id) { this.lockedTileId = null; this.refreshLockVisuals(); return; }
 		this.lockedTileId = id;
+		this.touchTile(id);
 		this.refreshLockVisuals();
 		this.doCenter(id); // lockedTileId === id, so doCenter won't break it
 	}
@@ -1836,6 +1867,7 @@ export class TerminalsGrid {
 		this.tiles.push(tile);
 		tile.setHidden(false);
 		this.idleTiles.delete(tile.tileId); // resurfaced → you're acting on it, not "done waiting"
+		if (!tile.isJournal) (tile as TerminalTile).touch();
 		this.centeredId = tile.tileId;
 		this.applyLayout();
 		this.focusCentered();

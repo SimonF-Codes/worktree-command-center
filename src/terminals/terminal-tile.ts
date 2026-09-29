@@ -110,6 +110,9 @@ export class TerminalTile implements StageTile {
 	// sitting there, and "idle" without a clock behind it can't answer that. Written only
 	// through setIdle so the flag and its timestamp can never disagree.
 	private idleSinceTs: number | null = null;
+	// The last time a PERSON did something to this tile. Auto-close needs "left alone", and a
+	// quiet session is not the same thing: idleSince only says when the turn ended.
+	private touchedTs: number | null = null;
 	private ended = false; // true once the claude process has exited and nothing is listening on the pty
 	// Output pacing: only the CENTERED tile parses PTY output in true real time. Visible
 	// satellites batch on a 300ms cadence and hidden/workspace-detached tiles on 2s —
@@ -267,6 +270,7 @@ export class TerminalTile implements StageTile {
 			// Track the input box AFTER forwarding, so a message released by this very keystroke
 			// (their Enter) reaches the PTY behind it, never in front of it.
 			this.gate.input(d, this.pasting);
+			if (this.pasting || isUserInput(d)) this.touch();
 			if (this.pasting) return; // pasted content (incl. its newlines) is NOT a submit
 			// Only a HUMAN keystroke means "this session is being worked on". xterm answers
 			// Claude's focus reporting (DECSET 1004) on the same channel, so the focus/blur
@@ -535,6 +539,7 @@ export class TerminalTile implements StageTile {
 	/** Send raw keystrokes verbatim (no auto-Enter) — used to answer prompts from the
 	 *  chat (Approve = Enter "\r", Deny = Escape "\x1b"). */
 	sendKeys(raw: string): void {
+		this.touch(); // someone answered this session from the chat — it is not left alone
 		this.bridge?.write(raw);
 	}
 
@@ -598,6 +603,11 @@ export class TerminalTile implements StageTile {
 	get isBusy(): boolean { return !this.idle; }
 	/** When this session last went idle, or null while it is working. */
 	get idleSince(): number | null { return this.idleSinceTs; }
+	/** When a person last typed into, answered, centered or resurfaced this tile; null if never. */
+	get touchedAt(): number | null { return this.touchedTs; }
+	/** Record that a person interacted with this tile. The grid calls it for the ways in that
+	 *  are not keystrokes — a click to center, Alt+arrow onto it, a lock, a resurface. */
+	touch(): void { this.touchedTs = Date.now(); }
 	/** Pid of this session's sidecar — the root of the process subtree it is accountable for. */
 	get sidecarPid(): number | null { return this.bridge?.pid ?? null; }
 
