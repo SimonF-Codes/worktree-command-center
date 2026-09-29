@@ -3,7 +3,7 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
-## Unreleased
+## 0.9.0 — 2026-09-29
 
 **🧹 Finished sessions left alone can close themselves — off unless you turn it on**
 - Measured on a 24-hour-old app: **47 `claude` processes holding 7.9 GB** against 5 terminals
