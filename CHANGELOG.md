@@ -3,7 +3,7 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
-## Unreleased
+## 0.8.0 — 2026-09-29
 
 **📊 A floor report: the whole floor in one file, for tools and for people**
 - `floor-report.json` + `floor-report.md` in `<userData>/.coordination/` join what was scattered
