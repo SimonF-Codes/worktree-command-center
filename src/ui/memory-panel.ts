@@ -114,7 +114,8 @@ export class MemoryPanel {
 			cls: 'wcc-mem-note',
 			text: 'Closing is cheap. The conversation is kept on disk (~/.claude/projects, keyed by worktree path) '
 				+ 'and the worktree and branch are left in place — uncommitted work is parked as a wip commit first. '
-				+ 'Reopen in the Coordination panel brings it back. Nothing here ever closes on its own.',
+				+ 'Reopen in the Coordination panel brings it back. Nothing closes on its own unless auto-close is '
+				+ 'turned on in ⚙ Settings — and then only finished, untouched sessions, named a minute before.',
 		});
 
 		const foot = this.el.createDiv({ cls: 'wcc-mem-foot' });

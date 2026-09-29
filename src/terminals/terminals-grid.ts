@@ -900,23 +900,22 @@ export class TerminalsGrid {
 		return out;
 	}
 
-	/** What auto-close needs to know about each session that the memory report cannot see,
-	 *  keyed exactly as memoryClaims() keys it. Journals are described too (as journals) so the
-	 *  rule rejects them by what they are rather than by being absent. */
-	autoCloseFacts(): Map<string, SessionFacts> {
-		const out = new Map<string, SessionFacts>();
-		for (const t of [...this.tiles, ...this.hidden]) {
-			const key = `${this.deps.group}:${t.tileId}`;
-			if (t.isJournal) { out.set(key, { kind: 'journal', output: '', touchedAt: null, held: false }); continue; }
-			const tt = t as TerminalTile;
-			out.set(key, {
-				kind: tt.isFolder ? 'folder' : 'worker',
-				output: tt.recentOutput(),
-				touchedAt: tt.touchedAt,
-				held: this.lockedTileId === tt.tileId,
-			});
-		}
-		return out;
+	/** What auto-close needs to know about one session that the memory report cannot see — the
+	 *  tile id is the tail of the key memoryClaims() gives it. A journal is described as one, so
+	 *  the rule rejects it by what it is rather than by being absent. Undefined for no such tile.
+	 *  Per tile rather than a whole-floor map: recentOutput() reads the xterm buffer, and only
+	 *  the sessions idle past the threshold are ever asked. */
+	autoCloseFacts(tileId: number): SessionFacts | undefined {
+		const t = [...this.tiles, ...this.hidden].find((x) => x.tileId === tileId);
+		if (!t) return undefined;
+		if (t.isJournal) return { kind: 'journal', output: '', touchedAt: null, held: false };
+		const tt = t as TerminalTile;
+		return {
+			kind: tt.isFolder ? 'folder' : 'worker',
+			output: tt.recentOutput(),
+			touchedAt: tt.touchedAt,
+			held: this.lockedTileId === tt.tileId,
+		};
 	}
 
 	/** A person chose this tile — center, cycle, lock, reveal. Programmatic centering (a steal,

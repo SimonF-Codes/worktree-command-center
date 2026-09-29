@@ -2,6 +2,7 @@ import type { ConvertDestination, TrackerDestination, VaultDestination } from '.
 import { newDestinationId } from '../terminals/convert-destinations';
 import { promptForChoice, promptForTopic, promptForConfirm } from './prompt-dialog';
 import type { ToastVariant } from './toast-queue';
+import { parseAutoClose, thresholdLabel, AUTO_CLOSE_CHOICES } from '../terminals/auto-close';
 
 export interface SettingsPanelDeps {
 	addFolder: () => Promise<string | null>;
@@ -10,6 +11,8 @@ export interface SettingsPanelDeps {
 	toast: (msg: string, variant?: ToastVariant) => void;
 	/** Apply a changed overseer name live (updates the button + open console immediately). */
 	onOverseerNameChange?: (name: string) => void;
+	/** Apply a changed auto-close setting live — the raw value just saved as `autoClose`. */
+	onAutoCloseChange?: (raw: unknown) => void;
 }
 
 /** Toggleable panel (same open/close pattern as the phone-floor panel): configure the "Convert
@@ -73,6 +76,8 @@ export class SettingsPanel {
 			})();
 		});
 
+		this.renderAutoClose(this.el, cfg0.autoClose);
+
 		const section = this.el.createDiv({ cls: 'wcc-settings-section' });
 		section.createDiv({ cls: 'wcc-settings-sub', text: 'Convert destinations — where a journal note\'s "Convert to…" can send it' });
 
@@ -101,6 +106,47 @@ export class SettingsPanel {
 
 		const closeBtn = this.el.createEl('button', { cls: 'wcc-settings-close', text: 'Close' });
 		closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.close(); });
+	}
+
+	/** Auto-close finished sessions. OFF unless a threshold is chosen here: the memory tracker's
+	 *  design refuses auto-closing outright, and this is that refusal overridden knowingly — so
+	 *  it is never on for anyone who has not opted in, and the row says exactly what it will and
+	 *  will not touch. */
+	private renderAutoClose(parent: HTMLElement, raw: unknown): void {
+		const cur = parseAutoClose(raw);
+		const s = parent.createDiv({ cls: 'wcc-settings-section' });
+		s.createDiv({ cls: 'wcc-settings-sub', text: 'Auto-close finished sessions — off unless you pick a threshold' });
+		const row = s.createDiv({ cls: 'wcc-settings-row' });
+		const sel = row.createEl('select', { cls: 'wcc-settings-input', attr: { title: 'Auto-close threshold' } });
+		const choices = [...AUTO_CLOSE_CHOICES];
+		// A threshold written by hand that the list does not offer is still shown as what it is.
+		if (cur.enabled && !choices.some((c) => c.ms === cur.idleMs)) choices.push({ label: thresholdLabel(cur.idleMs), ms: cur.idleMs });
+		const off = sel.createEl('option', { text: 'Off', value: '0' });
+		if (!cur.enabled) off.selected = true;
+		for (const c of choices) {
+			const o = sel.createEl('option', { text: `after ${c.label} idle and untouched`, value: String(c.ms) });
+			if (cur.enabled && c.ms === cur.idleMs) o.selected = true;
+		}
+		s.createDiv({
+			cls: 'wcc-settings-note',
+			text: 'Only worker sessions that have finished and been left alone that long — never one waiting on a question '
+				+ 'or a menu, never one showing an error, never the overseer or a journal. Typing into a tile, centering it '
+				+ 'or resurfacing it resets its clock. Every batch is named a minute before it closes, with a Keep button. '
+				+ 'Closing parks uncommitted work and keeps the worktree, branch and conversation: Coordination panel → '
+				+ 'its branch → Reopen brings a session back.',
+		});
+		sel.addEventListener('change', () => {
+			void (async () => {
+				const ms = Number(sel.value);
+				const next = ms > 0 ? { enabled: true, idleMs: ms } : { enabled: false };
+				const cfg = await this.deps.getConfig();
+				await this.deps.setConfig({ ...cfg, autoClose: next });
+				this.deps.onAutoCloseChange?.(next);
+				this.deps.toast(ms > 0
+					? `Auto-close on — finished sessions left alone over ${thresholdLabel(ms)} are closed after a warning`
+					: 'Auto-close off — nothing closes on its own', 'success');
+			})();
+		});
 	}
 
 	private async addDestination(): Promise<void> {

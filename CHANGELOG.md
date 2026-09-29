@@ -3,6 +3,31 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
+## Unreleased
+
+**🧹 Finished sessions left alone can close themselves — off unless you turn it on**
+- Measured on a 24-hour-old app: **47 `claude` processes holding 7.9 GB** against 5 terminals
+  on the floor. The memory panel could already close them in bulk, but only when someone opened
+  it, picked a threshold and confirmed — a chore nobody does.
+- **⚙ Settings → Auto-close finished sessions**: Off (the default) or 1 / 2 / 4 / 8 hours. While
+  it is off nothing is even watching; a missing or malformed setting reads as off.
+- **Idle is not finished.** A session sitting at "Do you want to proceed? 1) Yes 2) No" is idle
+  by every measure — and has been idle for an hour precisely *because* it is waiting for you. So
+  on top of the manual bulk close's rules (never busy, never the usage probe, never a dead tile)
+  it never touches a session at a prompt or a menu (the judgement `handleReady` already makes
+  before firing a watch), never one showing an error, never the overseer, a journal, a folder
+  target or the locked tile.
+- **Left alone means left alone.** Typing into a tile, answering it from the chat, clicking or
+  Alt+arrowing onto it, locking it or resurfacing it resets its clock. The app centering a tile
+  on its own does not.
+- **Warned, never silent.** A notice names every session a minute before anything closes, with
+  **Keep them** and **Close now**. It re-checks every 10 s: anything that starts working, hits a
+  prompt, errors or is touched in that minute is dropped and named as spared. What was closed
+  stays on screen until dismissed, so a floor that emptied while you were away says so.
+- **Reversible.** It closes through the same path as the memory panel: uncommitted work is
+  parked as a `wip:` commit, the worktree and branch are kept, only the process is killed.
+  Coordination panel → the branch → Reopen brings the conversation back.
+
 ## 0.8.0 — 2026-09-29
 
 **📊 A floor report: the whole floor in one file, for tools and for people**

@@ -23,6 +23,9 @@ import { MemoryWidget } from './ui/memory-widget';
 import { MemoryMonitor } from './terminals/memory-monitor';
 import { buildFloorReport } from './terminals/floor-report';
 import { FloorReportPublisher, vaultReportTarget } from './terminals/floor-report-publisher';
+import { AutoCloser } from './terminals/auto-closer';
+import { parseAutoClose } from './terminals/auto-close';
+import { AutoCloseNoticeView } from './ui/auto-close-notice';
 import type { SessionClaim } from './terminals/session-memory';
 import { RolesView } from './ui/roles-view';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
@@ -73,6 +76,9 @@ async function main(): Promise<void> {
 
 		const { sidecarDir, userData, appRoot, version, isDev } = await window.wcc.paths();
 		const cfg = await window.wcc.getConfig();
+		// Off unless explicitly opted into — a missing or malformed setting reads as off.
+		let autoCloseCfg = parseAutoClose(cfg.autoClose);
+		let autoCloser: AutoCloser | null = null;
 
 		// Renderer-aging telemetry (perf-log.jsonl in userData) — long-lived instances degrade;
 		// this gives the next investigation data instead of guesses.
@@ -283,6 +289,7 @@ async function main(): Promise<void> {
 			setConfig: (c) => window.wcc.setConfig(c),
 			toast,
 			onOverseerNameChange: (name) => grids.forEach((g) => g.setOverseerName(name)),
+			onAutoCloseChange: (raw) => { autoCloseCfg = parseAutoClose(raw); autoCloser?.apply(); },
 		});
 		settingsBtn.addEventListener('click', () => { void settingsPanel.toggle(appEl); });
 
@@ -320,21 +327,43 @@ async function main(): Promise<void> {
 			return out;
 		};
 		const memoryMonitor = new MemoryMonitor({ claims: allClaims });
+		// The memory panel's close and auto-close share ONE close path: endSessionKeepingWork parks
+		// uncommitted work, keeps the branch and worktree, and kills only the process — so the
+		// transcript (keyed by worktree path) survives and Reopen brings the session back.
+		const endSessionKeepingWork = async (workspaceId: string, key: string): Promise<boolean> => {
+			const tileId = Number(key.slice(key.lastIndexOf(':') + 1));
+			if (!Number.isFinite(tileId)) return false;
+			return (await grids.get(workspaceId)?.endSessionKeepingWork(tileId)) ?? false;
+		};
 		const memoryPanel = new MemoryPanel({
 			monitor: memoryMonitor,
-			endSession: async (workspaceId, key) => {
-				const tileId = Number(key.slice(key.lastIndexOf(':') + 1));
-				if (!Number.isFinite(tileId)) return false;
-				return (await grids.get(workspaceId)?.endSessionKeepingWork(tileId)) ?? false;
-			},
+			endSession: endSessionKeepingWork,
 			toast,
 		});
+
+		// Auto-close finished sessions. OFF unless Settings opted in with a threshold; while off it
+		// holds no subscription, so nothing exists that could close a session. auto-close.ts says
+		// what it refuses to touch, and why.
+		const autoCloseNotice = new AutoCloseNoticeView();
+		autoCloser = new AutoCloser({
+			config: () => autoCloseCfg,
+			subscribe: (ms, fn) => memoryMonitor.subscribe(ms, fn),
+			refresh: () => memoryMonitor.refreshNow(),
+			facts: (key) => {
+				const cut = key.lastIndexOf(':');
+				const tileId = Number(key.slice(cut + 1));
+				return Number.isFinite(tileId) ? grids.get(key.slice(0, cut))?.autoCloseFacts(tileId) : undefined;
+			},
+			endSession: endSessionKeepingWork,
+			notice: autoCloseNotice,
+		});
+		autoCloser.apply();
 		// The gauge is the ONLY way into the panel now. The old `🧠 Memory` button is gone: a
 		// number you have to ask for cannot warn you, and two entry points to one panel is
 		// clutter.
 		const memoryWidget = new MemoryWidget(memoryMonitor, { onOpen: () => memoryPanel.toggle(appEl) });
 		memoryWidget.render(memHost);
-		window.addEventListener('beforeunload', () => { memoryPanel.close(); memoryWidget.dispose(); memoryMonitor.dispose(); });
+		window.addEventListener('beforeunload', () => { memoryPanel.close(); autoCloser?.dispose(); autoCloseNotice.hide(); memoryWidget.dispose(); memoryMonitor.dispose(); });
 
 		// 📊 Floor report (see the vault's "Floor Report and Task Extrapolation" design): one
 		// object joining every tab, target, worktree and terminal, written as floor-report.json

@@ -831,3 +831,44 @@ html, body {
 .wcc-mem-bulk { background: var(--background-secondary-alt); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
 .wcc-mem-bulk:hover { border-color: var(--color-red, #d2453e); }
 .wcc-mem-close { margin-left: auto; background: var(--background-secondary-alt); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+
+/* Auto-close warning. Its own element, not a toast: a toast can queue behind three others,
+   expires on its own and dismisses on any click — a warning that exists to be SEEN before
+   sessions close can afford none of that. Opaque, top-centre, and only its buttons act. */
+.wcc-settings-note { color: var(--text-muted); font-size: 11.5px; line-height: 1.4; margin-top: 6px; max-width: 440px; }
+.wcc-autoclose {
+	position: fixed;
+	top: 52px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 10000;
+	width: min(520px, calc(100vw - 32px));
+	padding: 12px 14px;
+	border-radius: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--color-yellow);
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	font: 13px system-ui, -apple-system, 'Segoe UI', sans-serif;
+	line-height: 1.4;
+	box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
+	overflow-wrap: anywhere;
+}
+.wcc-autoclose-result { border-left-color: var(--color-cyan); }
+.wcc-autoclose-title { font-weight: 600; margin-bottom: 6px; }
+.wcc-autoclose-list { margin: 0 0 6px; padding-left: 18px; max-height: 40vh; overflow-y: auto; }
+.wcc-autoclose-detail { color: var(--text-muted); font-size: 12px; }
+.wcc-autoclose-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.wcc-autoclose-actions button {
+	background: transparent;
+	border: 1px solid var(--text-muted);
+	border-radius: 5px;
+	color: var(--text-normal);
+	cursor: pointer;
+	font: inherit;
+	font-size: 12px;
+	padding: 3px 12px;
+	font-variant-numeric: tabular-nums;
+}
+.wcc-autoclose-actions button:hover { background: var(--background-modifier-border); border-color: var(--text-normal); }
+.wcc-autoclose-keep { border-color: var(--text-normal) !important; font-weight: 600 !important; }
