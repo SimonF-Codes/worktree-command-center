@@ -140,8 +140,8 @@ describe('the warning window re-evaluates rather than trusting the first look', 
 
 describe('the notices name what is at stake', () => {
 	it('the warning names every session, with its workspace and idle time', () => {
-		const v = warningNotice([row('alpha'), row('beta')], HOUR, 59_400, NOW);
-		expect(v.title).toContain('2 finished sessions in 60s');
+		const v = warningNotice([row('alpha'), row('beta')], HOUR, NOW);
+		expect(v.title).toBe('Closing 2 finished sessions — idle and untouched over 1 hour');
 		expect(v.lines).toHaveLength(2);
 		expect(v.lines[0]).toMatch(/^alpha \(W, idle /);
 		expect(v.lines[1]).toMatch(/^beta \(W, idle /);
@@ -150,7 +150,7 @@ describe('the notices name what is at stake', () => {
 
 	it('past eight it names eight and counts the rest', () => {
 		const rows = Array.from({ length: 11 }, (_, i) => row(`s${i}`));
-		const v = warningNotice(rows, HOUR, 60_000, NOW);
+		const v = warningNotice(rows, HOUR, NOW);
 		expect(v.lines).toHaveLength(9);
 		expect(v.lines[8]).toBe('…and 3 more');
 	});

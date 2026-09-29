@@ -143,12 +143,12 @@ export interface NoticeView {
 	detail: string;
 }
 
-/** The warning, while the window is open. */
-export function warningNotice(batch: readonly MemoryRow[], idleMs: number, msLeft: number, now: number): NoticeView {
+/** The warning, while the window is open. The countdown itself is the renderer's, so the copy
+ *  does not have to be rebuilt every second. */
+export function warningNotice(batch: readonly MemoryRow[], idleMs: number, now: number): NoticeView {
 	const n = batch.length;
-	const secs = Math.max(0, Math.ceil(msLeft / 1000));
 	return {
-		title: `Closing ${n} finished session${n === 1 ? '' : 's'} in ${secs}s — idle and untouched over ${thresholdLabel(idleMs)}`,
+		title: `Closing ${n} finished session${n === 1 ? '' : 's'} — idle and untouched over ${thresholdLabel(idleMs)}`,
 		lines: nameList(batch, now),
 		detail: 'Uncommitted work is parked as a wip commit; each conversation, worktree and branch is kept. '
 			+ 'Anything that starts working, asks a question or is touched before then is left alone. '
