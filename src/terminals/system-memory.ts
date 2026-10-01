@@ -346,7 +346,7 @@ export function outsideCliSummary(m: MachineAttribution): string | null {
 	if (!t.claudeCount) return null;
 	return `${t.claudeCount} claude.exe process${t.claudeCount === 1 ? '' : 'es'} holding ${formatBytes(t.claudeBytes)} `
 		+ `belong${t.claudeCount === 1 ? 's' : ''} to neither this app nor the Claude desktop app — CLI sessions started `
-		+ 'outside it. Nothing on the floor tracks them, and auto-close cannot reach them.';
+		+ 'outside this app. Nothing on the floor tracks them, and auto-close cannot reach them.';
 }
 
 // ---------------------------------------------------------------------------------------------

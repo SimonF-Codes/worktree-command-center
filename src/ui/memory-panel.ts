@@ -7,7 +7,20 @@ import {
 } from '../terminals/session-memory';
 import { STALE_MS, type CloseableTree } from '../terminals/unattributed-tracker';
 import { killProcessTree, type KillResult } from '../terminals/kill-tree';
+import type { ProcRow } from '../terminals/process-snapshot';
+import { ServiceCache } from '../terminals/service-snapshot';
+import {
+	buildSystemView, hostLabel, outsideCliSummary, svchostCaveat, svchostHeadline, type SystemView,
+} from '../terminals/system-memory';
 import { promptForConfirm } from './prompt-dialog';
+
+/** The panel's two views. Split by QUESTION, not by data: Sessions is "what can I close",
+ *  System is "what is the machine doing". Both render from the one snapshot the panel's single
+ *  subscription receives, so they cannot disagree with each other. */
+export type MemoryView = 'sessions' | 'system';
+
+/** How many rows of each System list are shown before the rest are folded into a count. */
+const SYSTEM_TOP = 8;
 
 /** How fast the SHARED poller runs while this panel is open.
  *
@@ -52,6 +65,9 @@ export interface MemoryPanelDeps {
 	/** Free memory, re-read on every render for the reason the widget re-reads it: unlike the
 	 *  total it moves. A function, not a number. Defaults to `os.freemem()`. */
 	freeRamBytes?: () => number;
+	/** The System view's service map (Win32_Service). Injectable so a test can count the queries
+	 *  without spawning PowerShell. */
+	services?: ServiceCache;
 }
 
 /** "Session memory": what every live session is costing in RAM, across every workspace, and
@@ -65,9 +81,15 @@ export class MemoryPanel {
 	private bodyEl: HTMLElement | null = null;
 	private unsubscribe: (() => void) | null = null;
 	private report: MemoryReport | null = null;
+	/** The snapshot `report` was rolled up from — what the System view walks. Never re-queried. */
+	private rows: readonly ProcRow[] = [];
 	private bulkMs = BULK_CHOICES[1]!.ms;
+	private view: MemoryView = 'sessions';
+	private readonly services: ServiceCache;
 
-	constructor(private deps: MemoryPanelDeps) {}
+	constructor(private deps: MemoryPanelDeps) {
+		this.services = deps.services ?? new ServiceCache();
+	}
 
 	toggle(parent: HTMLElement): void {
 		if (this.el) { this.close(); return; }
@@ -81,9 +103,15 @@ export class MemoryPanel {
 		this.renderShell();
 		// Subscribing hands over the last known report straight away, so the panel opens onto
 		// the widget's figure rather than flashing "Measuring…" for a third of a second.
-		this.unsubscribe = this.deps.monitor.subscribe(PANEL_POLL_MS, (r) => {
+		//
+		// ONE subscription for both views. Switching view never subscribes, never unsubscribes and
+		// never measures: the System view is a different reading of the same rows, which is what
+		// makes it impossible for the two to disagree — and impossible for it to add a poller.
+		this.unsubscribe = this.deps.monitor.subscribe(PANEL_POLL_MS, (r, rows) => {
 			if (!this.el) return; // closed while a snapshot was in flight
 			this.report = r;
+			this.rows = rows;
+			if (this.view === 'system') void this.refreshServices(false);
 			this.renderBody();
 		});
 		void this.refresh();
@@ -92,20 +120,59 @@ export class MemoryPanel {
 	close(): void {
 		this.unsubscribe?.();
 		this.unsubscribe = null;
+		// The service map is only ever held while someone is looking at it.
+		this.services.clear();
 		this.el?.remove();
 		this.el = null;
 		this.bodyEl = null;
+	}
+
+	/** Which view is showing. For tests and for the app; switching is a click on the tab. */
+	currentView(): MemoryView { return this.view; }
+
+	showView(v: MemoryView): void {
+		if (v === this.view) return;
+		this.view = v;
+		// Leaving System drops the service map, for the same reason closing the panel does.
+		if (v === 'system') void this.refreshServices(false);
+		else this.services.clear();
+		this.renderShell();
+		this.renderBody();
 	}
 
 	private renderShell(): void {
 		if (!this.el) return;
 		this.el.empty();
 		const head = this.el.createDiv({ cls: 'wcc-mem-head' });
-		head.createSpan({ cls: 'wcc-mem-title', text: '🧠 Session memory' });
+		head.createSpan({ cls: 'wcc-mem-title', text: '🧠 Memory' });
+		const tabs = head.createDiv({ cls: 'wcc-mem-tabs' });
+		for (const [v, label, title] of [
+			['sessions', 'Sessions', 'What every session costs, and what can be closed'],
+			['system', 'System', 'What the whole machine is spending memory on — read-only'],
+		] as const) {
+			const t = tabs.createEl('button', {
+				cls: `wcc-mem-tab${this.view === v ? ' is-active' : ''}`, text: label, attr: { title, 'data-view': v },
+			});
+			t.addEventListener('click', () => this.showView(v));
+		}
 		const refreshBtn = head.createEl('button', { cls: 'wcc-mem-refresh', text: '⟳', attr: { title: 'Measure now' } });
 		refreshBtn.addEventListener('click', () => void this.refresh());
 
 		this.bodyEl = this.el.createDiv({ cls: 'wcc-mem-body' });
+
+		if (this.view === 'system') {
+			// Said where the buttons would be, because their absence is a decision, not a gap.
+			this.el.createDiv({
+				cls: 'wcc-mem-note',
+				text: 'Read-only, deliberately. Nothing here stops, disables or ends a Windows service or process: '
+					+ 'closing a session is reversible and Reopen brings it back, but stopping a service can take '
+					+ 'audio, networking or the firewall down with no undo.',
+			});
+			const foot = this.el.createDiv({ cls: 'wcc-mem-foot' });
+			const closeBtn = foot.createEl('button', { cls: 'wcc-mem-close', text: 'Close' });
+			closeBtn.addEventListener('click', () => this.close());
+			return;
+		}
 
 		// Stated up front, because it is what makes the buttons below easy to press. Verified,
 		// not assumed: transcripts in ~/.claude/projects are keyed by worktree path and outlive
@@ -136,12 +203,24 @@ export class MemoryPanel {
 	 *  subscription callback either way. */
 	private async refresh(): Promise<void> {
 		await this.deps.monitor.refreshNow();
+		// ⟳ on the System view asks the services too — the one way to see a service that just
+		// started without waiting out the cache's floor.
+		if (this.view === 'system') await this.refreshServices(true);
+	}
+
+	/** Ask Win32_Service if the cache says it is worth it, then repaint. Only ever called while the
+	 *  System view is showing. */
+	private async refreshServices(force: boolean): Promise<void> {
+		const before = this.services.latest();
+		const after = await this.services.refresh(this.rows, force);
+		if (after !== before && this.el && this.view === 'system') this.renderBody();
 	}
 
 	private renderBody(): void {
 		const body = this.bodyEl;
 		if (!body) return;
 		body.empty();
+		if (this.view === 'system') { this.renderSystem(body); return; }
 		const r = this.report;
 		if (!r) { body.createDiv({ cls: 'wcc-mem-empty', text: 'Measuring…' }); return; }
 		if (!r.sessions.length && !r.unattributed.procCount && !r.appSelfBytes) {
@@ -176,6 +255,119 @@ export class MemoryPanel {
 
 		const selected = new Set(idleLongerThan(r.sessions, this.bulkMs, now).map((s) => s.key));
 		for (const s of r.sessions) this.renderRow(body, s, now, selected.has(s.key));
+	}
+
+	/** "What is this machine spending memory on."
+	 *
+	 *  READ-ONLY, and it must stay that way: no row in this view carries a button. The symmetry with
+	 *  the Sessions view's Close is superficial — closing a finished session is reversible, while
+	 *  stopping a Windows service can break audio, networking or the firewall with no undo. If a
+	 *  control is ever added here for consistency, that is the mistake this comment exists to stop.
+	 *
+	 *  Rendered from the monitor's rows, never from a snapshot of its own. */
+	private renderSystem(body: HTMLElement): void {
+		if (!this.report) { body.createDiv({ cls: 'wcc-mem-empty', text: 'Measuring…' }); return; }
+		if (!this.rows.length) {
+			body.createDiv({ cls: 'wcc-mem-empty', text: 'No process snapshot available on this platform.' });
+			return;
+		}
+		const v: SystemView = buildSystemView(this.rows, this.deps.monitor.appPid(), this.services.latest());
+		const total = this.deps.totalRamBytes ?? os.totalmem();
+		const free = this.deps.freeRamBytes ? this.deps.freeRamBytes() : os.freemem();
+
+		const box = body.createDiv({ cls: 'wcc-mem-total' });
+		const line = box.createDiv({ cls: 'wcc-mem-total-line' });
+		line.createSpan({ text: `${formatBytes(Math.max(0, total - free))} in use of ${formatBytes(total)}` });
+		line.createSpan({ cls: 'wcc-mem-total-sub', text: `${formatBytes(free)} free` });
+		box.createDiv({
+			cls: 'wcc-mem-total-meta',
+			text: `${this.rows.length} processes, working sets summing to ${formatBytes(v.machine.totalBytes)}. `
+				+ 'Shared pages count once per process, so the sum is not the same figure as "in use".',
+		});
+
+		// Before anything else: it is often the single biggest line, and the worst one to chase.
+		if (v.compression) {
+			const el = this.sysRow(body, 'Memory Compression', v.compression.rssBytes, 'wcc-sys-symptom', 'symptom');
+			el.createDiv({ cls: 'wcc-mem-sub', text: v.compression.label });
+		}
+
+		this.section(body, 'By owner — attributed by process tree, never by name');
+		const m = v.machine;
+		this.sysRow(body, 'This app (Worktree Command Center)', m.wcc.rssBytes)
+			.createDiv({ cls: 'wcc-mem-sub', text: `${m.wcc.procCount} process${m.wcc.procCount === 1 ? '' : 'es'} — every session on the floor, see Sessions` });
+		if (m.desktop.procCount) {
+			this.sysRow(body, 'Claude desktop app', m.desktop.rssBytes)
+				.createDiv({ cls: 'wcc-mem-sub', text: `${m.desktop.procCount} processes — its own helpers, not leaked subagents` });
+		}
+		const outside = outsideCliSummary(m);
+		if (outside) {
+			const el = this.sysRow(body, '⚠ Claude CLI outside this app', m.outsideCliTotal.rssBytes, 'wcc-sys-outside');
+			el.createDiv({ cls: 'wcc-mem-sub', text: outside });
+			for (const c of m.outsideCli) {
+				const from = c.parentName ? `started from ${c.parentName}` : 'its parent has exited';
+				el.createDiv({
+					cls: 'wcc-mem-sub wcc-sys-item',
+					text: `pid ${c.rootPid} · ${from} · ${c.procCount} process${c.procCount === 1 ? '' : 'es'} · ${formatBytes(c.rssBytes)}`,
+				});
+			}
+		}
+		const shown = m.programs.slice(0, SYSTEM_TOP);
+		for (const p of shown) {
+			this.sysRow(body, p.name, p.rssBytes)
+				.createDiv({ cls: 'wcc-mem-sub', text: `${p.procCount} process${p.procCount === 1 ? '' : 'es'}` });
+		}
+		this.more(body, m.programs.slice(SYSTEM_TOP), 'program');
+
+		this.section(body, 'svchost — by the services it hosts');
+		const s = v.svchost;
+		body.createDiv({ cls: 'wcc-mem-sub wcc-sys-lede', text: svchostHeadline(s) });
+		const caveat = svchostCaveat(s);
+		if (caveat) body.createDiv({ cls: 'wcc-mem-sub wcc-mem-hint', text: caveat });
+		for (const h of s.hosts.slice(0, SYSTEM_TOP)) {
+			const el = this.sysRow(body, hostLabel(h, s.servicesKnown), h.rssBytes);
+			const bits = [`pid ${h.pid}`];
+			if (h.group) bits.push(`-k ${h.group}`);
+			if (s.servicesKnown && h.services.length === 1) bits.push(h.services[0]!.displayName);
+			el.createDiv({ cls: 'wcc-mem-sub', text: bits.join(' · ') });
+		}
+		if (s.groups.length) {
+			body.createDiv({ cls: 'wcc-sys-subhead', text: 'Per -k group' });
+			for (const g of s.groups.slice(0, SYSTEM_TOP)) {
+				this.sysRow(body, g.group, g.rssBytes).createDiv({
+					cls: 'wcc-mem-sub',
+					text: `${g.hosts} process${g.hosts === 1 ? '' : 'es'} · ${g.services} service${g.services === 1 ? '' : 's'}`,
+				});
+			}
+			this.more(body, s.groups.slice(SYSTEM_TOP).map((g) => ({ rssBytes: g.rssBytes })), 'group');
+		}
+
+		this.section(body, 'VM-backed memory');
+		const vm = v.vm;
+		const vmEl = this.sysRow(body, vm.entries.length ? vm.entries.map((e) => e.name).join(', ') : 'vmmem', vm.entries.length ? vm.totalBytes : null);
+		vmEl.createDiv({ cls: 'wcc-mem-sub', text: vm.behind });
+		for (const f of vm.facts) vmEl.createDiv({ cls: 'wcc-mem-sub wcc-sys-item', text: f });
+	}
+
+	/** A System row: a name and a figure, and deliberately nothing to press. */
+	private sysRow(body: HTMLElement, name: string, bytes: number | null, extra = '', tag = ''): HTMLElement {
+		const el = body.createDiv({ cls: `wcc-mem-row wcc-sys-row${extra ? ` ${extra}` : ''}` });
+		const main = el.createDiv({ cls: 'wcc-mem-rowmain' });
+		const nameEl = main.createSpan({ cls: 'wcc-mem-name', text: name });
+		if (tag) nameEl.createSpan({ cls: 'wcc-mem-tag wcc-sys-tag', text: tag });
+		main.createSpan({ cls: 'wcc-mem-ram', text: bytes === null ? '—' : formatBytes(bytes) });
+		return el;
+	}
+
+	private section(body: HTMLElement, text: string): void {
+		body.createDiv({ cls: 'wcc-sys-head', text });
+	}
+
+	private more(body: HTMLElement, rest: ReadonlyArray<{ rssBytes: number }>, noun: string): void {
+		if (!rest.length) return;
+		body.createDiv({
+			cls: 'wcc-mem-sub wcc-sys-more',
+			text: `…and ${rest.length} more ${noun}${rest.length === 1 ? '' : 's'} · ${formatBytes(rest.reduce((a, x) => a + x.rssBytes, 0))}`,
+		});
 	}
 
 	/** The leak row, and the only place on the floor that offers to end a process no session

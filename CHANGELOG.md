@@ -3,6 +3,38 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
+## Unreleased
+
+**🖥 The memory panel answers "what is this machine spending memory on" — a System view**
+- The same analysis was run by hand from a terminal three times (Sept 16, Sept 29, Oct 1), and
+  each answer lived only in scrollback. Saving one would not help: free RAM went 0.7 → 13.2 GB
+  in two days and Memory Compression ran 1,058 → 3,892 → 1,471 MB. So this is a live view, not
+  a saved report.
+- The panel now has **Sessions** (unchanged) and **System** tabs. Both read the **same
+  snapshot** from the same single poller, so they cannot disagree. Switching tabs never
+  measures anything.
+- **svchost by hosted service.** "svchost: 1.9 GB" reads as one program. It is 98 separate
+  processes hosting 106 services, the heaviest 69 MB, because Windows gives each service its
+  own process on any machine with more than 3.5 GB of RAM. The view shows the heaviest hosts by
+  service name, then totals per `-k` group.
+- **The `-k` group is read from each service's image path** (`Win32_Service.PathName`). Windows
+  hides that path in the process's own command line unless the app is elevated (88 of 97 on
+  the machine this was built on), but not in the service list. A host that neither source
+  names is counted and explained, never shown as `?`.
+- **`claude.exe` is attributed by process tree, never by name.** It is three different things:
+  sessions under this app, the Claude desktop app and its Electron helpers, and **CLI sessions
+  started outside the app**. Nothing on the floor tracks that last kind and auto-close cannot
+  reach it. On the day this landed it was 5 processes holding 1.1 GB.
+- **vmmem says what is behind it**: WSL (which distro), Docker, another Hyper-V guest, or
+  nothing. It is an accounting entry for a VM, not a program, so a bare number gives you
+  nothing to act on.
+- **Memory Compression is labelled a symptom.** It is often the biggest line, and acting on it
+  is always wrong. Windows compresses pages under pressure and the line unwinds by itself.
+- **Read-only, deliberately.** No stop, disable or kill for any service. Closing a session can
+  be undone. Stopping a service can take audio, networking or the firewall down, and there is
+  no undo. `Win32_Service` is queried only while the System tab is showing, at most once a
+  minute unless you press ⟳.
+
 ## 0.9.0 — 2026-09-29
 
 **🧹 Finished sessions left alone can close themselves — off unless you turn it on**
