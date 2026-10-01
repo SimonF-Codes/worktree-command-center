@@ -189,6 +189,20 @@ describe('MemoryMonitor — one snapshot feeds everyone', () => {
 		expect(seen[0]).toBe(seen[1]); // the same report object, not two measurements
 	});
 
+	it('hands every subscriber the raw rows of THAT snapshot, so a machine-wide view needs no query of its own', async () => {
+		const { monitor, snapshots } = build();
+		const seen: Array<readonly ProcRow[]> = [];
+		monitor.subscribe(60_000, (_r, rs) => seen.push(rs));
+		await monitor.refreshNow();
+		// A late subscriber is handed the same rows it would have got on the tick.
+		monitor.subscribe(20_000, (_r, rs) => seen.push(rs));
+		expect(snapshots()).toBe(1);
+		expect(seen).toHaveLength(2);
+		expect(seen[0]).toBe(rows);
+		expect(seen[1]).toBe(rows);
+		expect(monitor.appPid()).toBe(APP);
+	});
+
 	it('concurrent refreshes share one snapshot', async () => {
 		const { monitor, snapshots } = build();
 		const [a, b] = await Promise.all([monitor.refreshNow(), monitor.refreshNow()]);

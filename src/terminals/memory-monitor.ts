@@ -38,7 +38,10 @@ export interface MemoryMonitorDeps {
 	now?: () => number;
 }
 
-export type MemorySubscriber = (report: MemoryReport) => void;
+/** `rows` is the raw snapshot the report was rolled up from — the SAME rows, not a second look.
+ *  The System view needs the whole machine rather than the app's subtree, and handing it this
+ *  snapshot is what lets it exist without a `Win32_Process` query of its own. */
+export type MemorySubscriber = (report: MemoryReport, rows: readonly ProcRow[]) => void;
 
 interface Sub { id: number; everyMs: number; fn: MemorySubscriber }
 
@@ -65,7 +68,7 @@ export class MemoryMonitor {
 		const sub: Sub = { id: this.nextId++, everyMs, fn };
 		this.subs.push(sub);
 		this.retune();
-		if (this.last) this.deliver(sub, this.last);
+		if (this.last) this.deliver(sub, this.last, this.lastRows);
 		let gone = false;
 		return () => {
 			if (gone) return;
@@ -82,7 +85,7 @@ export class MemoryMonitor {
 		const p = (async (): Promise<MemoryReport | null> => {
 			try {
 				const rows = await (this.deps.snapshot ?? snapshotProcesses)();
-				const report = attributeMemory(rows, this.deps.appPid ?? process.pid, this.deps.claims());
+				const report = attributeMemory(rows, this.appPid(), this.deps.claims());
 				this.last = report;
 				// The record of what has been unattributed, and for how long, is kept HERE rather
 				// than in the panel: the gauge polls at 60s with the panel shut, and the evidence a
@@ -93,7 +96,7 @@ export class MemoryMonitor {
 				this.lastRows = rows;
 				this.tracking = trackUnattributed(this.tracking, rows, report.unattributed.pids, this.clock());
 				// Copy: a subscriber may unsubscribe (the panel closing on a click) mid-delivery.
-				for (const s of [...this.subs]) this.deliver(s, report);
+				for (const s of [...this.subs]) this.deliver(s, report, rows);
 				return report;
 			} catch {
 				// An unreadable snapshot degrades to "no new data", never throws into a render loop.
@@ -108,6 +111,9 @@ export class MemoryMonitor {
 
 	/** The most recent report, or null before the first one lands. */
 	latest(): MemoryReport | null { return this.last; }
+
+	/** The pid attribution is measured against, so a view walking the same rows agrees with it. */
+	appPid(): number { return this.deps.appPid ?? process.pid; }
 
 	/** Which unattributed processes have been unattributed long enough, and often enough, to be
 	 *  safe to offer — and which pids to actually kill for them. See unattributed-tracker for
@@ -144,7 +150,7 @@ export class MemoryMonitor {
 	}
 
 	/** One subscriber throwing must not stop the others hearing about a leak. */
-	private deliver(sub: Sub, report: MemoryReport): void {
-		try { sub.fn(report); } catch { /* a broken view is not the monitor's problem */ }
+	private deliver(sub: Sub, report: MemoryReport, rows: readonly ProcRow[]): void {
+		try { sub.fn(report, rows); } catch { /* a broken view is not the monitor's problem */ }
 	}
 }
