@@ -3,7 +3,7 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
-## Unreleased
+## 0.10.0 — 2026-10-01
 
 **🖥 The memory panel answers "what is this machine spending memory on" — a System view**
 - The same analysis was run by hand from a terminal three times (Sept 16, Sept 29, Oct 1), and
