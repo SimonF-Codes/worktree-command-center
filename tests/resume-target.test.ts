@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { projectDirName, orphanTranscripts, pickResumeFile, type Transcript } from '../src/terminals/resume-target';
+import { projectDirName, normDir, orphanTranscripts, pickResumeFile, type Transcript } from '../src/terminals/resume-target';
 
 /** Windows paths, spelled with String.raw so the backslashes stay backslashes. */
 const PROJ = String.raw`C:\Users\fridl\.claude\projects\C--Users-fridl-AppData-Roaming-worktree-command-center--coordination--god-default`;
@@ -23,6 +23,19 @@ describe('projectDirName', () => {
 
 	it('leaves hyphens that are already there', () => {
 		expect(projectDirName(String.raw`C:\dev\worktree-command-center`)).toBe('C--dev-worktree-command-center');
+	});
+});
+
+describe('normDir', () => {
+	it('splits on either separator, so the host path flavour cannot matter', () => {
+		// path.dirname on POSIX returns "." for the backslash spelling — the CI-only failure.
+		expect(normDir(String.raw`a\b\c.jsonl`)).toBe('a/b');
+		expect(normDir('a/b/c.jsonl')).toBe('a/b');
+		expect(normDir(file(JOB))).toBe(PROJ.replace(/\\/g, '/').toLowerCase());
+	});
+
+	it('returns a bare name unchanged', () => {
+		expect(normDir('c.jsonl')).toBe('c.jsonl');
 	});
 });
 

@@ -14,8 +14,6 @@
 // folder is named with a short id (`45d9196d`) while its transcript carries the full uuid
 // (`45d9196d-8a96-…`), so keying by id silently matches nothing.
 
-import * as path from 'path';
-
 /** Claude Code's on-disk name for a working directory's transcript folder: every character that
  *  is not a letter or digit becomes a hyphen, so `C:\dev\Brain_2.0` → `C--dev-Brain-2-0`. */
 export function projectDirName(cwd: string): string {
@@ -35,6 +33,15 @@ function norm(p: string): string {
 	return p.replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
+/** The normalised folder holding `p`. Not `path.dirname`: that splits only on the HOST's
+ *  separators, so on a POSIX host a Windows `linkScanPath` came back as "." and no job was ever
+ *  recognised. Normalising first leaves one separator to split on, whatever the host. */
+export function normDir(p: string): string {
+	const n = norm(p);
+	const i = n.lastIndexOf('/');
+	return i < 0 ? n : n.slice(0, i);
+}
+
 /** Normalised paths of the transcripts owned by background jobs in `projectDir`.
  *
  *  At RESTORE time these are orphans by construction: no console for this home exists yet, so any
@@ -44,7 +51,7 @@ export function orphanTranscripts(jobs: readonly JobRecord[], projectDir: string
 	const out = new Set<string>();
 	for (const j of jobs) {
 		if (!j.linkScanPath) continue;
-		if (norm(path.dirname(j.linkScanPath)) === dir) out.add(norm(j.linkScanPath));
+		if (normDir(j.linkScanPath) === dir) out.add(norm(j.linkScanPath));
 	}
 	return out;
 }
