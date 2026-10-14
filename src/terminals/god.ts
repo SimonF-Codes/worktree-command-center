@@ -10,11 +10,11 @@ export function slug(name: string): string {
  *  autonomous multi-agent orchestration on top of max). '' (no flag) = CLI default. */
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] as const;
 
-// SUPPORTED EXTERNAL CONTRACT (see README "External dispatch"): Kane drops these through
-// `cos-coord`, but the wire format below — one JSON file per command, written temp-then-renamed
-// into `<coordDir>/god-outbox/` — is a documented integration point any local process may write
-// to directly. A shape change here is a breaking change to that contract, not just an internal
-// refactor; this file's tests (parseOutboxMessage) pin the shapes for that reason.
+// Kane's own channel (docs/architecture.md, "Two ways in"): `cos-coord` drops these as one JSON
+// file per command, written temp-then-renamed into `<coordDir>/god-outbox/`. It is NOT the
+// external API — that is the connector channel (docs/api.md, connectors.ts). The shapes are still
+// a contract between `cos-coord` and the app, which may be different builds mid-upgrade, so
+// this file's tests (parseOutboxMessage) pin them.
 export type OutboxMessage =
 	| { kind: 'tell'; target: string; message: string }
 	| { kind: 'watch'; target: string; note: string }

@@ -42,6 +42,37 @@ landed on `main`.
   `claude` was alive behind each.
 - `SessionBridge` now reports each death once, and says nothing more, output or exit, once its
   owner has asked for the kill. Every owner (tiles, overseer consoles, probes) gets the fix.
+**🔌 The connector channel gets a read side**
+- **`floor/state.json`** sits beside `floor/INDEX.md`: the same roster as JSON (`v: 1`), written
+  in the same snapshot pass, so the two can't disagree and nothing new polls. Per session: name,
+  kind (`terminal`/`journal`/`god`), repo, branch, worktree path, busy/idle, hidden, and
+  whether a connector `tell` can address it. It also carries the worktree ledger from the last
+  scan (what `worktrees.md` renders), with its own `scannedAt`. Written temp-then-rename, so a
+  program polling it never reads half a file.
+- **`wcc-client`**, a client for that channel, ships in `pty-sidecar/` beside `cos-coord`. Any
+  process on the machine — a plain `claude` session in another folder, a script — can run
+  `wcc-client floor`, `spawn <repo> --task …` and `tell <terminal> "…"` instead of hand-writing
+  envelopes, the temp-file rename and a poll loop. spawn and tell **block on the receipt**: exit 0
+  with the terminal's name, 2 with the app's reason when rejected, 3 when the app took the request
+  but didn't confirm in time. A request the app never picked up is **withdrawn** at the deadline,
+  so a spawn can't fire hours later when the app next starts.
+- It is a connector, not a looser `cos-coord`: it writes only into `connectors/<id>/requests/`,
+  never `god-outbox/`, and the id must still be registered in `config.json` — an unregistered
+  caller gets a rejected receipt.
+
+**📚 The reference docs move out of the README**
+- **`docs/api.md`** is the external API written as a contract: where things live, registration,
+  field tables for `state.json`, every request kind and the receipt, **every reject reason** in
+  the order they're checked, `wcc-client` with PATH setup and exit codes, and an end-to-end
+  example to paste.
+- **`docs/architecture.md`** covers the PTY sidecar and the scripts beside it, the coordination
+  directory file by file, Kane's `god-outbox/` vs the connector channel, and agent role files and
+  the 📖 Roles view.
+- The README is an overview again (340 → 152 lines). Each section that moved keeps its heading
+  with a link, so old links still land somewhere.
+- Code comments in `god.ts` and `coord-store.cjs` still called `god-outbox/` a supported
+  external contract, which the README had stopped saying long ago. They now say what it is: Kane's
+  channel, with outside callers sent to the connector channel.
 
 ## 0.10.0 — 2026-10-01
 
