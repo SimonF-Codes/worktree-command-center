@@ -55,7 +55,8 @@ export function promptForChoice(title: string, message: string, options: { id: s
 		msg.style.cssText = 'color:#b8bccb;margin-bottom:12px;line-height:1.45';
 
 		const list = document.createElement('div');
-		list.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-bottom:12px';
+		// Capped + scrolling: a list of every registered repo can run past the window.
+		list.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-bottom:12px;max-height:60vh;overflow:auto';
 
 		const done = (val: string | null): void => { dlg.close(); dlg.remove(); resolve(val); };
 
