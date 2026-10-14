@@ -5,6 +5,8 @@ landed on `main`.
 
 ## Unreleased
 
+## 0.12.0 — 2026-10-14
+
 **🛡 Closing or removing a worktree no longer deletes what a junction inside it points at**
 - **Removing a worktree used to delete the target of any junction or symlink inside it.**
   `git worktree remove`, with or without `--force`, deletes *through* a directory junction into
