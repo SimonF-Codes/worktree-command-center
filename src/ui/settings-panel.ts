@@ -22,6 +22,10 @@ export interface SettingsPanelDeps {
 	targets?: {
 		list: () => RepoConfig[];
 		move: (r: RepoConfig) => Promise<void>;
+		/** Worktrees still sit in the old shared root beside the repo (builds before 0.12). */
+		hasLegacyWorktrees?: (r: RepoConfig) => boolean;
+		/** Move them inside the repo — the same plan-first machinery as move, with the repo staying put. */
+		relayout?: (r: RepoConfig) => Promise<void>;
 		repoint: (r: RepoConfig) => Promise<void>;
 		forget: (r: RepoConfig) => Promise<void>;
 	};
@@ -150,6 +154,7 @@ export class SettingsPanel {
 				});
 			};
 			if (!r.folder) act('Move…', 'Move this repo and everything that points at it — shows the full plan first', t.move);
+			if (!r.folder && t.relayout && t.hasLegacyWorktrees?.(r)) act('Nest worktrees…', 'Move this repo\'s worktrees from the old shared .claude-worktrees folder beside it into <repo>/.claude-worktrees — transcripts and saved terminals follow; shows the full plan first', t.relayout);
 			act('Repoint…', 'The folder was moved by hand: point this target at where it is now', t.repoint);
 			act('Forget', 'Remove this target from the floor. Nothing on disk is touched', t.forget);
 		}

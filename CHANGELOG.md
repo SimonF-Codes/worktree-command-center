@@ -5,6 +5,32 @@ landed on `main`.
 
 ## Unreleased
 
+**📂 Worktrees live inside their own repo**
+- **New worktrees are created in `<repo>/.claude-worktrees/<branch>`**, not in a shared
+  `.claude-worktrees/<repo>/` folder beside the repo. A repo's worktrees now sit with it and
+  move with it.
+- **The repo's own `git status` stays clean.** `/.claude-worktrees/` is added to the repo's
+  `.git/info/exclude`. That file is local to this clone and never committed, so no tracked file
+  changes and nothing needs merging. The floor scan adds the rule to every repo target, and a
+  worktree is never created in a repo where the rule couldn't be written. Without it, every
+  primary checkout would show the folder as untracked, which reads as dirty and would make every
+  **Move…** refuse.
+- **Existing worktrees keep working where they are.** Everything finds a worktree by its
+  recorded path, so a machine with some repos migrated and some not works normally.
+- **⚙ Settings → Targets → Nest worktrees…** appears for any repo that still has worktrees in the
+  old shared folder. It is **Move…** with the repo staying put. You see the whole plan first.
+  Each worktree moves with `git worktree move`, which is atomic and rewrites both ends of the
+  link. Its Claude transcript is renamed so Reopen still finds it, and saved terminals are
+  repointed. The emptied old folders are removed. It refuses, rather than half-moves, if any
+  worktree it would move is dirty, open in a terminal, held open, locked, or has submodules
+  checked out (git won't move those). The repo's own checkout and the worktrees that aren't
+  moving can be in any state.
+- **A move or relayout that stops halfway resumes correctly.** The journal records which
+  worktrees it planned to relocate. A re-run can then tell a worktree it already moved apart from
+  one that was always inside the repo.
+- **Move…** now relocates worktrees from the old shared folder into the repo's new location,
+  instead of into a shared folder beside it.
+
 ## 0.11.0 — 2026-10-14
 
 **🚚 Move a repo, and everything that points at it moves too**

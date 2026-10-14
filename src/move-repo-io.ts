@@ -4,10 +4,11 @@ import * as path from 'path';
 import { runCommand } from './command-runner';
 import { snapshotProcesses } from './terminals/process-snapshot';
 import { projectDirName } from './terminals/resume-target';
+import { ensureWorktreesExcluded, WORKTREES_EXCLUDE } from './terminals/worktree-manager';
 import type { RepoConfig } from './terminals/terminals-grid';
 import {
 	planMove, plannedDestinations, isInside, remapPath, parseWorktreePorcelain, parseGitmodulesPaths, gitdirOf, isAbsoluteGitdir,
-	configPathRefs, type MoveFacts, type MovePlan, type WorktreeFact,
+	configPathRefs, type MoveFacts, type MovePlan, type WorktreeFact, type PathMove,
 } from './move-repo';
 
 // Moving a repo — the IO half. gatherMoveFacts reads everything planMove needs; executeMove runs
@@ -24,6 +25,9 @@ export interface GatherContext {
 	/** The current config.json, scanned for other paths inside the repo. */
 	config?: unknown;
 	projectsDir?: string;
+	/** Where executeMove keeps its journals: an unfinished run of this same move is read back, so
+	 *  the plan knows which worktrees it already relocated. */
+	journalDir?: string;
 	caseInsensitive?: boolean;
 	/** Probe the directories that would be renamed for a process holding them open (default on).
 	 *  The probe IS a rename — in place and straight back — because that is the only test Windows
@@ -75,11 +79,12 @@ export async function gatherMoveFacts(target: RepoConfig, to: string, ctx: Gathe
 
 	const facts: MoveFacts = {
 		from, to, repoName: target.name, fromExists, toExists, kind, folderTarget: !!target.folder,
-		worktrees: [], remotes: [], absoluteSubmodules: [], livePaths: ctx.livePaths, heldOpen: [],
+		worktrees: [], remotes: [], absoluteSubmodules: [], submoduleWorktrees: [], livePaths: ctx.livePaths, heldOpen: [],
 		transcriptDirs: [], existing: [], targets: ctx.targets,
 		configRefs: ctx.config ? configPathRefs(ctx.config, from, ci) : [], caseInsensitive: ci,
 	};
 	if (kind !== 'repo' || target.folder) return facts;
+	if (ctx.journalDir) facts.priorRelocations = readOpenJournal(ctx.journalDir, from, to)?.relocations ?? [];
 
 	const list = await runCommand('git', ['worktree', 'list', '--porcelain'], { cwd: here, timeoutMs: 15000 });
 	if (list.code !== 0) throw new Error(`git worktree list failed in ${here}: ${firstLine(list)}`);
@@ -117,6 +122,7 @@ export async function gatherMoveFacts(target: RepoConfig, to: string, ctx: Gathe
 		try { gm = fs.readFileSync(path.join(w.path, '.gitmodules'), 'utf8'); } catch { continue; }
 		for (const sub of parseGitmodulesPaths(gm)) {
 			const dotGit = path.join(w.path, sub, '.git');
+			if (!w.isMain && fs.existsSync(dotGit) && !facts.submoduleWorktrees!.includes(w.path)) facts.submoduleWorktrees!.push(w.path);
 			let content: string;
 			try { if (!fs.statSync(dotGit).isFile()) continue; content = fs.readFileSync(dotGit, 'utf8'); } catch { continue; }
 			const gd = gitdirOf(content);
@@ -135,7 +141,7 @@ export async function gatherMoveFacts(target: RepoConfig, to: string, ctx: Gathe
 	if (ctx.probe !== false) {
 		const draft = planMove(facts);
 		if (draft.refusals.length === 0) {
-			const dirs = [...(draft.resuming ? [] : [from]), ...draft.worktreeMoves.filter((m) => !m.done).map((m) => m.from)];
+			const dirs = [...(draft.resuming || draft.relayout ? [] : [from]), ...draft.worktreeMoves.filter((m) => !m.done).map((m) => m.from)];
 			const held: string[] = [];
 			for (const d of dirs) if (await probeRename(d) === 'held') held.push(d);
 			if (held.length) {
@@ -222,7 +228,23 @@ export interface ExecuteDeps {
 	applyAppState: (plan: MovePlan) => Promise<{ ok: boolean; detail: string }>;
 }
 
-interface Journal { from: string; to: string; startedAt: string; refs: Record<string, string>; heads: string[]; completedAt?: string }
+interface Journal {
+	from: string; to: string; startedAt: string; refs: Record<string, string>; heads: string[];
+	/** The worktree relocations the first attempt planned — how a resumed run recognises one it
+	 *  finished, now that a relocated worktree and a native one both sit inside the repo. */
+	relocations?: PathMove[];
+	completedAt?: string;
+}
+
+const journalPath = (journalDir: string, from: string): string => path.join(journalDir, `${projectDirName(path.resolve(from))}.json`);
+
+/** The journal of an earlier, UNFINISHED attempt at this same move (same from, same to), or null. */
+function readOpenJournal(journalDir: string, from: string, to: string): Journal | null {
+	try {
+		const j = JSON.parse(fs.readFileSync(journalPath(journalDir, from), 'utf8')) as Journal;
+		return path.resolve(j.to) === path.resolve(to) && !j.completedAt ? j : null;
+	} catch { return null; }
+}
 
 /** `<sha> <ref>` for every ref, plus the HEAD of every worktree (a detached HEAD is a commit no
  *  ref names). */
@@ -244,7 +266,7 @@ async function snapshotRefs(repo: string): Promise<{ refs: Record<string, string
  *  edit), so the state it stops in is one planMove replans from, and re-running finishes it. */
 export async function executeMove(plan: MovePlan, deps: ExecuteDeps): Promise<MoveResult> {
 	const projectsDir = deps.projectsDir ?? defaultProjectsDir();
-	const journal = path.join(deps.journalDir, `${projectDirName(path.resolve(plan.from))}.json`);
+	const journal = journalPath(deps.journalDir, plan.from);
 	const steps: MoveStep[] = [];
 	const stop = (label: string, detail: string): MoveResult => {
 		steps.push({ label, ok: false, detail });
@@ -253,15 +275,11 @@ export async function executeMove(plan: MovePlan, deps: ExecuteDeps): Promise<Mo
 	if (plan.refusals.length) return stop('Pre-flight', `The plan has ${plan.refusals.length} refusal(s); nothing was done.`);
 
 	// --- 0. what exists before: from the journal of an earlier attempt at THIS move, else now.
-	let before: Journal | null = null;
-	try {
-		const j = JSON.parse(fs.readFileSync(journal, 'utf8')) as Journal;
-		if (path.resolve(j.to) === path.resolve(plan.to) && !j.completedAt) before = j;
-	} catch { /* no earlier attempt */ }
+	let before = readOpenJournal(deps.journalDir, plan.from, plan.to);
 	if (!before) {
 		const snap = await snapshotRefs(plan.resuming ? plan.to : plan.from);
 		if (typeof snap === 'string') return stop('Recording refs before the move', snap);
-		before = { from: plan.from, to: plan.to, startedAt: new Date().toISOString(), ...snap };
+		before = { from: plan.from, to: plan.to, startedAt: new Date().toISOString(), ...snap, relocations: plan.worktreeMoves.map((m) => ({ from: m.from, to: m.to })) };
 		try { fs.mkdirSync(deps.journalDir, { recursive: true }); fs.writeFileSync(journal, JSON.stringify(before, null, 2), 'utf8'); }
 		catch (e) { return stop('Writing the move journal', (e as Error).message); }
 		steps.push({ label: `Recorded ${Object.keys(before.refs).length} refs`, ok: true, detail: plan.resuming ? 'resumed without a journal: recorded from the state the earlier run left' : journal });
@@ -269,8 +287,8 @@ export async function executeMove(plan: MovePlan, deps: ExecuteDeps): Promise<Mo
 		steps.push({ label: `Resuming — verifying against the ${Object.keys(before.refs).length} refs recorded ${before.startedAt}`, ok: true });
 	}
 
-	// --- 1. the repo directory
-	if (!plan.resuming) {
+	// --- 1. the repo directory (a relayout leaves it where it is)
+	if (!plan.resuming && !plan.relayout) {
 		const label = `Moving ${plan.from} → ${plan.to}`;
 		try {
 			fs.mkdirSync(path.dirname(plan.to), { recursive: true });
@@ -279,15 +297,22 @@ export async function executeMove(plan: MovePlan, deps: ExecuteDeps): Promise<Mo
 		steps.push({ label, ok: true });
 	}
 
-	// --- 2. both ends of every worktree link, in one pass
-	{
+	// --- 2. both ends of every worktree link, in one pass. A relayout moves only worktrees, and
+	// `git worktree move` rewrites both ends of each itself.
+	if (!plan.relayout) {
 		const label = `git worktree repair (${plan.repair.length} worktree${plan.repair.length === 1 ? '' : 's'})`;
 		const r = await runCommand('git', ['worktree', 'repair', ...plan.repair], { cwd: plan.to, timeoutMs: 30000 });
 		if (r.code !== 0) return stop(label, firstLine(r));
 		steps.push({ label, ok: true });
 	}
 
-	// --- 3. worktrees into the root the new location implies
+	// --- 3. worktrees into the repo. Excluded from git FIRST, so at no moment does the repo's own
+	// checkout show them as untracked (which reads as dirty, and would refuse the next Move).
+	if (plan.worktreeMoves.some((m) => !m.done)) {
+		const label = `Excluding ${WORKTREES_EXCLUDE} from git in ${plan.to} (.git/info/exclude)`;
+		try { await ensureWorktreesExcluded(plan.to); } catch (e) { return stop(label, (e as Error).message); }
+		steps.push({ label, ok: true });
+	}
 	for (const m of plan.worktreeMoves.filter((x) => !x.done)) {
 		const label = `git worktree move ${m.from} → ${m.to}`;
 		try { fs.mkdirSync(path.dirname(m.to), { recursive: true }); } catch (e) { return stop(label, (e as Error).message); }
@@ -315,9 +340,12 @@ export async function executeMove(plan: MovePlan, deps: ExecuteDeps): Promise<Mo
 
 	// --- 6. the old worktree root, if the move emptied it. rmdir, never rm: it only ever
 	// removes an EMPTY folder, so anything left behind (a worktree that stayed) keeps it.
-	if (plan.worktreeMoves.length && path.resolve(plan.oldWorktreeRoot) !== path.resolve(plan.newWorktreeRoot)) {
-		try { fs.rmdirSync(plan.oldWorktreeRoot); steps.push({ label: `Removed the empty ${plan.oldWorktreeRoot}`, ok: true }); }
-		catch { /* not empty, or already gone — either is fine */ }
+	// The shared root above it goes too once the last repo has left it.
+	if (plan.worktreeMoves.length) {
+		for (const dir of [plan.oldWorktreeRoot, path.dirname(plan.oldWorktreeRoot)]) {
+			try { fs.rmdirSync(dir); steps.push({ label: `Removed the empty ${dir}`, ok: true }); }
+			catch { break; /* not empty, or already gone — either is fine */ }
+		}
 	}
 
 	// --- 7. verify by reading back
