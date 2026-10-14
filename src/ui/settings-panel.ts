@@ -28,6 +28,8 @@ export interface SettingsPanelDeps {
 		relayout?: (r: RepoConfig) => Promise<void>;
 		repoint: (r: RepoConfig) => Promise<void>;
 		forget: (r: RepoConfig) => Promise<void>;
+		/** Remove merged, clean, unused worktrees across every repo — dry run first, always. */
+		prune?: () => Promise<void>;
 	};
 }
 
@@ -134,6 +136,17 @@ export class SettingsPanel {
 		if (!t) return;
 		const s = parent.createDiv({ cls: 'wcc-settings-section' });
 		s.createDiv({ cls: 'wcc-settings-sub', text: 'Targets — move a repo (worktrees, transcripts and config follow it), repoint one moved by hand, or forget one' });
+		if (t.prune) {
+			const prune = t.prune;
+			const b = s.createEl('button', { cls: 'wcc-settings-remove', text: 'Prune merged worktrees…', attr: { title: 'Remove worktrees whose work is already in their base branch, that are clean and that no terminal uses. Shows every worktree first — why it qualifies or is kept, and the Claude conversations each removal would orphan. Branches are never deleted.' } });
+			b.addEventListener('click', (e) => {
+				e.stopPropagation();
+				void (async () => {
+					try { await prune(); } catch (err) { this.deps.toast(`Prune failed: ${(err as Error).message}`, 'error'); }
+					await this.renderBody();
+				})();
+			});
+		}
 		const listEl = s.createDiv({ cls: 'wcc-settings-list' });
 		const repos = t.list();
 		if (!repos.length) listEl.createDiv({ cls: 'wcc-settings-empty', text: 'No targets yet — use ➕ Add folder.' });

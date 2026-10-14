@@ -163,11 +163,19 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  *  itself, almost always a process whose cwd is inside. Failing the rename-in-place is what rules
  *  out the destination. Not retried: the condition is deterministic until the holder exits. */
 export async function probeRename(dir: string): Promise<'free' | 'held' | 'absent'> {
+	const r = await probeRenameCode(dir);
+	return r === 'free' || r === 'absent' ? r : 'held';
+}
+
+/** probeRename, keeping the error a held directory gave: EBUSY is a sync engine (OneDrive),
+ *  EPERM/EACCES a process's working directory or a service's handle on the folder — the same
+ *  "cannot rename" with different fixes, so a caller that explains it needs to know which. */
+export async function probeRenameCode(dir: string): Promise<'free' | 'absent' | 'EPERM' | 'EACCES' | 'EBUSY'> {
 	const probe = `${dir}.wcc-move-probe-${process.pid}`;
 	try { fs.renameSync(dir, probe); } catch (e) {
 		const code = (e as NodeJS.ErrnoException).code ?? '';
 		if (code === 'ENOENT') return 'absent';
-		if (HELD_CODES.has(code)) return 'held';
+		if (HELD_CODES.has(code)) return code as 'EPERM' | 'EACCES' | 'EBUSY';
 		throw e;
 	}
 	// Putting it back is the one step that must not fail; something could grab the probe name in
@@ -181,7 +189,7 @@ export async function probeRename(dir: string): Promise<'free' | 'held' | 'absen
 
 /** Name the processes whose COMMAND LINE mentions a held directory. Finds some holders, not all —
  *  a shell that merely has its cwd there does not mention it — so an empty answer is not "none". */
-async function holdersByCommandLine(dirs: string[]): Promise<Map<string, string[]>> {
+export async function holdersByCommandLine(dirs: string[]): Promise<Map<string, string[]>> {
 	const out = new Map<string, string[]>();
 	const rows = await snapshotProcesses({ withCommandLine: true });
 	for (const d of dirs) {
