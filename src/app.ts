@@ -5,7 +5,10 @@ import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/termi
 import { parseGodSelfImprove } from './terminals/god';
 import { parseRoleLibrary } from './terminals/role-library';
 import { parseConnectors } from './terminals/connectors';
-import { discoverRepos, mergeRepos, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
+import { discoverRepos, mergeRepos, forgetRepo, retargetRepo, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
+import { planMove, describeMovePlan, describeRefusals, remapRepoLinks, samePath, isInside, type PathMove } from './move-repo';
+import { gatherMoveFacts, executeMove, describeMoveResult } from './move-repo-io';
+import { runCommand } from './command-runner';
 import { tabLinkOptions, toolbarForLink, defaultNewRepoParent, tabTitle, type TabLinkKind } from './tab-repo';
 import { defaultNewRepoParams, describeNewRepo, seedFiles } from './new-repo-params';
 import { findGh, createGitHubRemote } from './gh-cli';
@@ -60,6 +63,7 @@ declare global {
 			setConfig(c: any): Promise<boolean>;
 			addFolder(): Promise<string | null>;
 			newRepoLocation(): Promise<string | null>;
+			moveRepoLocation(name: string): Promise<string | null>;
 			pushFloorState(s: unknown): void;
 			onRemoteAction(cb: (a: { type: string; id?: number; repo?: string; base?: string | null; task?: string }) => void): void;
 			remoteInfo(): Promise<{ token: string; port: number; urls: string[] }>;
@@ -294,6 +298,12 @@ async function main(): Promise<void> {
 			toast,
 			onOverseerNameChange: (name) => grids.forEach((g) => g.setOverseerName(name)),
 			onAutoCloseChange: (raw) => { autoCloseCfg = parseAutoClose(raw); autoCloser?.apply(); },
+			targets: {
+				list: () => repos,
+				move: (r) => moveTargetInteractive(r),
+				repoint: (r) => repointTargetInteractive(r),
+				forget: (r) => forgetTargetInteractive(r),
+			},
 		});
 		settingsBtn.addEventListener('click', () => { void settingsPanel.toggle(appEl); });
 
@@ -822,6 +832,123 @@ async function main(): Promise<void> {
 		// initial commit so worktrees have a base branch), added to the floor like any other repo
 		// but not linked to a tab.
 		newRepoBtn.addEventListener('click', () => { void createRepoInteractive(''); });
+		// --- ⚙ Settings → Targets: move, repoint, forget (move-repo.ts / move-repo-io.ts) ---
+		// All three edit the app's OWN in-memory state and persist it: persist() rewrites the whole
+		// `repos` key from memory, so a config.json edited from outside while the app runs is
+		// overwritten — which is why the first repo move of 2026-10-14 needed a script that refused
+		// to run while the app was open, and why this has to live in-process.
+		const caseInsensitive = process.platform === 'win32';
+		const allLivePaths = (): string[] => [...grids.values()].flatMap((g) => g.livePaths());
+
+		/** Repoint everything the APP stores under a path map — the target, every tab linked to it,
+		 *  closed tabs' tombstones, saved terminals on disk and in each grid's memory — then read
+		 *  config.json back rather than trusting the write. */
+		async function applyPathMap(fromPath: string, toPath: string, map: readonly PathMove[]): Promise<{ ok: boolean; detail: string }> {
+			repos = retargetRepo(repos, fromPath, toPath);
+			workspaces = remapRepoLinks(workspaces, map, caseInsensitive);
+			closedWorkspaces = remapRepoLinks(closedWorkspaces, map, caseInsensitive);
+			grids.forEach((g, id) => g.setRepos(reposForWorkspace(repos, id)));
+			let inMemory = 0;
+			grids.forEach((g) => { inMemory += g.remapUnrestored(map, caseInsensitive); });
+			const onDisk = await TerminalsGrid.remapSessionPaths(sessionsFile, map, caseInsensitive);
+			persist();
+			await configWriter.idle();
+			bar.refresh();
+			const back = await window.wcc.getConfig().catch(() => ({}));
+			const saved: RepoConfig[] = Array.isArray(back.repos) ? back.repos : [];
+			if (!saved.some((r) => samePath(r.path, toPath, caseInsensitive)) || saved.some((r) => samePath(r.path, fromPath, caseInsensitive))) {
+				return { ok: false, detail: 'config.json does not show the repointed target after writing it' };
+			}
+			if (onDisk === null) return { ok: false, detail: 'config.json is repointed, but the saved-terminals file could not be rewritten' };
+			return { ok: true, detail: `target and linked tabs repointed; ${onDisk} saved terminal record${onDisk === 1 ? '' : 's'} rewritten${inMemory ? ` (+${inMemory} held in memory)` : ''}` };
+		}
+
+		/** Move a repo and everything that points at it. Nothing is written until the person has seen
+		 *  the whole plan — or every reason it is refused, with a Re-check for after they have closed
+		 *  the terminal or parked the work. A move that stops halfway says where, and Re-check picks
+		 *  it up from there: the plan is recomputed from what is on disk each time. */
+		async function moveTargetInteractive(r: RepoConfig): Promise<void> {
+			const parent = await window.wcc.moveRepoLocation(r.name);
+			if (!parent) return;
+			const dirName = await promptForTopic(`Move ${r.name} into ${parent}`, 'folder name', path.basename(r.path), 'Next');
+			if (!dirName || !dirName.trim()) return;
+			const to = path.join(parent, dirName.trim());
+			for (;;) {
+				toast(`Checking ${r.name}: worktrees, uncommitted work, open handles, transcripts…`, 'info');
+				let plan;
+				try {
+					const cfgNow = await window.wcc.getConfig();
+					plan = planMove(await gatherMoveFacts(r, to, { livePaths: allLivePaths(), targets: repos, config: cfgNow }));
+				} catch (e) { toast(`Couldn't read ${r.name}: ${(e as Error).message}`, 'error'); return; }
+				if (plan.refusals.length) {
+					const told = plan.warnings.length ? `\n\n${plan.warnings.map((w) => `⚠ ${w}`).join('\n')}` : '';
+					if (await promptForConfirm(`Can't move ${r.name} yet`, describeRefusals(plan) + told, 'Re-check')) continue;
+					return;
+				}
+				if (!await promptForConfirm(`Move ${r.name}?`, describeMovePlan(plan), plan.resuming ? 'Finish the move' : 'Move')) return;
+				const result = await executeMove(plan, {
+					journalDir: path.join(userData, 'repo-moves'),
+					applyAppState: (p) => applyPathMap(p.from, p.to, p.pathMap),
+				});
+				console.info('[wcc] repo move', r.name, result);
+				if (result.ok) {
+					statusSpan.textContent = `${repos.length} targets · moved ${r.name}`;
+					toast(`Moved ${r.name} → ${to}. All ${result.verify?.shas ?? 0} commits verified, ${plan.expectedWorktrees.length} worktree${plan.expectedWorktrees.length === 1 ? '' : 's'} resolve, ${plan.transcripts.length} transcript folder${plan.transcripts.length === 1 ? '' : 's'} followed.`, 'success', { durationMs: 15000 });
+					return;
+				}
+				if (await promptForConfirm(`Move of ${r.name} stopped`, describeMoveResult(result), 'Re-check and resume')) continue;
+				return;
+			}
+		}
+
+		/** For a folder already moved by hand: point the target (and tabs and saved terminals) at
+		 *  where it is now. Moves nothing. For a repo it also runs `git worktree repair` from the new
+		 *  location, which rewrites every linked worktree's pointer back to the repo — idempotent,
+		 *  and the one thing that is certainly broken after a hand-move. */
+		async function repointTargetInteractive(r: RepoConfig): Promise<void> {
+			const folder = await window.wcc.addFolder();
+			if (!folder) return;
+			if (samePath(folder, r.path, caseInsensitive)) { toast(`${r.name} already points at ${folder}`, 'info'); return; }
+			if (!r.folder && !fs.existsSync(path.join(folder, '.git'))) { toast(`${folder} has no .git — that is not the repo. Nothing was changed.`, 'error'); return; }
+			const live = allLivePaths().filter((p) => isInside(p, r.path, caseInsensitive));
+			if (live.length) { toast(`A terminal is still running in ${live[0]}. Close it before repointing ${r.name}.`, 'error'); return; }
+			const stillThere = fs.existsSync(r.path);
+			const msg = [
+				`${r.path}\n  → ${folder}`,
+				'',
+				'The target, every tab linked to it, and saved terminals are repointed. Nothing on disk moves.',
+				r.folder ? '' : 'git worktree repair runs in the new location so its worktrees find it again.',
+				'Claude transcripts are NOT renamed — to have them follow, use Move instead of moving by hand.',
+				stillThere ? `\n⚠ ${r.path} still exists. Repointing does not move it — are you sure this is the same repo?` : '',
+			].filter((l, i) => i === 1 || l !== '').join('\n');
+			if (!await promptForConfirm(`Repoint ${r.name}?`, msg, 'Repoint')) return;
+			if (!r.folder) {
+				const rep = await runCommand('git', ['worktree', 'repair'], { cwd: folder, timeoutMs: 30000 });
+				if (rep.code !== 0) toast(`git worktree repair in ${folder} failed: ${(rep.error ?? rep.stderr).trim().split('\n')[0]}. Repointing anyway — run it by hand.`, 'warn', { durationMs: 15000 });
+			}
+			const res = await applyPathMap(r.path, folder, [{ from: r.path, to: folder }]);
+			statusSpan.textContent = `${repos.length} targets`;
+			toast(res.ok ? `Repointed ${r.name} → ${folder}: ${res.detail}` : `Repointing ${r.name} failed: ${res.detail}`, res.ok ? 'success' : 'error');
+		}
+
+		/** Drop a target from the floor. Touches nothing on disk; running terminals keep running, and
+		 *  a tab linked to it shows as unlinked until the folder is added again. */
+		async function forgetTargetInteractive(r: RepoConfig): Promise<void> {
+			const linked = workspaces.filter((w) => w.repo && samePath(w.repo, r.path, caseInsensitive)).map((w) => w.name);
+			const msg = [
+				r.path,
+				'',
+				'It leaves the floor and every toolbar. Nothing on disk is touched — the repo, its worktrees and their transcripts all stay. Add the folder again to bring it back.',
+				linked.length ? `Linked tab${linked.length === 1 ? '' : 's'} (${linked.join(', ')}) will show as unlinked.` : '',
+			].filter((l, i) => i === 1 || l !== '').join('\n');
+			if (!await promptForConfirm(`Forget ${r.name}?`, msg, 'Forget')) return;
+			repos = forgetRepo(repos, r.path);
+			grids.forEach((g, id) => g.setRepos(reposForWorkspace(repos, id)));
+			persist();
+			bar.refresh();
+			statusSpan.textContent = `${repos.length} targets`;
+			toast(`Forgot ${r.name}`, 'success');
+		}
 	} catch (e) {
 		document.body.textContent = 'Startup error: ' + e;
 	}

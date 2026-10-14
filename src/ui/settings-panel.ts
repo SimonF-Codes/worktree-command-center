@@ -3,6 +3,8 @@ import { newDestinationId } from '../terminals/convert-destinations';
 import { promptForChoice, promptForTopic, promptForConfirm } from './prompt-dialog';
 import type { ToastVariant } from './toast-queue';
 import { parseAutoClose, thresholdLabel, AUTO_CLOSE_CHOICES } from '../terminals/auto-close';
+import type { RepoConfig } from '../terminals/terminals-grid';
+import * as fs from 'fs';
 
 export interface SettingsPanelDeps {
 	addFolder: () => Promise<string | null>;
@@ -13,6 +15,16 @@ export interface SettingsPanelDeps {
 	onOverseerNameChange?: (name: string) => void;
 	/** Apply a changed auto-close setting live — the raw value just saved as `autoClose`. */
 	onAutoCloseChange?: (raw: unknown) => void;
+	/** The registered targets and what can be done to one. Read from the APP, never from config:
+	 *  persist() rewrites the whole `repos` key from the app's memory, so the app has to make
+	 *  these edits itself or they are overwritten. Each action resolves once it is finished or
+	 *  abandoned; the list is redrawn after it either way. */
+	targets?: {
+		list: () => RepoConfig[];
+		move: (r: RepoConfig) => Promise<void>;
+		repoint: (r: RepoConfig) => Promise<void>;
+		forget: (r: RepoConfig) => Promise<void>;
+	};
 }
 
 /** Toggleable panel (same open/close pattern as the phone-floor panel): configure the "Convert
@@ -77,6 +89,7 @@ export class SettingsPanel {
 		});
 
 		this.renderAutoClose(this.el, cfg0.autoClose);
+		this.renderTargets(this.el);
 
 		const section = this.el.createDiv({ cls: 'wcc-settings-section' });
 		section.createDiv({ cls: 'wcc-settings-sub', text: 'Convert destinations — where a journal note\'s "Convert to…" can send it' });
@@ -106,6 +119,40 @@ export class SettingsPanel {
 
 		const closeBtn = this.el.createEl('button', { cls: 'wcc-settings-close', text: 'Close' });
 		closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.close(); });
+	}
+
+	/** Targets — the repos and folders on the floor. Until this existed a target could only ever
+	 *  be ADDED (mergeRepos appends), so one whose folder moved stayed in config.json forever.
+	 *  Move does the whole move in one go; Repoint is for a folder already moved by hand; Forget
+	 *  drops the entry and touches nothing on disk. */
+	private renderTargets(parent: HTMLElement): void {
+		const t = this.deps.targets;
+		if (!t) return;
+		const s = parent.createDiv({ cls: 'wcc-settings-section' });
+		s.createDiv({ cls: 'wcc-settings-sub', text: 'Targets — move a repo (worktrees, transcripts and config follow it), repoint one moved by hand, or forget one' });
+		const listEl = s.createDiv({ cls: 'wcc-settings-list' });
+		const repos = t.list();
+		if (!repos.length) listEl.createDiv({ cls: 'wcc-settings-empty', text: 'No targets yet — use ➕ Add folder.' });
+		for (const r of repos) {
+			const row = listEl.createDiv({ cls: 'wcc-settings-row' });
+			const info = row.createDiv({ cls: 'wcc-settings-row-info' });
+			const missing = !fs.existsSync(r.path);
+			info.createDiv({ cls: 'wcc-settings-row-label', text: `${r.folder ? '📁 ' : ''}${r.name}${missing ? ' · ⚠ folder not found' : ''}` });
+			info.createDiv({ cls: 'wcc-settings-row-sub', text: r.path });
+			const act = (label: string, title: string, run: (r: RepoConfig) => Promise<void>): void => {
+				const b = row.createEl('button', { cls: 'wcc-settings-remove', text: label, attr: { title } });
+				b.addEventListener('click', (e) => {
+					e.stopPropagation();
+					void (async () => {
+						try { await run(r); } catch (err) { this.deps.toast(`${label.replace('…', '')} failed: ${(err as Error).message}`, 'error'); }
+						await this.renderBody();
+					})();
+				});
+			};
+			if (!r.folder) act('Move…', 'Move this repo and everything that points at it — shows the full plan first', t.move);
+			act('Repoint…', 'The folder was moved by hand: point this target at where it is now', t.repoint);
+			act('Forget', 'Remove this target from the floor. Nothing on disk is touched', t.forget);
+		}
 	}
 
 	/** Auto-close finished sessions. OFF unless a threshold is chosen here: the memory tracker's

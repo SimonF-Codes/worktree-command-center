@@ -132,6 +132,17 @@ function createWindow(): void {
 	// IPC: pick where to create a NEW repo — `createDirectory` enables the native "New Folder"
 	// button so you can make a fresh folder right in the picker (the New repo flow then git-inits
 	// a named subfolder inside whatever you choose).
+	// IPC: pick the folder a repo is being MOVED into (Settings → Targets → Move). The repo keeps
+	// its own folder name inside whatever is chosen; the move plan is shown before anything moves.
+	ipcMain.handle('moveRepoLocation', async (_e, name: string) => {
+		const r = await dialog.showOpenDialog(win!, {
+			title: `Choose the folder to move ${String(name)} into`,
+			buttonLabel: 'Move it here',
+			properties: ['openDirectory', 'createDirectory'],
+		});
+		return r.canceled ? null : r.filePaths[0];
+	});
+
 	ipcMain.handle('newRepoLocation', async () => {
 		const r = await dialog.showOpenDialog(win!, {
 			title: 'Choose where to create the new repository (New Folder to make one here)',
