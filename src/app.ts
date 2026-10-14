@@ -5,10 +5,14 @@ import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/termi
 import { parseGodSelfImprove } from './terminals/god';
 import { parseRoleLibrary } from './terminals/role-library';
 import { parseConnectors } from './terminals/connectors';
-import { discoverRepos, mergeRepos, reposForWorkspace } from './workspace';
+import { discoverRepos, mergeRepos, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
+import { tabLinkOptions, toolbarForLink, defaultNewRepoParent, tabTitle, type TabLinkKind } from './tab-repo';
+import { defaultNewRepoParams, describeNewRepo, seedFiles } from './new-repo-params';
+import { findGh, createGitHubRemote } from './gh-cli';
+import { promptForNewRepo } from './ui/new-repo-dialog';
 import { SerialWriter } from './serial-writer';
 import { normalizeToolbars, setToolbarState, pruneToolbars, type WorkspaceToolbars } from './terminals/toolbar-state';
-import { createGitRepo } from './create-repo';
+import { createGitRepo, repoDirName } from './create-repo';
 import { UsageProbe } from './terminals/usage-probe';
 import { reapUsageProbeStrays } from './terminals/stray-reaper';
 import { UsageWidget } from './ui/usage-widget';
@@ -29,7 +33,7 @@ import { AutoCloseNoticeView } from './ui/auto-close-notice';
 import type { SessionClaim } from './terminals/session-memory';
 import { RolesView } from './ui/roles-view';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
-import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, type Workspace } from './terminals/workspace-store';
+import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, linkWorkspaceRepo, type Workspace } from './terminals/workspace-store';
 import { pickCloseRecords, summarizeClose, riskProbeTargets, buildCloseConfirm } from './terminals/close-summary';
 import { probeWorktreeRisks } from './terminals/close-risk';
 import {
@@ -430,6 +434,7 @@ async function main(): Promise<void> {
 			onClose: (id) => void onClose(id),
 			closedCount: () => closedWorkspaces.length,
 			onRecentlyClosed: () => void onRecentlyClosed(),
+			title: (w) => tabTitle(w, repos),
 		});
 		bar.render(terminalRoot);
 
@@ -506,12 +511,123 @@ async function main(): Promise<void> {
 		};
 		rolesBtn.addEventListener('click', () => { if (rolesView.isOpen) closeRoles(); else void openRoles(); });
 
+		// --- tabs born linked to a repo (tab-repo.ts) ---
+		// Where the last new repo went, so the next one is proposed beside it. Written by its own
+		// fresh-read job below rather than by persist(), the same way autoClose/roleLibrary are
+		// left to their own writers: persist() never re-writes it from a stale snapshot.
+		let lastNewRepoParent: unknown = cfg.newRepoParent;
+
+		const registerRepos = (found: RepoConfig[]): void => {
+			repos = mergeRepos(repos, found);
+			// Each grid gets its OWN scoped view of the list (untagged repos go everywhere).
+			grids.forEach((g, id) => g.setRepos(reposForWorkspace(repos, id)));
+		};
+
+		/** The one way to make a repo: form → confirm (what and where, before anything is written)
+		 *  → createGitRepo → optional GitHub remote. Shared by the 🆕 button and the new-tab flow.
+		 *  Resolves the REGISTERED target — looked up by path, since mergeRepos keeps an existing
+		 *  entry — or null when nothing was created. */
+		async function createRepoInteractive(suggestedName: string): Promise<{ repo: RepoConfig; branch: string } | null> {
+			const gh = findGh();
+			let params = defaultNewRepoParams(suggestedName, defaultNewRepoParent(lastNewRepoParent, repos));
+			let error: string | undefined;
+			for (;;) {
+				const got = await promptForNewRepo({ initial: params, ghAvailable: !!gh, chooseFolder: () => window.wcc.newRepoLocation(), error });
+				if (!got) return null;
+				params = got;
+				error = undefined;
+				// Back to the form (values kept) rather than out of the whole flow.
+				if (!await promptForConfirm('Create this repository?', describeNewRepo(params), 'Create')) continue;
+				const res = await createGitRepo(params.parentDir, params.name, { branch: params.branch, files: seedFiles(params) });
+				if (!res.ok || !res.path) { error = `Couldn't create it: ${res.error ?? 'unknown error'}`; continue; }
+
+				const parent = params.parentDir;
+				lastNewRepoParent = parent;
+				void configWriter.push(async () => {
+					const fresh = await window.wcc.getConfig();
+					await window.wcc.setConfig({ ...fresh, newRepoParent: parent });
+				});
+				registerRepos(discoverRepos(res.path));
+				persist();
+				const repo = linkedRepo(repos, res.path)!;
+				statusSpan.textContent = `${repos.length} repos · created ${repo.name}`;
+
+				if (!res.committed) {
+					// Not a quiet state: without a commit there is nothing to branch from, so every
+					// terminal on this repo would fail to start. Held on screen long enough to act on.
+					toast(`Created "${repo.name}", but it has NO commit yet, so no terminal can start in it — worktrees need a commit to branch from. Set git user.name and user.email, then commit in ${res.path}.${params.remote !== 'none' ? ' The GitHub remote was skipped: there was nothing to push.' : ''}`, 'error', { durationMs: 30000 });
+				} else if (params.remote !== 'none' && gh) {
+					toast(`Created "${repo.name}" — now creating its GitHub repo…`, 'info');
+					const rr = await createGitHubRemote(gh, res.path, repoDirName(params.name), params.remote);
+					if (rr.ok) toast(`Created "${repo.name}" with a ${params.remote} GitHub remote${rr.url ? ` — ${rr.url}` : ''}`, 'success');
+					else toast(`Created "${repo.name}" locally, but the GitHub remote failed: ${rr.error}. The local repo is fine — add a remote later with \`gh repo create\`.`, 'warn', { durationMs: 20000 });
+				} else {
+					toast(`Created "${repo.name}" — ready for worktrees`, 'success');
+				}
+				return { repo, branch: res.branch ?? params.branch };
+			}
+		}
+
+		/** Ask which repo a new tab is for. Resolves the target (and the branch, for a repo just
+		 *  created), 'none' for a deliberately empty tab, or null when the person backed out —
+		 *  in which case no tab is made. Backing out of a sub-step returns here, not out. */
+		async function chooseTabRepo(tabName: string): Promise<{ repo: RepoConfig; branch?: string } | 'none' | null> {
+			// Repos grouped to some other tab belong to it; a new tab offers the shared ones.
+			const shared = repos.filter((r) => !r.group);
+			for (;;) {
+				const kind = await promptForChoice(
+					`Link "${tabName}" to a repo`,
+					'A tab is a project: its terminals start on this repo. Every other target stays one toolbar pick away.',
+					tabLinkOptions(shared.length),
+				) as TabLinkKind | null;
+				if (!kind) return null;
+				if (kind === 'none') return 'none';
+				if (kind === 'new') {
+					const made = await createRepoInteractive(tabName);
+					if (made) return made;
+					continue;
+				}
+				if (kind === 'existing') {
+					const chosen = await promptForChoice('Existing repo', `Which target is "${tabName}" for?`,
+						shared.map((r) => ({ id: r.path, label: repoOptionLabel(r), sublabel: r.path })));
+					const repo = linkedRepo(repos, chosen ?? undefined);
+					if (repo) return { repo };
+					continue;
+				}
+				// browse
+				const folder = await window.wcc.addFolder();
+				if (!folder) continue;
+				const found = discoverRepos(folder);
+				let pick: RepoConfig | undefined = found[0];
+				if (found.length > 1) {
+					// A dev root holding several repos: the tab is for ONE of them. Only that one is
+					// registered — picking a folder for a tab is not "add everything under it".
+					const chosen = await promptForChoice('Which repo?', `${path.basename(folder)} holds ${found.length} git repos. Which one is "${tabName}" for?`,
+						found.map((r) => ({ id: r.path, label: r.name, sublabel: r.path })));
+					pick = found.find((r) => r.path === chosen);
+				}
+				if (!pick) continue;
+				registerRepos([pick]);
+				persist();
+				statusSpan.textContent = `${repos.length} targets`;
+				if (pick.folder) toast(`"${pick.name}" has no git — its terminals run in the folder itself, without worktrees`, 'info');
+				return { repo: linkedRepo(repos, pick.path)! };
+			}
+		}
+
 		async function onAdd(): Promise<void> {
-			const name = await promptForTopic('New workspace', 'workspace name', '', 'Create');
+			const name = await promptForTopic('New workspace', 'workspace name', '', 'Next');
 			if (!name || !name.trim()) return;
+			const link = await chooseTabRepo(name.trim());
+			if (link === null) return;
 			const r = addWorkspace(workspaces, name);
 			if (!r) return;
 			workspaces = r.list;
+			if (link !== 'none') {
+				workspaces = linkWorkspaceRepo(workspaces, r.id, link.repo.path);
+				// Before switchTo → gridFor: depsFor reads initialToolbar when it constructs the grid.
+				workspaceToolbars = setToolbarState(workspaceToolbars, r.id, toolbarForLink(link.repo, link.branch));
+			}
 			persist();
 			bar.refresh();
 			await switchTo(r.id);
@@ -547,6 +663,7 @@ async function main(): Promise<void> {
 				index: Math.max(0, workspaces.findIndex((w) => w.id === id)),
 				tileCount: summary.total,
 				...(workspaceToolbars[id] ? { toolbar: workspaceToolbars[id] } : {}),
+				...(ws?.repo ? { repo: ws.repo } : {}),
 			};
 			// Queue the rename BEFORE tearing the grid down: everything here shares one persist
 			// chain, so archiving first guarantees the tombstone captures the real records rather
@@ -589,7 +706,7 @@ async function main(): Promise<void> {
 			// A new tab may have claimed the old id in the meantime; the tiles follow the new one.
 			const id = uniqueId(entry.id, workspaces.map((w) => w.id));
 			const movedTiles = await TerminalsGrid.renameGroup(sessionsFile, entry.sessionsKey, id);
-			workspaces = insertAt(workspaces, { id, name: entry.name }, entry.index);
+			workspaces = insertAt(workspaces, { id, name: entry.name, ...(entry.repo ? { repo: entry.repo } : {}) }, entry.index);
 			// Before gridFor: depsFor reads initialToolbar when it constructs the grid.
 			if (entry.toolbar) workspaceToolbars = setToolbarState(workspaceToolbars, id, entry.toolbar);
 			gridFor(id);
@@ -701,24 +818,10 @@ async function main(): Promise<void> {
 			})();
 		});
 
-		// 🆕 New repo: pick a location, name it, `git init` a fresh repo (README + initial commit so
-		// worktrees have a base branch), then add it to the workspace like any other repo.
-		newRepoBtn.addEventListener('click', () => {
-			void (async () => {
-				const parent = await window.wcc.newRepoLocation(); // choose WHERE (New Folder button available)
-				if (!parent) return;
-				const name = await promptForTopic('New git repository', 'Name for the new repo', '', 'Create');
-				if (!name || !name.trim()) return;
-				const res = await createGitRepo(parent, name);
-				if (!res.ok) { toast(`Couldn't create repo "${name.trim()}": ${res.error}`, 'error'); return; }
-				repos = mergeRepos(repos, discoverRepos(res.path!));
-				grids.forEach((g, id) => g.setRepos(reposForWorkspace(repos, id)));
-				persist();
-				statusSpan.textContent = `${repos.length} repos · created ${name.trim()}`;
-				if (res.committed) toast(`Created "${name.trim()}" — ready for worktrees`, 'success');
-				else toast(`Created "${name.trim()}", but it has no commit yet — set your git user.name/email and commit before using worktrees`, 'warn');
-			})();
-		});
+		// 🆕 New repo: the same form, confirm and createGitRepo the new-tab flow uses (README +
+		// initial commit so worktrees have a base branch), added to the floor like any other repo
+		// but not linked to a tab.
+		newRepoBtn.addEventListener('click', () => { void createRepoInteractive(''); });
 	} catch (e) {
 		document.body.textContent = 'Startup error: ' + e;
 	}

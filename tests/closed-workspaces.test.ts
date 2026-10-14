@@ -43,6 +43,10 @@ describe('normalizeClosedWorkspaces', () => {
 		const [e] = normalizeClosedWorkspaces([entry('a', 1, { toolbar: { repo: 'QMK-Flasher', branch: 'main' } })]);
 		expect(e!.toolbar).toEqual({ repo: 'QMK-Flasher', branch: 'main' });
 	});
+	it('keeps the linked repo path so a restored tab comes back linked; drops a junk one', () => {
+		expect(normalizeClosedWorkspaces([entry('a', 1, { repo: 'C:/dev/qmk' })])[0]!.repo).toBe('C:/dev/qmk');
+		expect(normalizeClosedWorkspaces([{ ...entry('a', 1), repo: 7 }])[0]).not.toHaveProperty('repo');
+	});
 	it('survives junk', () => {
 		expect(normalizeClosedWorkspaces(undefined)).toEqual([]);
 		expect(normalizeClosedWorkspaces({})).toEqual([]);

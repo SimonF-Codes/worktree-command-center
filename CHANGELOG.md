@@ -3,6 +3,32 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
+## Unreleased
+
+**🗂 A new workspace tab starts a project: it is born linked to a repo**
+- **+ add** now asks, after the tab's name, what the tab is for: a **new repo**, an **existing
+  repo** already on the floor, a **folder you browse to** (a repo, one repo out of a dev root, or
+  a plain folder target), or **no repo for now** — the old empty tab. Backing out makes no tab.
+- The tab remembers its repo and opens with it, and the branch it was created on, already
+  selected in the toolbar. Hover a linked tab to see where it points. Tabs made before this have
+  no link and look and behave exactly as they did; a closed tab comes back from Undo or
+  Recently closed still linked.
+- **A new repo is instantiated with initial parameters** — the ones that are awkward to change
+  after the first commit, since every worktree branches from it: the **base branch** (default
+  `main`), a **.gitignore** (general / Node / Python / none) so `node_modules` or a `.env` never
+  lands in history, a **CLAUDE.md** seed for the sessions that will work there, and optionally
+  a **private or public GitHub remote** via `gh`, pushed on creation.
+- `gh` is found on PATH or where winget leaves it (`%LOCALAPPDATA%\Microsoft\WinGet\Packages\
+  GitHub.cli_*\bin`). Without it the remote choice is shown disabled, with the reason. A remote
+  that fails says the local repo is fine and how to add one later.
+- Before anything is written you get a confirm listing the exact folder and files. The folder
+  must not exist yet, so nothing already on disk is ever written over.
+- **A repo created without a commit is now an error, not a footnote.** It happens when git has
+  no `user.name`/`user.email`, and it means no terminal can start there: a worktree needs a
+  commit to branch from. The toast stays up 30 seconds and says what to do.
+- The top bar's 🆕 **New repo** runs the same form, so there is one way to make a repo. The last
+  folder you created one in is proposed next time (`newRepoParent` in config.json).
+
 ## 0.10.0 — 2026-10-01
 
 **🖥 The memory panel answers "what is this machine spending memory on" — a System view**

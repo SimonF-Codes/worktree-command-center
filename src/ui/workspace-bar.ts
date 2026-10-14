@@ -10,6 +10,8 @@ export interface WorkspaceBarDeps {
 	closedCount: () => number;
 	/** Open the Recently closed picker. The bar stays dumb about what restoring involves. */
 	onRecentlyClosed: () => void;
+	/** Hover text for a tab — where it is linked. Undefined (an unlinked tab) adds no tooltip. */
+	title?: (w: Workspace) => string | undefined;
 }
 
 /** A tab row of workspaces: click to switch, × to close (hidden when only one), + to add,
@@ -32,6 +34,8 @@ export class WorkspaceBar {
 			const tab = this.el.createDiv({ cls: 'wcc-tab' });
 			tab.toggleClass('active', w.id === active);
 			tab.createSpan({ cls: 'wcc-tab-name', text: w.name });
+			const title = this.deps.title?.(w);
+			if (title) tab.setAttribute('title', title);
 			tab.addEventListener('click', () => this.deps.onSwitch(w.id));
 			if (list.length > 1) {
 				const x = tab.createEl('button', { cls: 'wcc-tab-close', text: '×', attr: { title: `Close ${w.name}` } });

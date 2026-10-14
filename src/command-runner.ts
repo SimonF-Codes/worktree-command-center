@@ -8,6 +8,13 @@ export interface CommandResult {
 	error?: string;
 }
 
+/** The file to spawn on Windows: a bare name gets `.exe` (so `shell: false` finds `git.exe`), but
+ *  a command that already names an .exe — an absolute path to a gh install that is not on PATH —
+ *  is used as-is rather than becoming `gh.exe.exe`. Pure. */
+export function windowsExe(command: string): string {
+	return /\.exe$/i.test(command) ? command : `${command}.exe`;
+}
+
 /**
  * Run a short, deterministic command (git, gh, psql, …) and resolve with its
  * output. This is the fast path that powers LIVE tiles — no LLM, no shell
@@ -33,7 +40,7 @@ export function runCommand(
 	const bridge = (globalThis as { wcc?: { runCommand?: (c: string, a: string[], o?: object) => Promise<CommandResult> } }).wcc;
 	if (bridge?.runCommand) return bridge.runCommand(command, args, opts);
 	const timeoutMs = opts.timeoutMs ?? 15_000;
-	const exe = process.platform === 'win32' ? `${command}.exe` : command;
+	const exe = process.platform === 'win32' ? windowsExe(command) : command;
 
 	return new Promise((resolve) => {
 		let proc;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { slugId, uniqueId, addWorkspace, closeWorkspace, nextActiveAfter, normalizeWorkspaces } from '../src/terminals/workspace-store';
+import { slugId, uniqueId, addWorkspace, closeWorkspace, nextActiveAfter, normalizeWorkspaces, linkWorkspaceRepo } from '../src/terminals/workspace-store';
 
 describe('slugId', () => {
   it('makes a filesystem-safe id', () => {
@@ -44,5 +44,22 @@ describe('normalizeWorkspaces', () => {
     expect(normalizeWorkspaces(undefined)).toEqual([{ id: 'default', name: 'default' }]);
     expect(normalizeWorkspaces('nope')).toEqual([{ id: 'default', name: 'default' }]);
     expect(normalizeWorkspaces([{ id: 'a', name: 'A' }, { id: 'a', name: 'dup' }])).toEqual([{ id: 'a', name: 'A' }]);
+  });
+});
+describe('workspace repo link', () => {
+  it('normalizeWorkspaces keeps a linked repo path and leaves unlinked tabs exactly as they were', () => {
+    expect(normalizeWorkspaces([{ id: 'a', name: 'A', repo: 'C:/dev/a' }, { id: 'b', name: 'B' }]))
+      .toEqual([{ id: 'a', name: 'A', repo: 'C:/dev/a' }, { id: 'b', name: 'B' }]);
+    // A junk or empty link is dropped, never kept as a link to nowhere.
+    expect(normalizeWorkspaces([{ id: 'a', name: 'A', repo: '' }, { id: 'b', name: 'B', repo: 42 }]))
+      .toEqual([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }]);
+  });
+  it('linkWorkspaceRepo links, relinks and unlinks one tab without touching the others', () => {
+    const list = [{ id: 'a', name: 'A' }, { id: 'b', name: 'B', repo: '/old' }];
+    expect(linkWorkspaceRepo(list, 'a', '/x')).toEqual([{ id: 'a', name: 'A', repo: '/x' }, list[1]]);
+    expect(linkWorkspaceRepo(list, 'b', '/new')[1]).toEqual({ id: 'b', name: 'B', repo: '/new' });
+    expect(linkWorkspaceRepo(list, 'b', undefined)[1]).toEqual({ id: 'b', name: 'B' });
+    expect(linkWorkspaceRepo(list, 'zz', '/x')).toEqual(list);
+    expect(list[0]).toEqual({ id: 'a', name: 'A' }); // immutable
   });
 });

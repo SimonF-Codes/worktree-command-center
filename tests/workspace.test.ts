@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
-import { pickRepos, mergeRepos, repoOptionLabel, reposForWorkspace, type DirEntry } from '../src/workspace';
+import { pickRepos, mergeRepos, repoOptionLabel, reposForWorkspace, linkedRepo, type DirEntry } from '../src/workspace';
 import type { RepoConfig } from '../src/terminals/terminals-grid';
 
 describe('pickRepos', () => {
@@ -143,5 +143,17 @@ describe('reposForWorkspace', () => {
   it('is a no-op for configs where nothing is grouped (every existing config)', () => {
     const plain: RepoConfig[] = [{ name: 'X', path: '/x' }, { name: 'Y', path: '/y' }];
     expect(reposForWorkspace(plain, 'anything')).toEqual(plain);
+  });
+});
+
+describe('linkedRepo', () => {
+  const repos: RepoConfig[] = [{ name: 'app', path: path.resolve('/dev/app') }, { name: 'app', path: path.resolve('/other/app') }];
+  it('finds the linked target by path, not by its (shareable) name', () => {
+    expect(linkedRepo(repos, path.resolve('/other/app'))).toBe(repos[1]);
+    expect(linkedRepo(repos, '/dev/app/')).toBe(repos[0]); // resolved, so a trailing slash still matches
+  });
+  it('is undefined for an unlinked tab or a repo that has left the floor', () => {
+    expect(linkedRepo(repos, undefined)).toBeUndefined();
+    expect(linkedRepo(repos, '/gone')).toBeUndefined();
   });
 });
