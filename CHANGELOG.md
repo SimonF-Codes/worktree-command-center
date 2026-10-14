@@ -3,6 +3,16 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
+## Unreleased
+
+**🔌 The connector channel gets a read side**
+- **`floor/state.json`** sits beside `floor/INDEX.md`: the same roster as JSON (`v: 1`), written
+  in the same snapshot pass, so the two can't disagree and nothing new polls. Per session: name,
+  kind (`terminal`/`journal`/`god`), repo, branch, worktree path, busy/idle, hidden, and
+  whether a connector `tell` can address it. It also carries the worktree ledger from the last
+  scan (what `worktrees.md` renders), with its own `scannedAt`. Written temp-then-rename, so a
+  program polling it never reads half a file.
+
 ## 0.10.0 — 2026-10-01
 
 **🖥 The memory panel answers "what is this machine spending memory on" — a System view**

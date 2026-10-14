@@ -24,6 +24,7 @@ import { normalizeToolbarState, type ToolbarState } from './toolbar-state';
 import { GodConsole } from './god-console';
 import { godIndexOf, godRecords, highestGodIndex, PRIMARY_GOD_INDEX } from './god-sessions';
 import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, planClose, closeResultText, EFFORT_LEVELS, type OutboxMessage, type CloseCandidate, type GodSelfImprove } from './god';
+import { buildFloorState, renderFloorState, FLOOR_STATE_FILE } from './floor-state';
 import { evaluateConnectorRequest, receiptFilename, isReceiptStale, type ConnectorConfig, type ConnectorReceipt } from './connectors';
 import type { RoleLibraryConfig } from './role-library';
 import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
@@ -57,6 +58,8 @@ interface TellResult { ok: boolean; reason?: string; }
 // (the CLI's own give-up bound) so the CLI gets an honest receipt instead of its generic timeout.
 const TELL_RETRY_INTERVAL_MS = 5000;
 const TELL_MAX_WAIT_MS = 40000;
+/** The floor feed's cadence: per-terminal snapshots, INDEX.md and state.json, all in one pass. */
+const FLOOR_FEED_MS = 4000;
 /** How long the transcript-off warning stays up — long enough to be seen from across the room. */
 const TRANSCRIPT_OFF_TOAST_MS = 60_000;
 
@@ -1240,7 +1243,7 @@ export class TerminalsGrid {
 	 *  armed from construction — this only (re-)confirms it, cheaply, via armOutbox's own guard). */
 	private startFloorFeed(): void {
 		this.writeFloorSnapshot();
-		if (this.floorTimer === null) this.floorTimer = window.setInterval(() => this.writeFloorSnapshot(), 4000);
+		if (this.floorTimer === null) this.floorTimer = window.setInterval(() => this.writeFloorSnapshot(), FLOOR_FEED_MS);
 		this.armOutbox();
 	}
 
@@ -1250,8 +1253,9 @@ export class TerminalsGrid {
 		this.connectorsWatcher?.close(); this.connectorsWatcher = null;
 	}
 
-	/** Dump each live session's recent output to coordDir/floor/<id>-<slug>.md + an INDEX.md;
-	 *  prune snapshots for sessions that have since closed. */
+	/** Dump each live session's recent output to coordDir/floor/<id>-<slug>.md + an INDEX.md,
+	 *  and the same roster as JSON in state.json (floor-state.ts) — one pass, so the markdown and
+	 *  the JSON are always the same snapshot; prune snapshots for sessions that have since closed. */
 	private writeFloorSnapshot(): void {
 		try {
 			const dir = this.floorDir();
@@ -1259,11 +1263,13 @@ export class TerminalsGrid {
 			const now = Date.now();
 			const sessions = this.allSessions();
 			const live = new Set<string>(['INDEX.md']);
+			const snapshotFiles = new Map<StageTile, string>();
 			for (const t of sessions) {
 				if (t.isJournal) continue; // journals have no worktree snapshot
 				const tt = t as TerminalTile;
 				const fname = `${tt.tileId}-${godSlug(tt.name)}.md`;
 				live.add(fname);
+				snapshotFiles.set(t, fname);
 				const body = formatFloorSnapshot(
 					{ name: tt.name, repo: this.repoNameFor(tt), branch: tt.branch, worktreePath: tt.worktreePath, ts: now },
 					tt.recentOutput(),
@@ -1272,8 +1278,36 @@ export class TerminalsGrid {
 			}
 			fsSync.writeFileSync(path.join(dir, 'INDEX.md'),
 				formatFloorIndex(sessions.map((t) => ({ id: t.tileId, name: t.name, repo: this.repoNameFor(t), branch: t.branch }))), 'utf8');
+			this.writeFloorState(dir, now, sessions, snapshotFiles);
 			for (const f of fsSync.readdirSync(dir)) if (f.endsWith('.md') && !live.has(f)) { try { fsSync.unlinkSync(path.join(dir, f)); } catch { /* ignore */ } }
 		} catch { /* best effort */ }
+	}
+
+	/** `floor/state.json` for callers outside the app (see floor-state.ts). Temp-then-rename,
+	 *  unlike INDEX.md beside it: a program polling this must never read half a file. */
+	private writeFloorState(dir: string, now: number, sessions: StageTile[], snapshotFiles: Map<StageTile, string>): void {
+		const overseers = [
+			...(this.godConsole ? [{ id: 0, name: this.overseerName }] : []),
+			...this.extraKanes.map((k) => ({ id: -k.n, name: `${this.overseerName} ${k.n}` })),
+		];
+		const state = buildFloorState({
+			workspaceId: this.deps.group,
+			ts: now,
+			intervalMs: FLOOR_FEED_MS,
+			sessions: [
+				...sessions.map((t) => t.isJournal
+					? { id: t.tileId, name: t.name, kind: 'journal' as const, repo: null, branch: null, worktreePath: null, busy: null, hidden: this.hidden.includes(t), snapshotFile: null }
+					: { id: t.tileId, name: t.name, kind: 'terminal' as const, repo: this.repoNameFor(t), branch: t.branch, worktreePath: (t as TerminalTile).worktreePath,
+						busy: (t as TerminalTile).isBusy, hidden: this.hidden.includes(t), snapshotFile: snapshotFiles.get(t) ?? null }),
+				...overseers.map((o) => ({ ...o, kind: 'god' as const, repo: null, branch: null, worktreePath: null, busy: null, hidden: false, snapshotFile: null })),
+			],
+			scannedAt: this.lastScanDoneAt || null,
+			worktrees: this.lastEntries,
+		});
+		const dest = path.join(dir, FLOOR_STATE_FILE);
+		const tmp = `${dest}.tmp`;
+		fsSync.writeFileSync(tmp, renderFloorState(state), 'utf8');
+		fsSync.renameSync(tmp, dest);
 	}
 
 	/** The repo name a session belongs to (matches the scan/registry mapping).
