@@ -28,6 +28,20 @@ landed on `main`.
   commit to branch from. The toast stays up 30 seconds and says what to do.
 - The top bar's 🆕 **New repo** runs the same form, so there is one way to make a repo. The last
   folder you created one in is proposed next time (`newRepoParent` in config.json).
+**🩹 A terminal no longer reads "[session ended]" while its session is still running**
+- **One death was reported twice.** The sidecar sends an exit frame with claude's code and then
+  exits itself, so every session's end reached the tile twice (measured on the real sidecar:
+  code 1, then code 0, 8 ms apart). A restored tile whose `--continue` found no conversation ran
+  its fresh fallback twice: two new `claude` processes in one worktree, both painting into the
+  same terminal, one of them held by nothing.
+- **A replaced session's death landed on its replacement.** ⟳ Refresh, the account switch and
+  the fresh fallback all start a new session in the same tile. The old one's exit, arriving
+  after, set the tile to ended and printed `[session ended (code 1)]` (code 1 is `taskkill /F`)
+  over the live one. The next keystroke then "revived" it, starting another session without
+  killing the running one. Seen on 2026-10-14 in three QMK-Flasher tiles: the screen said ended,
+  `claude` was alive behind each.
+- `SessionBridge` now reports each death once, and says nothing more, output or exit, once its
+  owner has asked for the kill. Every owner (tiles, overseer consoles, probes) gets the fix.
 
 ## 0.10.0 — 2026-10-01
 
