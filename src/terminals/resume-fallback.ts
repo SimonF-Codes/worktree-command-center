@@ -22,14 +22,20 @@ const REFUSALS: readonly RegExp[] = [
 ];
 
 /** The output a resuming session wrote, kept so its exit can be judged. Capped, because a session
- *  that really came back keeps writing for hours. */
+ *  that really came back keeps writing for hours.
+ *
+ *  Keeps the LAST bytes, not the first: a refusal is the final thing claude prints before it
+ *  exits, but it is not always near the start. In a home dir claude has never seen — every new 🜲+
+ *  duplicate's — the workspace-trust dialog comes first, and its paint (repainted on every resize
+ *  while it waits) ran past a 2048-byte head. The refusal was never seen, the exit came long after
+ *  RESUME_FAIL_WINDOW_MS because a person had to answer the dialog, and the console stayed dead. */
 export class ResumeProbe {
 	private buf = '';
 
 	constructor(private readonly cap: number) {}
 
 	feed(chunk: string): void {
-		if (this.buf.length < this.cap) this.buf += chunk;
+		this.buf = (this.buf + chunk).slice(-this.cap);
 	}
 
 	get text(): string { return this.buf; }

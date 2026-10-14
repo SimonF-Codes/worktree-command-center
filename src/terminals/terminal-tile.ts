@@ -789,7 +789,7 @@ export class TerminalTile implements StageTile {
 			COS_TERMINAL_NAME: this.displayName,
 			PATH: sidecarDir + path.delimiter + (process.env.PATH ?? ''),
 		};
-		const probe = new ResumeProbe(4096); // used to detect the --continue "no conversation" exit
+		const probe = new ResumeProbe(4096); // the last bytes — used to detect the --continue "no conversation" exit
 		this.bridge = new SessionBridge(this.opts.sidecarPath, this.opts.worktree.worktreePath, 'claude', args, env);
 		this.bridge.onData((d) => { if (fallbackFresh) probe.feed(d); this.writeOut(d); });
 		this.bridge.onExit((code) => {

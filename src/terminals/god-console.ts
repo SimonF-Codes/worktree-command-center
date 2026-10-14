@@ -246,7 +246,7 @@ export class GodConsole {
 			PATH: sidecarDir + path.delimiter + (process.env.PATH ?? ''),
 		};
 		fs.mkdirSync(this.opts.godHomeDir, { recursive: true });
-		const probe = new ResumeProbe(2048); // the refusal text a failed resume prints
+		const probe = new ResumeProbe(2048); // the last bytes — where a failed resume prints its refusal
 		const startedAt = Date.now();
 		this.bridge = new SessionBridge(this.opts.sidecarPath, this.opts.godHomeDir, 'claude', args, env);
 		this.bridge.onData((d) => { if (fallbackFresh) probe.feed(d); this.term?.write(d); this.markBusy(); });
@@ -257,7 +257,7 @@ export class GodConsole {
 				// Say WHY, both here and in devtools: a silent reset is indistinguishable from
 				// "my history vanished for no reason". The new TUI may paint over the line, so the
 				// console.warn is the copy that survives.
-				console.warn(`[god] ${name}: resume failed (code ${code ?? '?'}), starting fresh. First output:`, probe.text.slice(0, 500));
+				console.warn(`[god] ${name}: resume failed (code ${code ?? '?'}), starting fresh. Last output:`, probe.text.slice(-500));
 				this.term?.reset();
 				this.term?.write(`\r\n[${name} could not resume the previous conversation — starting a fresh session]\r\n`);
 				this.startSession(false); // fallbackFresh defaults false → a fresh session can never loop back here
