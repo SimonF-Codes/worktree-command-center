@@ -65,3 +65,25 @@ export function linkedRepo(repos: RepoConfig[], repoPath: string | undefined): R
   const want = path.resolve(repoPath);
   return repos.find((r) => path.resolve(r.path) === want);
 }
+
+/** Drop a target, matched by resolved path. The other half of mergeRepos, which only ever
+ *  appends: without this a target whose folder moved or died stayed in config.json forever,
+ *  and the only fix was a hand-edit with the app closed (persist() rewrites the whole `repos`
+ *  key from memory, so an edit made while it runs is overwritten). Unknown path → unchanged. */
+export function forgetRepo(repos: RepoConfig[], repoPath: string): RepoConfig[] {
+  const gone = path.resolve(repoPath);
+  return repos.filter((r) => path.resolve(r.path) !== gone);
+}
+
+/** Point an existing target at a new path, keeping its name, group and every other field — the
+ *  name is what toolbars and spawns look a target up by, so a repoint must not change it.
+ *
+ *  If the new path is ALREADY a registered target (someone added the moved folder through Add
+ *  folder before repointing), the stale entry is dropped and the existing one kept, rather than
+ *  leaving two targets on one folder. Unknown `from` → unchanged. */
+export function retargetRepo(repos: RepoConfig[], from: string, to: string): RepoConfig[] {
+  const src = path.resolve(from), dst = path.resolve(to);
+  if (src === dst || !repos.some((r) => path.resolve(r.path) === src)) return repos;
+  if (repos.some((r) => path.resolve(r.path) === dst)) return forgetRepo(repos, from);
+  return repos.map((r) => (path.resolve(r.path) === src ? { ...r, path: to } : r));
+}

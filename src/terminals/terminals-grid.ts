@@ -6,6 +6,7 @@ import { listBranches, createWorktree, writeWorktreeSettings, ensureClaudeSettin
 import { nextWorktreeBranch, parseWorktreeList, parseStatusPorcelain, parseAheadBehind, isParkCommitSubject, formatRegistryMarkdown, parseBranchTips, BRANCH_TIPS_FORMAT, type WorktreeEntry } from './worktree-registry';
 import type { GridScan, RepoScan } from './floor-report';
 import { repoOptionLabel } from '../workspace';
+import { remapSessionRecords, type PathMove } from '../move-repo';
 import { runCommand } from '../command-runner';
 import type { TerminalPalette } from './theme-store';
 import { TerminalTile } from './terminal-tile';
@@ -982,6 +983,39 @@ export class TerminalsGrid {
 			});
 		for (let i = 0; i < (this.godConsole ? 1 : 0) + this.extraKanes.length; i++) out.push({ kind: 'god' });
 		return out;
+	}
+
+	/** The working directory of every live terminal in this grid, hidden ones included — what a
+	 *  repo move must refuse to pull out from under. A grid whose sessions were never restored has
+	 *  none: its records are on disk, with no process behind them. */
+	livePaths(): string[] {
+		return [...this.tiles, ...this.hidden].filter((t): t is TerminalTile => t instanceof TerminalTile).map((t) => t.worktreePath);
+	}
+
+	/** Repoint the records this grid holds in MEMORY that a repo move relocated. Only the
+	 *  unrestored ones: a live tile cannot be in a moved path (the move refuses that), and without
+	 *  this the next persist would write the old paths straight back over remapSessionPaths'. */
+	remapUnrestored(map: readonly PathMove[], ci: boolean): number {
+		const { all, changed } = remapSessionRecords({ u: this.unrestored }, map, ci);
+		this.unrestored = all.u!;
+		return changed;
+	}
+
+	/** Repoint every saved tile in the sessions file — every bucket, closed tabs' tombstones too —
+	 *  after a repo move. On the persist chain like every other write to the file. Resolves the
+	 *  number of records changed, or null when the file could not be read or written. */
+	static remapSessionPaths(sessionsFile: string, map: readonly PathMove[], ci: boolean): Promise<number | null> {
+		const run = TerminalsGrid.persistChain.then(async () => {
+			let all: Record<string, SessionRecord[]>;
+			try { all = JSON.parse(await fs.readFile(sessionsFile, 'utf8')) as Record<string, SessionRecord[]>; }
+			catch (e) { return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 0 : null; }
+			const out = remapSessionRecords(all, map, ci);
+			if (!out.changed) return 0;
+			try { await fs.writeFile(sessionsFile, JSON.stringify(out.all, null, 2), 'utf8'); } catch { return null; }
+			return out.changed;
+		}).catch(() => null);
+		TerminalsGrid.persistChain = run.then(() => undefined, () => undefined);
+		return run;
 	}
 
 	/** A group's persisted records, straight off disk — the honest answer for a workspace whose

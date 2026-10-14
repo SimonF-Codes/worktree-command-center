@@ -11,6 +11,7 @@ import { ipcRenderer } from 'electron';
 	setConfig: (c: unknown) => ipcRenderer.invoke('config:set', c),
 	addFolder: () => ipcRenderer.invoke('addFolder'),
 	newRepoLocation: () => ipcRenderer.invoke('newRepoLocation'),
+	moveRepoLocation: (name: string) => ipcRenderer.invoke('moveRepoLocation', name),
 	// Clipboard via the MAIN process: renderer-side electron.clipboard is deprecated
 	// (removal planned for Electron 40) and navigator.clipboard fails silently without
 	// focus/permission — this path works identically in dev and packaged builds.

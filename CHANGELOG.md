@@ -5,6 +5,52 @@ landed on `main`.
 
 ## Unreleased
 
+**🚚 Move a repo, and everything that points at it moves too**
+- **⚙ Settings → Targets** lists every target with **Move…**, **Repoint…** and **Forget**.
+  Until now a target could only be *added*. A repo whose folder moved kept a dead entry in
+  config.json forever, and editing the file by hand only worked with the app closed.
+- **Move…** changes everything that holds the repo's path in one operation:
+  - the **repo folder**;
+  - **both ends of every worktree link**, via `git worktree repair`;
+  - the **worktrees themselves**. New worktrees are created beside the repo's parent, so a move
+    changes where they go. Worktrees in the old `.claude-worktrees` folder are moved with
+    `git worktree move` to where new ones will now be created.
+  - **config.json**: the target, every tab linked to it, and closed tabs that would come back
+    linked;
+  - **saved terminals**, so a reopened tab finds them;
+  - the **Claude transcripts** in `~/.claude/projects`. Those folders are named after the path,
+    so without the rename a moved worktree's conversation is orphaned: still on disk, but
+    unreachable from Reopen.
+- **You see the whole plan before anything changes.** That covers every folder that moves,
+  every link repaired and every transcript renamed. It also warns about a repo with **no
+  remote** (every branch exists on this disk only) and other config values still pointing at
+  the old path.
+- **It refuses rather than half-moves.** A move is refused if:
+  - a terminal is running in the repo or any of its worktrees;
+  - anything is uncommitted (it names the files; park them as `wip:` first);
+  - a folder is held open by another process;
+  - a submodule points at an absolute gitdir;
+  - the destination is on another drive, or already exists;
+  - a worktree is locked;
+  - two transcript histories would be merged.
+
+  Every reason is listed at once, with a **Re-check** for after you've dealt with them.
+- **Open folders are detected by trying.** The check renames the folder in place and straight
+  back, because Windows gives no other honest answer. A shell whose working directory is
+  inside a folder pins it, and no process listing shows that. When a process's command line
+  names the folder, the plan names that process.
+- **A move that stops halfway says where it stopped, and Re-check finishes it.** Each step is
+  either atomic or safe to repeat. The plan is always rebuilt from what is on disk, so a re-run
+  does exactly the steps that are left.
+- **Afterwards it reads everything back** instead of trusting the writes. Every commit that
+  existed before must still be there (`git cat-file`), every ref must be unchanged, and every
+  worktree must resolve with nothing left prunable. The refs recorded before the move are kept
+  in `repo-moves/` in the app's data folder, so a resumed move is checked against the original.
+- **Repoint…** is for a folder already moved by hand. It points the target, its tabs and saved
+  terminals at the new path and runs `git worktree repair` there. It does not rename
+  transcripts; use Move for that.
+- **Forget** removes the target. Nothing on disk is touched.
+
 **🗂 A new workspace tab starts a project: it is born linked to a repo**
 - **+ add** now asks, after the tab's name, what the tab is for: a **new repo**, an **existing
   repo** already on the floor, a **folder you browse to** (a repo, one repo out of a dev root, or
