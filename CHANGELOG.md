@@ -12,6 +12,16 @@ landed on `main`.
   whether a connector `tell` can address it. It also carries the worktree ledger from the last
   scan (what `worktrees.md` renders), with its own `scannedAt`. Written temp-then-rename, so a
   program polling it never reads half a file.
+- **`wcc-client`**, a client for that channel, ships in `pty-sidecar/` beside `cos-coord`. Any
+  process on the machine — a plain `claude` session in another folder, a script — can run
+  `wcc-client floor`, `spawn <repo> --task …` and `tell <terminal> "…"` instead of hand-writing
+  envelopes, the temp-file rename and a poll loop. spawn and tell **block on the receipt**: exit 0
+  with the terminal's name, 2 with the app's reason when rejected, 3 when the app took the request
+  but didn't confirm in time. A request the app never picked up is **withdrawn** at the deadline,
+  so a spawn can't fire hours later when the app next starts.
+- It is a connector, not a looser `cos-coord`: it writes only into `connectors/<id>/requests/`,
+  never `god-outbox/`, and the id must still be registered in `config.json` — an unregistered
+  caller gets a rejected receipt.
 
 ## 0.10.0 — 2026-10-01
 
