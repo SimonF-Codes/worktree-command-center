@@ -6,7 +6,7 @@ import { parseGodSelfImprove } from './terminals/god';
 import { parseRoleLibrary } from './terminals/role-library';
 import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, forgetRepo, retargetRepo, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
-import { planMove, describeMovePlan, describeRefusals, remapRepoLinks, samePath, isInside, type PathMove } from './move-repo';
+import { planMove, describeMovePlan, describeRefusals, remapRepoLinks, samePath, isInside, legacyWorktreeRootFor, type PathMove } from './move-repo';
 import { gatherMoveFacts, executeMove, describeMoveResult } from './move-repo-io';
 import { runCommand } from './command-runner';
 import { tabLinkOptions, toolbarForLink, defaultNewRepoParent, tabTitle, type TabLinkKind } from './tab-repo';
@@ -301,6 +301,8 @@ async function main(): Promise<void> {
 			targets: {
 				list: () => repos,
 				move: (r) => moveTargetInteractive(r),
+				hasLegacyWorktrees: (r) => fs.existsSync(legacyWorktreeRootFor(r.path, r.name)),
+				relayout: (r) => runMoveInteractive(r, r.path),
 				repoint: (r) => repointTargetInteractive(r),
 				forget: (r) => forgetTargetInteractive(r),
 			},
@@ -844,7 +846,8 @@ async function main(): Promise<void> {
 		 *  closed tabs' tombstones, saved terminals on disk and in each grid's memory — then read
 		 *  config.json back rather than trusting the write. */
 		async function applyPathMap(fromPath: string, toPath: string, map: readonly PathMove[]): Promise<{ ok: boolean; detail: string }> {
-			repos = retargetRepo(repos, fromPath, toPath);
+			const retargets = !samePath(fromPath, toPath, caseInsensitive); // false for a relayout
+			if (retargets) repos = retargetRepo(repos, fromPath, toPath);
 			workspaces = remapRepoLinks(workspaces, map, caseInsensitive);
 			closedWorkspaces = remapRepoLinks(closedWorkspaces, map, caseInsensitive);
 			grids.forEach((g, id) => g.setRepos(reposForWorkspace(repos, id)));
@@ -856,7 +859,7 @@ async function main(): Promise<void> {
 			bar.refresh();
 			const back = await window.wcc.getConfig().catch(() => ({}));
 			const saved: RepoConfig[] = Array.isArray(back.repos) ? back.repos : [];
-			if (!saved.some((r) => samePath(r.path, toPath, caseInsensitive)) || saved.some((r) => samePath(r.path, fromPath, caseInsensitive))) {
+			if (!saved.some((r) => samePath(r.path, toPath, caseInsensitive)) || (retargets && saved.some((r) => samePath(r.path, fromPath, caseInsensitive)))) {
 				return { ok: false, detail: 'config.json does not show the repointed target after writing it' };
 			}
 			if (onDisk === null) return { ok: false, detail: 'config.json is repointed, but the saved-terminals file could not be rewritten' };
@@ -872,31 +875,41 @@ async function main(): Promise<void> {
 			if (!parent) return;
 			const dirName = await promptForTopic(`Move ${r.name} into ${parent}`, 'folder name', path.basename(r.path), 'Next');
 			if (!dirName || !dirName.trim()) return;
-			const to = path.join(parent, dirName.trim());
+			await runMoveInteractive(r, path.join(parent, dirName.trim()));
+		}
+
+		/** Plan, confirm, execute, and on a stop offer to re-check and resume. `to` === the repo's own
+		 *  path is a relayout: the repo stays, its worktrees in the old shared root move inside it. */
+		async function runMoveInteractive(r: RepoConfig, to: string): Promise<void> {
+			const relayout = samePath(r.path, to, caseInsensitive);
+			const verb = relayout ? 'nest the worktrees of' : 'move';
+			const journalDir = path.join(userData, 'repo-moves');
 			for (;;) {
 				toast(`Checking ${r.name}: worktrees, uncommitted work, open handles, transcripts…`, 'info');
 				let plan;
 				try {
 					const cfgNow = await window.wcc.getConfig();
-					plan = planMove(await gatherMoveFacts(r, to, { livePaths: allLivePaths(), targets: repos, config: cfgNow }));
+					plan = planMove(await gatherMoveFacts(r, to, { livePaths: allLivePaths(), targets: repos, config: cfgNow, journalDir }));
 				} catch (e) { toast(`Couldn't read ${r.name}: ${(e as Error).message}`, 'error'); return; }
 				if (plan.refusals.length) {
 					const told = plan.warnings.length ? `\n\n${plan.warnings.map((w) => `⚠ ${w}`).join('\n')}` : '';
-					if (await promptForConfirm(`Can't move ${r.name} yet`, describeRefusals(plan) + told, 'Re-check')) continue;
+					if (await promptForConfirm(`Can't ${verb} ${r.name} yet`, describeRefusals(plan) + told, 'Re-check')) continue;
 					return;
 				}
-				if (!await promptForConfirm(`Move ${r.name}?`, describeMovePlan(plan), plan.resuming ? 'Finish the move' : 'Move')) return;
+				const go = relayout ? 'Nest worktrees' : plan.resuming ? 'Finish the move' : 'Move';
+				if (!await promptForConfirm(relayout ? `Nest ${r.name}'s worktrees inside it?` : `Move ${r.name}?`, describeMovePlan(plan), go)) return;
 				const result = await executeMove(plan, {
-					journalDir: path.join(userData, 'repo-moves'),
+					journalDir,
 					applyAppState: (p) => applyPathMap(p.from, p.to, p.pathMap),
 				});
-				console.info('[wcc] repo move', r.name, result);
+				console.info(`[wcc] repo ${relayout ? 'relayout' : 'move'}`, r.name, result);
 				if (result.ok) {
-					statusSpan.textContent = `${repos.length} targets · moved ${r.name}`;
-					toast(`Moved ${r.name} → ${to}. All ${result.verify?.shas ?? 0} commits verified, ${plan.expectedWorktrees.length} worktree${plan.expectedWorktrees.length === 1 ? '' : 's'} resolve, ${plan.transcripts.length} transcript folder${plan.transcripts.length === 1 ? '' : 's'} followed.`, 'success', { durationMs: 15000 });
+					const n = plan.worktreeMoves.length;
+					statusSpan.textContent = `${repos.length} targets · ${relayout ? 'nested the worktrees of' : 'moved'} ${r.name}`;
+					toast(`${relayout ? `Nested ${n} worktree${n === 1 ? '' : 's'} inside ${r.name}` : `Moved ${r.name} → ${to}`}. All ${result.verify?.shas ?? 0} commits verified, ${plan.expectedWorktrees.length} worktree${plan.expectedWorktrees.length === 1 ? '' : 's'} resolve, ${plan.transcripts.length} transcript folder${plan.transcripts.length === 1 ? '' : 's'} followed.`, 'success', { durationMs: 15000 });
 					return;
 				}
-				if (await promptForConfirm(`Move of ${r.name} stopped`, describeMoveResult(result), 'Re-check and resume')) continue;
+				if (await promptForConfirm(`${relayout ? 'Nesting the worktrees of' : 'Move of'} ${r.name} stopped`, describeMoveResult(result), 'Re-check and resume')) continue;
 				return;
 			}
 		}
