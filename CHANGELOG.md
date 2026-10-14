@@ -23,6 +23,20 @@ landed on `main`.
   never `god-outbox/`, and the id must still be registered in `config.json` — an unregistered
   caller gets a rejected receipt.
 
+**📚 The reference docs move out of the README**
+- **`docs/api.md`** is the external API written as a contract: where things live, registration,
+  field tables for `state.json`, every request kind and the receipt, **every reject reason** in
+  the order they're checked, `wcc-client` with PATH setup and exit codes, and an end-to-end
+  example to paste.
+- **`docs/architecture.md`** covers the PTY sidecar and the scripts beside it, the coordination
+  directory file by file, Kane's `god-outbox/` vs the connector channel, and agent role files and
+  the 📖 Roles view.
+- The README is an overview again (340 → 152 lines). Each section that moved keeps its heading
+  with a link, so old links still land somewhere.
+- Code comments in `god.ts` and `coord-store.cjs` still called `god-outbox/` a supported
+  external contract, which the README had stopped saying long ago. They now say what it is: Kane's
+  channel, with outside callers sent to the connector channel.
+
 ## 0.10.0 — 2026-10-01
 
 **🖥 The memory panel answers "what is this machine spending memory on" — a System view**

@@ -83,7 +83,7 @@ export interface GridDeps {
 	 *  Absent means every session uses its compiled-in system prompt. */
 	roleLibrary?: RoleLibraryConfig;
 	/** Connectors registered in config.json — a request from an unregistered id gets a rejected
-	 *  receipt rather than being honoured. See README "External dispatch". */
+	 *  receipt rather than being honoured. See docs/api.md. */
 	connectors?: ConnectorConfig[];
 	toast: (msg: string, variant?: ToastVariant, opts?: ToastPushOptions) => void;
 	promptForTopic: (title: string, placeholder: string, initial?: string, okLabel?: string) => Promise<string | null>;
@@ -232,12 +232,11 @@ export class TerminalsGrid {
 		this.formatProbe = new FormatProbe({ sidecarPath: this.sidecarPath, cwd: this.coordDir, sessionEnv: deps.sessionEnv });
 		this.convertProbe = new ConvertProbe({ sidecarPath: this.sidecarPath, cwd: this.coordDir, sessionEnv: deps.sessionEnv });
 		// Arm the GOD outbox from the moment this workspace exists — not gated on the overseer
-		// console ever being opened here. A dispatcher outside the app (Kane's own outbox channel,
-		// documented as a supported integration point — see README "External dispatch") must not
-		// have its commands pile up unread just because nobody has opened Kane in this workspace.
+		// console ever being opened here. Kane's commands (docs/architecture.md, "Two ways in") must
+		// not pile up unread just because nobody has opened Kane in this workspace this launch.
 		this.armOutbox();
 		// Same guarantee for the connector channel (a separate, narrower path for a non-overseer
-		// local app — see README "External dispatch"): armed from construction too, independent
+		// local app — see docs/api.md): armed from construction too, independent
 		// of both the overseer console and of whether the connector that dropped a request is
 		// even registered yet (an unregistered drop still needs to be answered with a rejection).
 		this.armConnectors();

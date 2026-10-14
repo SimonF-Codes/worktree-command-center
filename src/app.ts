@@ -211,8 +211,8 @@ async function main(): Promise<void> {
 		const siCfg = parseGodSelfImprove(cfg.god);
 		const godSelfImprove = siCfg ? { sourceRepo: siCfg.sourceRepo, toolsDir: siCfg.toolsDir ?? path.join(os.homedir(), 'kane-tools') } : undefined;
 
-		// Connectors registered for the external request/receipt channel (see README "External
-		// dispatch"). App-wide, like repos — every workspace's grid gets the same list.
+		// Connectors registered for the external request/receipt channel (see docs/api.md).
+		// App-wide, like repos — every workspace's grid gets the same list.
 		const connectors = parseConnectors(cfg.connectors);
 
 		// Agent role files (see the vault's _meta/agents/Charter.md): when config.json names a
@@ -255,7 +255,7 @@ async function main(): Promise<void> {
 		// Construct (NOT mount) every other workspace's grid too, right away. Its sessions stay
 		// unrestored until you actually switch to it — but the grid's GOD outbox watcher arms in its
 		// constructor, so a workspace nobody has opened this launch still drains external dispatches
-		// (Kane's outbox channel — see README "External dispatch") instead of leaving them unread.
+		// (Kane's outbox channel — see docs/architecture.md) instead of leaving them unread.
 		for (const w of workspaces) gridFor(w.id);
 
 		// Merge over a FRESH read: other writers (e.g. the private overlay via PrivateApi.config.set)

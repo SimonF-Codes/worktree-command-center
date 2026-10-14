@@ -33,231 +33,43 @@ A standalone desktop app (Electron). Originally Windows-first; this fork adds ma
 | Alt+K | Open/focus Kane |
 | Alt+↑/↓ | Switch workspace |
 
+## Documentation
+
+| doc | what's in it |
+| --- | --- |
+| [docs/api.md](docs/api.md) | the external API: connector requests and receipts, every reject reason, `floor/state.json`, and the `wcc-client` CLI |
+| [docs/architecture.md](docs/architecture.md) | the sidecar, the coordination directory, Kane's channel vs the connector channel, agent role files and the 📖 Roles view |
+| [docs/ci-cd.md](docs/ci-cd.md) | CI checks and cutting a release |
+
 ### External dispatch
 
-A local, non-overseer app — a separate process on the same machine, not Kane and not spoofing
-being Kane — can ask a workspace's floor to do work through the **connector channel**: a
-directory pair per connector, under `coordDir` (`<userData>/.coordination/<workspaceId>`, the
-`id` from `config.json`'s `workspaces` list):
+Another process on the same machine can read the floor and ask it to do work. That might be a
+plain `claude` session in another folder, a script, or another app. It goes through the
+**connector channel**, which carries `spawn` and `tell` only and gives a receipt for every
+request. The quickest way in is the bundled client:
 
-```
-<coordDir>/connectors/<connectorId>/requests/   you write requests here
-<coordDir>/connectors/<connectorId>/receipts/   the app writes one receipt per request here
-```
-
-`<connectorId>` is a slug (`[a-z0-9-]`), e.g. `brain-2-0`. It must first be registered in
-`config.json`'s `connectors` list (`[{ "id": "brain-2-0", "label": "Brain 2.0" }]`) — a local
-trust boundary between the user's own apps, not authentication. A request from an id that isn't
-registered gets a rejected receipt, not silence.
-
-This is deliberately narrower than Kane's own channel (below): connectors get **`spawn` and
-`tell`, and nothing else**. Not `watch`, `rename`, `close` or `personality` — those act on the
-operator's own workspace (Kane's watchers, Kane's own mode), not on requesting work from a
-terminal, so they stay the overseer's alone.
-
-`tell` looks like it narrows the gap with Kane's `tell`, so the asymmetry is worth spelling out:
-a connector may address **any** live terminal by its exact name — same as the user's ask ("submit
-tasks to all the worktree command center tabs") — but only a terminal that already exists; it
-cannot create, rename, or retarget one, an ambiguous or non-terminal (journal) name is rejected
-rather than guessed at, the message is capped at 4000 characters (a paste-expanded message has
-jammed a terminal's input before), and — the actual backstop against a connector spamming the
-floor — every single attempt gets a receipt with a reason when it didn't land, so a connector
-misbehaving is visible immediately rather than silently. There is no separate rate limit beyond
-that; `spawn` has never had one either, and adding one only for `tell` would be a second,
-inconsistent mechanism for the same risk the receipt trail already surfaces. A `tell` into a
-terminal that's mid-task is still accepted and delivered — the message is typed into that
-terminal exactly like Kane's own `tell`, which a running Claude Code session queues rather than
-drops; "accepted" means "typed and submitted," not "acted on immediately." That's now a promise,
-not a hope: `accepted` is written only once the app has confirmed the text actually landed on the
-target's screen (routed through the same delivery-verification seam as Kane's own `tell` —
-`TerminalTile.deliverLine`), retrying for up to ~40s against a target that can't take input right
-now (e.g. mid-`/compact`). Until then no receipt file exists yet for that `id` — poll for it rather
-than assuming absence means failure.
-
-Write a request atomically — a temp file in `requests/`, then `rename()` over the final name —
-and give it a v1 envelope with an id you choose (the receipt refers back to it, so you can
-correlate without parsing filenames):
-
-```js
-const fs = require('fs'), path = require('path');
-const id = require('crypto').randomUUID();
-const reqDir = path.join(coordDir, 'connectors', 'brain-2-0', 'requests');
-fs.mkdirSync(reqDir, { recursive: true });
-const body = { v: 1, id, connector: 'brain-2-0', sentMs: Date.now(), kind: 'spawn',
-  repo: 'app', base: 'main', task: 'do X', model: null, effort: null, name: null };
-const tmp = path.join(reqDir, `.${id}.tmp`);
-fs.writeFileSync(tmp, JSON.stringify(body));
-fs.renameSync(tmp, path.join(reqDir, `${id}.json`));
+```sh
+wcc-client floor --workspace default
+wcc-client spawn app --task "do X" --workspace default --connector my-agent
 ```
 
-A `spawn` request:
-
-| field | type |
-| --- | --- |
-| `v` | `1` |
-| `id` | `string` — your own unique id; the receipt is named after it |
-| `connector` | `string` — your registered connector id |
-| `sentMs` | `number` |
-| `kind` | `"spawn"` |
-| `repo` | `string` |
-| `base` | `string \| null` |
-| `task` | `string` |
-| `model` | `string \| null` |
-| `effort` | `string \| null` |
-| `name` | `string \| null` |
-
-A `tell` request — same envelope header (`v`/`id`/`connector`/`sentMs`), different body:
-
-| field | type |
-| --- | --- |
-| `kind` | `"tell"` |
-| `terminal` | `string` — exact live terminal name (case-insensitive if unambiguous) |
-| `message` | `string` — max 4000 characters |
-
-```json
-{ "v": 1, "id": "...", "connector": "brain-2-0", "sentMs": 0, "kind": "tell",
-  "terminal": "b2-drag", "message": "run the migration script and report back" }
-```
-
-**Discovering terminal names:** `<coordDir>/floor/INDEX.md` already lists every live terminal's
-exact name (Brain 2.0 already reads this file for run reconciliation), refreshed every few
-seconds — that's the roster a connector reads to pick a `terminal` value for `tell`. No second
-mechanism was added for this; the file already existed, already lived under `coordDir`, and
-already carried exactly the field (`name`) a `tell` needs to address.
-
-For every request drained, the app writes `connectors/<connectorId>/receipts/<id>.json` — so
-delivery is never inferred from a file just disappearing:
-
-```json
-{ "v": 1, "id": "...", "status": "accepted", "terminalName": "bx-a1--thing", "handledMs": 1788363509001 }
-{ "v": 1, "id": "...", "status": "rejected", "reason": "unknown repo \"ghost\". Known: app, notes", "handledMs": 1788363509001 }
-```
-
-`status` is `"accepted"` (with `terminalName` — the terminal a `spawn` created, or the one a
-`tell` was delivered into) or `"rejected"` (with a human-readable `reason` — always present, never
-silent): the connector isn't registered, the envelope is malformed, `kind` isn't `spawn`/`tell`,
-the repo is unknown, or — `tell` only — no such terminal, the name is ambiguous, the target is a
-journal tile rather than a terminal, or the message is over the length cap. Receipts are the
-connector's to clean up; the app prunes anything older than ~7 days on its own so the directory
-can't grow forever if you stop reading them.
-
-The canonical parser is `parseConnectorRequest`/`evaluateConnectorRequest` (and, for `tell`,
-`resolveConnectorTellTarget`) in `src/terminals/connectors.ts` — its tests
-(`tests/connectors.test.ts`) are the source of truth for exactly which fields are required and
-which reject reasons exist.
-
-**A workspace drains as soon as its grid exists**, same as Kane's channel below — every configured
-workspace's grid is constructed at app launch, so a `spawn` into an unvisited workspace works
-immediately.
+The connector id must be registered in `config.json` first. The full contract, including PATH setup
+and exit codes, is in **[docs/api.md](docs/api.md)**.
 
 #### Kane's own channel (internal, not an external integration point)
 
-`god-outbox/` is where Kane's `cos-coord tell/watch/spawn/rename/close/personality` writes — it carries
-the overseer's own privileged intent (typing into *any* terminal, renaming *anything*, toggling
-`personality`), because the overseer console *is* the app's own trusted UI. It is **not** the
-channel for an external app to use — that's what the connector channel above is for. Nothing
-technically stops a local process from writing the same shapes into `god-outbox/` (the
-`COS_ROLE=god` gate only guards the `cos-coord` *command*, not the file format), but doing so
-means impersonating the overseer's full authority over the floor, not requesting work — treat that
-as unsupported, not as a shortcut.
-
-`cos-coord tell` itself additionally **blocks and reports honestly**: it doesn't return until the
-app confirms the message actually landed on the target's screen (retried for up to
-`COS_COORD_TELL_WAIT_MS`, default 45s — override for scripting/tests), then exits 0 only if it
-did. Anything else — the target name didn't resolve, the session couldn't take input for the whole
-retry window (e.g. mid-`/compact`), it closed while the message was queued, or the app never
-answered at all — exits non-zero with the reason on stderr; dropping the outbox file was never
-proof of delivery, only proof the file was written. A `watch`/`rename`/`spawn` that fails after
-`cos-coord` already returned (an unresolved target name, an unknown repo) writes the same kind of
-note to `<coordDir>/god-inbox/` and pings Kane directly, rather than leaving him to discover it by
-reading an undocumented file.
-
-`cos-coord close "<name>"` blocks and reports the same way. It ends one worker session through the
-memory panel's End path, not the tile's ×. Uncommitted work is parked as a `wip:` commit and the
-process is killed. The worktree and branch stay, because the transcript in `~/.claude/projects` is
-keyed by worktree path, and Reopen in the Coordination panel brings the session back with it.
-It refuses, exiting 2 with the reason, when:
-- no terminal has that name
-- the name matches more than one terminal
-- the target is a journal
-- the target is an overseer console, which includes a Kane closing itself
-
-A session that was mid-turn is still closed, and the result says `(was mid-turn)`. If the app
-gives no answer within `COS_COORD_CLOSE_WAIT_MS` (default 45s), the command exits 2 and reports
-the close as *not confirmed*. It never reports that as success.
+`god-outbox/` is the overseer's privileged channel, not an API. See
+[docs/architecture.md](docs/architecture.md#two-ways-in-god-outbox-and-connectors).
 
 ### Agent role files
 
-The system prompt each session starts with — the worker terminal's, the folder terminal's, and
-Kane's — can come from markdown files on disk instead of the strings compiled into the app. Point
-`config.json` at a folder of them:
-
-```json
-{ "roleLibrary": { "path": "C:/Users/you/vault/_meta/agents" } }
-```
-
-Each file is frontmatter plus prose. Only three fields matter: `role:` is the slug the app looks
-up (**not** the filename, so a role can be renamed for display without breaking anything),
-`status:` must be `active`, and everything after the frontmatter becomes the prompt. The three
-slugs the app asks for are `worker-terminal`, `folder-terminal` and `alpha` (the overseer).
-
-```markdown
----
-role: worker-terminal
-status: active
----
-
-## Mission
-
-…
-```
-
-Runtime values are **not** templated into the prose — no `{{placeholders}}`. The app appends them
-as a `## Session facts` block (repo, branch and worktree for a worker; folder and working
-directory for a folder target; the floor's targets, coordination dir and overseer name for Kane),
-so the file stays readable prose that a person edits.
-
-Files are read **at session start**, so restart a terminal to pick up an edit; a running session
-keeps the text it was given. Every failure — no key configured, missing folder, unreadable file, no
-file with that slug, a role that isn't `active` — falls back to the compiled-in prompt, because a
-session that starts with *no* instructions is far worse than one running a slightly stale default.
-Each start logs one line naming the slug and the source:
-
-```
-[roles] worker-terminal — vault (Worker Terminal.md)
-[roles] alpha — built-in (no roleLibrary configured)
-```
-
-Parsing lives in `src/terminals/role-library.ts` (pure, tested) with the file reads in
-`src/terminals/role-loader.ts`.
+Session system prompts can come from a folder of markdown role files (`config.json` →
+`roleLibrary.path`). See [docs/architecture.md](docs/architecture.md#agent-role-files).
 
 ### 📖 Roles — the agent instruction interface
 
-The **📖 Roles** button in the top bar opens a full-window, read-only wiki of that library: one
-tile per role, grouped by surface, showing the rung it declares, its status, the first paragraph
-of its `## Mission`, and when the Custodian last reviewed it. Filter by surface, authority rung or
-status, search across name, mission and scope text, and click a tile to open the `.md` — in
-Obsidian when the library sits inside a vault (walking up for a `.obsidian/` folder), otherwise in
-the OS default app; 📁 reveals it in Explorer. Leaving the view puts your workspaces back exactly
-as they were.
-
-Nothing in the view edits anything. The vault is the one writer over these files, and an edit
-surface here would be a second one. Two things follow from that:
-
-- **Un-migrated roles** — agents that exist only as a string literal in some app's source or in a
-  scheduled-task config — are read from the registry table in `Index.md` beside the role files.
-  They are a filter of their own, off by default, and each renders the steps to migrate it. A
-  coverage count ("8 of 14 roles have a role file") says more about the health of the library than
-  any single tile.
-- The one action that changes anything is library-level: **Review with Custodian** spawns a
-  terminal on the `agent-custodian` role, in the library folder. It is offered only when that role
-  file exists and is `status: active` — a session that fell back to the generic folder-terminal
-  prompt would look like a Custodian without being one.
-
-View logic is pure and tested in `src/terminals/role-view.ts`, the folder read in
-`src/terminals/role-view-loader.ts`, and the DOM in `src/ui/roles-view.ts`. It reads the library
-through the same parser a session start uses: if the view parsed the folder its own way, it and
-the running sessions could disagree about what a role says, and the view is the one you'd trust.
+A read-only wiki of that role library, opened from the top bar. See
+[docs/architecture.md](docs/architecture.md#-roles-the-agent-instruction-interface).
 
 ## Build from source
 

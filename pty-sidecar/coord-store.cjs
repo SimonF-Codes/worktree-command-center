@@ -98,10 +98,10 @@ function appendChat(dir, terminal, message) {
 }
 
 // GOD-only outbox: drop one atomic JSON command for the renderer to drain. temp + rename so
-// the watcher never reads a half-written file; one file per message. This on-disk format is a
-// documented, supported integration point (README "External dispatch") — any local process may
-// write files here directly following the same temp+rename pattern, not just this CLI. Keep the
-// record shapes (src/terminals/god.ts OutboxMessage) in sync with that doc.
+// the watcher never reads a half-written file; one file per message. This is the overseer's own
+// channel, not an integration point: a process outside the app uses the connector channel
+// (docs/api.md, wcc-client) — writing here instead would be impersonating Kane's authority
+// (docs/architecture.md, "Two ways in"). Record shapes: src/terminals/god.ts OutboxMessage.
 function dropOutbox(dir, obj) {
   const outbox = path.join(dir, 'god-outbox');
   fs.mkdirSync(outbox, { recursive: true });
