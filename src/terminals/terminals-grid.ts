@@ -627,7 +627,7 @@ export class TerminalsGrid {
 			const branches = await listBranches(repo.path);
 			const branch = this.pendingNewBranch ?? nextWorktreeBranch(branches, base);
 			this.pendingNewBranch = null;
-			const worktree = await createWorktree(repo.path, repo.name, base, branch);
+			const worktree = await createWorktree(repo.path, base, branch);
 			// Explicit opts win; otherwise inherit the toolbar dropdowns ('' = CLI default = no flag).
 			const model = opts.model ?? (this.modelSel?.value || undefined);
 			const effort = opts.effort ?? (this.effortSel?.value || undefined);

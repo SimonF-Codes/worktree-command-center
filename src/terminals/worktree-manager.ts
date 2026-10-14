@@ -24,9 +24,27 @@ export function defaultBranch(branches: string[]): string | undefined {
 	return branches[0];
 }
 
-export function worktreePathFor(repoPath: string, repoName: string, branch: string): string {
-	const parent = path.dirname(repoPath);
-	return path.join(parent, '.claude-worktrees', repoName, slugify(branch));
+export const WORKTREES_DIR = '.claude-worktrees';
+
+/** Where a repo's worktrees are created: INSIDE the repo, `<repo>/.claude-worktrees`, so a repo's
+ *  worktrees sit with it, move with it, and need no per-repo grouping folder. It is inside the
+ *  working tree, so ensureWorktreesExcluded keeps it out of git — createWorktree will not nest a
+ *  worktree in a repo it could not exclude it from. */
+export function worktreeRootFor(repoPath: string): string {
+	return path.join(repoPath, WORKTREES_DIR);
+}
+
+/** Where builds before 0.12 created them: a shared root beside the repo,
+ *  `<parent>/.claude-worktrees/<repo name>`. Never created any more, still resolved — a machine is
+ *  half-migrated for a while, and everything that finds an existing worktree does so by its
+ *  recorded path (git's worktree list, the sessions file), never by recomputing it. The relayout
+ *  (planMove with from === to) moves worktrees out of here. */
+export function legacyWorktreeRootFor(repoPath: string, repoName: string): string {
+	return path.join(path.dirname(repoPath), WORKTREES_DIR, repoName);
+}
+
+export function worktreePathFor(repoPath: string, branch: string): string {
+	return path.join(worktreeRootFor(repoPath), slugify(branch));
 }
 
 export function shouldRemoveWorktree(statusPorcelain: string, revListCount: number): boolean {
@@ -116,34 +134,58 @@ export function writeWorktreeSettings(sidecarDir: string, notifyScriptAbsPath: s
 	return file;
 }
 
-/** Keep `.claude/settings.local.json` out of `git status`. Nothing writes that file into a
- *  worktree any more (writeWorktreeSettings puts one shared copy beside the sidecar instead),
- *  but worktrees created by earlier builds still carry one, and it's our own bookkeeping, not
- *  the user's work — it shouldn't make an untouched worktree read as "dirty". Uses
- *  `.git/info/exclude` (shared across all worktrees of a repo, local-only, never committed)
- *  rather than the repo's own .gitignore, so this never touches a tracked file. Idempotent —
- *  checked before appending. Best-effort: a failure here just means those older worktrees show
- *  as dirty until fixed, never blocks anything. */
-export async function ensureClaudeSettingsIgnored(repoPath: string): Promise<void> {
-	try {
-		const gitDir = await runCommand('git', ['rev-parse', '--git-common-dir'], { cwd: repoPath, timeoutMs: 8000 });
-		if (gitDir.code !== 0) return;
-		const excludePath = path.join(path.resolve(repoPath, gitDir.stdout.trim()), 'info', 'exclude');
-		const entry = '.claude/settings.local.json';
-		let existing = '';
-		try { existing = fs.readFileSync(excludePath, 'utf8'); } catch { /* doesn't exist yet */ }
-		if (existing.split('\n').some((l) => l.trim() === entry)) return;
-		fs.mkdirSync(path.dirname(excludePath), { recursive: true });
-		const sep = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-		fs.appendFileSync(excludePath, `${sep}${entry}\n`, 'utf8');
-	} catch { /* best effort */ }
+/** Append each missing line to `<git common dir>/info/exclude`. That file is shared by every
+ *  worktree of the repo, local to this clone, and never committed, so this never touches a
+ *  tracked file. Idempotent — checked before appending. Throws when it cannot. */
+export async function ensureExcluded(repoPath: string, entries: readonly string[]): Promise<void> {
+	const gitDir = await runCommand('git', ['rev-parse', '--git-common-dir'], { cwd: repoPath, timeoutMs: 8000 });
+	if (gitDir.code !== 0) throw new Error(`git rev-parse --git-common-dir failed in ${repoPath}: ${(gitDir.error ?? gitDir.stderr).trim().split('\n')[0]}`);
+	const excludePath = path.join(path.resolve(repoPath, gitDir.stdout.trim()), 'info', 'exclude');
+	let existing = '';
+	try { existing = fs.readFileSync(excludePath, 'utf8'); } catch { /* doesn't exist yet */ }
+	const have = new Set(existing.split('\n').map((l) => l.trim()));
+	const missing = entries.filter((e) => !have.has(e));
+	if (!missing.length) return;
+	fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+	const sep = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+	fs.appendFileSync(excludePath, `${sep}${missing.join('\n')}\n`, 'utf8');
 }
 
-/** Create a fresh worktree on a NEW branch based on baseBranch. Throws on git failure. */
-export async function createWorktree(
-	repoPath: string, repoName: string, baseBranch: string, branch: string,
-): Promise<WorktreeInfo> {
-	const worktreePath = worktreePathFor(repoPath, repoName, branch);
+/** The exclude line for the nested worktree root: anchored to the repo root, directories only. */
+export const WORKTREES_EXCLUDE = `/${WORKTREES_DIR}/`;
+
+/** Keep the nested worktree root out of the repo's own `git status`. Without it every primary
+ *  checkout shows `?? .claude-worktrees/` — which reads as dirty to the floor scan and makes every
+ *  repo Move refuse — and tools that honour git's ignores walk into every worktree.
+ *
+ *  `info/exclude`, not a committed .gitignore line: the folder exists only on a clone where this
+ *  app makes worktrees, so the rule belongs to the clone, not to the repo's shared history — no
+ *  commit per repo, nothing to merge, and it works the same in a repo with no remote or one that
+ *  is not ours to commit to. A .gitignore line would protect nothing extra: measured on
+ *  2026-10-14, `git clean -fdx` already SKIPS a nested worktree ("Would skip repository"), and
+ *  `-ffdx` deletes it with or without any ignore rule. */
+export async function ensureWorktreesExcluded(repoPath: string): Promise<void> {
+	await ensureExcluded(repoPath, [WORKTREES_EXCLUDE]);
+}
+
+/** Keep `.claude/settings.local.json` — and the nested worktree root — out of `git status`.
+ *  Nothing writes that file into a worktree any more (writeWorktreeSettings puts one shared copy
+ *  beside the sidecar instead), but worktrees created by earlier builds still carry one, and it's
+ *  our own bookkeeping, not the user's work — it shouldn't make an untouched worktree read as
+ *  "dirty". Run on every repo the floor scan reaches, so a target is covered before its first
+ *  nested worktree exists. Best-effort: a failure here never blocks the scan (createWorktree
+ *  checks the worktree root again itself, and refuses). */
+export async function ensureClaudeSettingsIgnored(repoPath: string): Promise<void> {
+	try { await ensureExcluded(repoPath, ['.claude/settings.local.json', WORKTREES_EXCLUDE]); }
+	catch { /* best effort */ }
+}
+
+/** Create a fresh worktree on a NEW branch based on baseBranch, inside the repo. Throws on git
+ *  failure — and before creating anything if the worktree root cannot be excluded from git. */
+export async function createWorktree(repoPath: string, baseBranch: string, branch: string): Promise<WorktreeInfo> {
+	const worktreePath = worktreePathFor(repoPath, branch);
+	try { await ensureWorktreesExcluded(repoPath); }
+	catch (e) { throw new Error(`could not add ${WORKTREES_EXCLUDE} to .git/info/exclude, so no worktree was nested in the repo: ${(e as Error).message}`); }
 	const r = await runCommand('git', ['worktree', 'add', worktreePath, '-b', branch, baseBranch], { cwd: repoPath, timeoutMs: 20000 });
 	if (r.code !== 0) {
 		throw new Error((r.error ?? r.stderr).split('\n')[0] || 'git worktree add failed');

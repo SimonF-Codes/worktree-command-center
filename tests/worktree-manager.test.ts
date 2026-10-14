@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { slugify, autoBranchName, defaultBranch, worktreePathFor, shouldRemoveWorktree } from '../src/terminals/worktree-manager';
+import { slugify, autoBranchName, defaultBranch, worktreePathFor, worktreeRootFor, legacyWorktreeRootFor, shouldRemoveWorktree } from '../src/terminals/worktree-manager';
 
 describe('slugify', () => {
 	it('makes a filesystem/branch-safe slug', () => {
@@ -25,9 +25,13 @@ describe('defaultBranch', () => {
 });
 
 describe('worktreePathFor', () => {
-	it('places worktrees under the repo parent .claude-worktrees/<repo>/<branch-slug>', () => {
-		const p = worktreePathFor('/home/dev/projects/my-app', 'my-app', 'wt/main-1');
-		expect(p.replace(/\\/g, '/')).toBe('/home/dev/projects/.claude-worktrees/my-app/wt-main-1');
+	it('places worktrees inside the repo: <repo>/.claude-worktrees/<branch-slug>', () => {
+		const p = worktreePathFor('/home/dev/projects/my-app', 'wt/main-1');
+		expect(p.replace(/\\/g, '/')).toBe('/home/dev/projects/my-app/.claude-worktrees/wt-main-1');
+		expect(worktreeRootFor('/home/dev/projects/my-app').replace(/\\/g, '/')).toBe('/home/dev/projects/my-app/.claude-worktrees');
+	});
+	it('still knows the old shared root beside the repo, keyed by the target name', () => {
+		expect(legacyWorktreeRootFor('/home/dev/projects/my-app', 'My App').replace(/\\/g, '/')).toBe('/home/dev/projects/.claude-worktrees/My App');
 	});
 });
 
