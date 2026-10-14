@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
-import { pickRepos, mergeRepos, repoOptionLabel, reposForWorkspace, linkedRepo, type DirEntry } from '../src/workspace';
+import { pickRepos, mergeRepos, forgetRepo, retargetRepo, repoOptionLabel, reposForWorkspace, linkedRepo, type DirEntry } from '../src/workspace';
 import type { RepoConfig } from '../src/terminals/terminals-grid';
 
 describe('pickRepos', () => {
@@ -155,5 +155,48 @@ describe('linkedRepo', () => {
   it('is undefined for an unlinked tab or a repo that has left the floor', () => {
     expect(linkedRepo(repos, undefined)).toBeUndefined();
     expect(linkedRepo(repos, '/gone')).toBeUndefined();
+  });
+});
+
+describe('forgetRepo', () => {
+  const a = { name: 'a', path: path.join('C:', 'dev', 'a') };
+  const b = { name: 'b', path: path.join('C:', 'dev', 'b'), group: 'ws' };
+
+  it('removes the target at that path and keeps the rest in order', () => {
+    expect(forgetRepo([a, b], a.path)).toEqual([b]);
+  });
+
+  it('matches by resolved path, so a differently spelled path still finds it', () => {
+    expect(forgetRepo([a, b], path.resolve(b.path) + path.sep)).toEqual([a]);
+  });
+
+  it('is a no-op for a path that is not registered', () => {
+    expect(forgetRepo([a, b], path.join('C:', 'dev', 'zzz'))).toEqual([a, b]);
+  });
+});
+
+describe('retargetRepo', () => {
+  const old = path.join('C:', 'dev', 'Nest', 'Repo');
+  const moved = path.join('C:', 'dev', 'Repo');
+  const repo = { name: 'Repo', path: old, group: 'ws', remote: 'origin' };
+  const other = { name: 'Other', path: path.join('C:', 'dev', 'Other') };
+
+  it('repoints the entry in place, keeping name, group and position', () => {
+    expect(retargetRepo([repo, other], old, moved)).toEqual([{ ...repo, path: moved }, other]);
+  });
+
+  it('folds into an existing entry at the new path instead of duplicating it', () => {
+    const already = { name: 'Repo (added again)', path: moved };
+    expect(retargetRepo([repo, other, already], old, moved)).toEqual([other, already]);
+  });
+
+  it('leaves the list untouched when the old path is not registered', () => {
+    const list = [other];
+    expect(retargetRepo(list, old, moved)).toBe(list);
+  });
+
+  it('leaves the list untouched when old and new are the same folder', () => {
+    const list = [repo];
+    expect(retargetRepo(list, old, path.resolve(old))).toBe(list);
   });
 });
