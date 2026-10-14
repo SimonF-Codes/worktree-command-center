@@ -8,8 +8,8 @@ import { planMove, type MovePlan } from '../src/move-repo';
 import { projectDirName } from '../src/terminals/resume-target';
 
 // Real git, real directories, all inside a temp root — never a real repo. The fixture is the
-// VerticalChess shape: a repo nested one level too deep, two worktrees in the nested canonical
-// root, one loose beside it, one nested INSIDE the repo folder, and transcript folders keyed to
+// VerticalChess shape: a repo nested one level too deep, two worktrees in the old shared root
+// beside it (the layout before 0.12), one loose beside it, one nested INSIDE the repo folder, and transcript folders keyed to
 // some of those paths in a stand-in ~/.claude/projects.
 
 // Inherited GIT_* variables point every git call at the repo RUNNING the tests (see
@@ -32,7 +32,7 @@ beforeEach(() => {
 	from = path.join(root, 'Nest', 'Repo');
 	to = path.join(root, 'Repo');
 	oldRoot = path.join(root, 'Nest', '.claude-worktrees', 'Repo');
-	newRoot = path.join(root, '.claude-worktrees', 'Repo');
+	newRoot = path.join(to, '.claude-worktrees');
 	wtA = path.join(oldRoot, 'wt-main-1');
 	wtB = path.join(oldRoot, 'wt-main-2');
 	loose = path.join(root, 'Nest', 'wt-loose');
@@ -134,8 +134,13 @@ describe('a whole move, on real git', () => {
 		// The worktree that stayed still works — its .git file was repaired to the new repo.
 		expect(git(loose, 'rev-parse', 'HEAD')).toBe(detached);
 		expect(fs.readFileSync(path.join(loose, '.git'), 'utf8')).toContain(to.replace(/\\/g, '/'));
-		// The emptied old root is gone; the folder that still holds a worktree is not.
+		// The emptied old root is gone, and the shared root above it; the folder that still holds a
+		// worktree is not.
 		expect(fs.existsSync(oldRoot)).toBe(false);
+		expect(fs.existsSync(path.dirname(oldRoot))).toBe(false);
+		// The worktrees now inside the repo do not show in its own status.
+		expect(git(to, 'status', '--porcelain')).toBe('');
+		expect(fs.readFileSync(path.join(to, '.git', 'info', 'exclude'), 'utf8')).toContain('/.claude-worktrees/');
 		expect(fs.existsSync(path.join(root, 'Nest'))).toBe(true);
 
 		// Transcripts followed their paths; the unrelated one was not touched.
@@ -178,6 +183,86 @@ describe('a whole move, on real git', () => {
 		expect(git(to, 'worktree', 'list', '--porcelain')).not.toMatch(/prunable/);
 		expect(fs.existsSync(path.join(projects, projectDirName(to)))).toBe(true);
 	});
+});
+
+// The migration: the repo stays at `from`; its worktrees in the old shared root move inside it.
+describe('a relayout (from === to), on real git', () => {
+	const nestRoot = () => path.join(from, '.claude-worktrees');
+
+	it('moves the old-root worktrees inside the repo, keeps git status clean, renames transcripts, and verifies', async () => {
+		const refsBefore = git(from, 'for-each-ref', '--format=%(objectname) %(refname)');
+		// A dirty repo checkout and a dirty staying worktree do not block it — neither moves.
+		fs.writeFileSync(path.join(from, 'scratch.txt'), 'mine\n');
+		fs.writeFileSync(path.join(loose, 'scratch.txt'), 'mine\n');
+
+		const plan = planMove(await gatherMoveFacts(target(), from, ctx({ journalDir: journals })));
+		expect(plan.refusals).toEqual([]);
+		expect(plan.relayout).toBe(true);
+
+		const state = appState();
+		const r = await executeMove(plan, { projectsDir: projects, journalDir: journals, applyAppState: state.applyAppState });
+		expect(r.ok, describeMoveResult(r)).toBe(true);
+		expect(r.steps.map((s) => s.label).join('\n')).not.toMatch(/repair|Moving /);
+
+		const newA = path.join(nestRoot(), 'wt-main-1'), newB = path.join(nestRoot(), 'wt-main-2');
+		expect(listedWorktrees(from).sort()).toEqual([from, newA, newB, loose, inner].sort());
+		expect(git(from, 'for-each-ref', '--format=%(objectname) %(refname)')).toBe(refsBefore);
+		for (const [wt, branch] of [[newA, 'wt/main-1'], [newB, 'wt/main-2']] as const) {
+			expect(git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(branch);
+			expect(git(wt, 'status', '--porcelain')).toBe('');
+			// Both ends of the link were rewritten by git worktree move.
+			expect(fs.readFileSync(path.join(wt, '.git'), 'utf8')).toContain(from.replace(/\\/g, '/'));
+		}
+		// The repo's own status shows only the user's file, never .claude-worktrees/.
+		expect(git(from, 'status', '--porcelain')).toBe('?? scratch.txt');
+		expect(fs.existsSync(oldRoot)).toBe(false);
+		expect(fs.existsSync(path.dirname(oldRoot))).toBe(false);
+
+		// wt-main-1's transcript followed it; the repo's own did not move.
+		expect(fs.readdirSync(projects).sort()).toEqual([projectDirName(from), projectDirName(newA), 'C--somewhere-else'].sort());
+		expect(state.calls[0]!.pathMap).toEqual([{ from: wtA, to: newA }, { from: wtB, to: newB }].sort((a, b) => a.from.localeCompare(b.from)));
+
+		// Run again: nothing left to do.
+		const again = planMove(await gatherMoveFacts(target(), from, ctx({ journalDir: journals })));
+		expect(again.refusals.map((x) => x.code)).toEqual(['nothing-to-relayout']);
+	});
+
+	it('refuses a dirty worktree it would move, and touches nothing', async () => {
+		fs.writeFileSync(path.join(wtB, 'wip.txt'), 'unsaved\n');
+		const plan = planMove(await gatherMoveFacts(target(), from, ctx()));
+		expect(plan.refusals.map((r) => r.code)).toEqual(['dirty']);
+		expect(fs.existsSync(nestRoot())).toBe(false);
+	});
+
+	it('refuses a worktree with a submodule checked out, which git will not move', async () => {
+		const sub = path.join(root, 'sub');
+		fs.mkdirSync(sub);
+		git(sub, 'init', '-q', '-b', 'main');
+		git(sub, '-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 's');
+		git(wtB, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 'lib');
+		git(wtB, 'commit', '-q', '-m', 'add lib');
+		const facts = await gatherMoveFacts(target(), from, ctx());
+		expect(facts.submoduleWorktrees).toEqual([wtB]);
+		expect(planMove(facts).refusals.map((r) => r.code)).toEqual(['submodule-worktree']);
+	});
+
+	it.runIf(process.platform === 'win32')('stops atomically on a held worktree, and a re-run picks up from its journal', async () => {
+		const plan = planMove(await gatherMoveFacts(target(), from, ctx({ journalDir: journals })));
+		const c = await holdOpen(wtB);
+		const first = await executeMove(plan, { projectsDir: projects, journalDir: journals, ...appState() });
+		expect(first.ok).toBe(false);
+		expect(first.stoppedAt).toContain(wtB);
+		expect(git(wtB, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('wt/main-2');
+		await release(c);
+
+		const again = planMove(await gatherMoveFacts(target(), from, ctx({ journalDir: journals })));
+		expect(again.refusals).toEqual([]);
+		expect(again.worktreeMoves.map((m) => [path.basename(m.to), m.done]).sort()).toEqual([['wt-main-1', true], ['wt-main-2', false]]);
+		const second = await executeMove(again, { projectsDir: projects, journalDir: journals, ...appState() });
+		expect(second.ok, describeMoveResult(second)).toBe(true);
+		expect(listedWorktrees(from)).toContain(path.join(nestRoot(), 'wt-main-2'));
+		expect(fs.existsSync(path.join(projects, projectDirName(path.join(nestRoot(), 'wt-main-1')), 's2.jsonl'))).toBe(true);
+	}, 30000);
 });
 
 describe('verification', () => {
@@ -230,10 +315,10 @@ describe.runIf(process.platform === 'win32')('held-open directories (Windows)', 
 		expect(git(wtB, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('wt/main-2');
 
 		await release(c);
-		const again = planMove(await gatherMoveFacts(target(), to, ctx()));
+		const again = planMove(await gatherMoveFacts(target(), to, ctx({ journalDir: journals })));
 		expect(again.refusals).toEqual([]);
 		expect(again.resuming).toBe(true);
-		expect(again.worktreeMoves.map((m) => m.done)).toEqual([true, false]);
+		expect(again.worktreeMoves.map((m) => [path.basename(m.to), m.done]).sort()).toEqual([['wt-main-1', true], ['wt-main-2', false]]);
 		const second = await executeMove(again, { projectsDir: projects, journalDir: journals, ...appState() });
 		expect(second.ok, describeMoveResult(second)).toBe(true);
 		expect(second.steps[0]!.label).toMatch(/^Resuming/);

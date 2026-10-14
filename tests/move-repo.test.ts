@@ -1,21 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
 import {
-	planMove, plannedDestinations, remapPath, isInside, worktreeRootFor, parseWorktreePorcelain,
+	planMove, plannedDestinations, remapPath, isInside, worktreeRootFor, legacyWorktreeRootFor, parseWorktreePorcelain,
 	parseGitmodulesPaths, gitdirOf, isAbsoluteGitdir, remapRepoLinks, remapSessionRecords,
 	configPathRefs, describeMovePlan, describeRefusals, type MoveFacts, type WorktreeFact, type RefusalCode,
 } from '../src/move-repo';
 import { projectDirName } from '../src/terminals/resume-target';
+import { worktreePathFor } from '../src/terminals/worktree-manager';
 
 // The VerticalChess move of 2026-10-14, as fixtures: a repo nested one level too deep, its
-// worktrees in the nested .claude-worktrees root, one loose worktree beside it, and transcripts
-// keyed to some of those paths. Built on path.resolve so the suite runs on any host.
+// worktrees in the old shared .claude-worktrees root beside it, one loose worktree beside it, and
+// transcripts keyed to some of those paths. The move lands them in the repo's own root. Built on path.resolve so the suite runs on any host.
 
 const R = path.resolve('/dev');
 const FROM = path.join(R, 'VerticalChess3DPrint', 'VerticalChess');
 const TO = path.join(R, 'VerticalChess');
 const OLD_ROOT = path.join(R, 'VerticalChess3DPrint', '.claude-worktrees', 'VerticalChess');
-const NEW_ROOT = path.join(R, '.claude-worktrees', 'VerticalChess');
+const NEW_ROOT = path.join(TO, '.claude-worktrees');
 
 const wt = (p: string, branch: string, extra: Partial<WorktreeFact> = {}): WorktreeFact =>
 	({ path: p, branch, isMain: false, prunable: false, locked: false, dirty: [], ...extra });
@@ -96,14 +97,14 @@ describe('planMove — the whole plan', () => {
 });
 
 describe('planMove — a rename in the same parent', () => {
-	it('moves no worktrees: worktreePathFor derives the same root', () => {
+	it('still relocates worktrees left in the old shared root into the renamed repo', () => {
 		const to = path.join(R, 'VerticalChess3DPrint', 'Chess');
 		const p = planMove(facts({ to }));
 		expect(p.refusals).toEqual([]);
-		expect(p.oldWorktreeRoot).toBe(p.newWorktreeRoot);
-		expect(p.worktreeMoves).toEqual([]);
-		expect(p.staying.map((s) => s.path)).toEqual([CANON_A.path, CANON_B.path, LOOSE.path]);
-		expect(plannedDestinations(facts({ to }))).toEqual([]);
+		expect(p.newWorktreeRoot).toBe(path.join(to, '.claude-worktrees'));
+		expect(p.worktreeMoves.map((m) => m.to)).toEqual([path.join(to, '.claude-worktrees', 'wt-main-1'), path.join(to, '.claude-worktrees', 'wt-main-2')]);
+		expect(p.staying.map((s) => s.path)).toEqual([LOOSE.path]);
+		expect(plannedDestinations(facts({ to }))).toEqual(p.worktreeMoves.map((m) => m.to));
 	});
 });
 
@@ -121,9 +122,11 @@ describe('planMove — worktrees nested inside the repo', () => {
 
 describe('planMove — resuming a move that stopped halfway', () => {
 	// The directory moved, and one worktree was relocated, before the run stopped. Git (after the
-	// repair) now reports CANON_A at its new home and CANON_B still in the old root.
+	// repair) now reports CANON_A at its new home and CANON_B still in the old root. CANON_A now
+	// sits inside the repo, so only the journal says it was relocated rather than always there.
 	const movedA = wt(path.join(NEW_ROOT, 'wt-main-1'), 'wt/main-1');
 	const resumed = facts({
+		priorRelocations: [{ from: CANON_A.path, to: movedA.path }, { from: CANON_B.path, to: path.join(NEW_ROOT, 'wt-main-2') }],
 		fromExists: false, toExists: true,
 		worktrees: [wt(TO, 'main', { isMain: true }), movedA, CANON_B, LOOSE],
 		transcriptDirs: [projectDirName(TO), projectDirName(CANON_A.path)],
@@ -209,7 +212,7 @@ describe('planMove — refusals', () => {
 	it('refuses a destination that exists, a missing repo, and moving onto itself or into itself', () => {
 		expect(codes(facts({ toExists: true }))).toEqual(['destination-exists']);
 		expect(codes(facts({ fromExists: false }))).toEqual(['missing']);
-		expect(codes(facts({ to: FROM }))).toEqual(['same-path']);
+		expect(codes(facts({ to: FROM, worktrees: [MAIN, LOOSE] }))).toEqual(['nothing-to-relayout']);
 		expect(codes(facts({ to: path.join(FROM, 'inner') }))).toEqual(['inside-itself']);
 	});
 
@@ -271,6 +274,125 @@ describe('planMove — transcripts', () => {
 	});
 });
 
+// The migration to the nested layout: from === to. The repo stays; only worktrees in the old
+// shared root move, into <repo>/.claude-worktrees.
+describe('planMove — relayout (from === to)', () => {
+	const REPO = FROM;
+	const IN = path.join(REPO, '.claude-worktrees');
+	const NATIVE = wt(path.join(IN, 'wt-main-5'), 'wt/main-5'); // created by a build that nests
+	const relayout = (over: Partial<MoveFacts> = {}): MoveFacts => facts({ to: REPO, worktrees: [MAIN, CANON_A, CANON_B, LOOSE, NATIVE], ...over });
+	const p = planMove(relayout());
+
+	it('moves each worktree in the old shared root into the repo, and nothing else', () => {
+		expect(p.refusals).toEqual([]);
+		expect(p.relayout).toBe(true);
+		expect(p.resuming).toBe(false);
+		expect(p.newWorktreeRoot).toBe(IN);
+		expect(p.worktreeMoves).toEqual([
+			{ from: CANON_A.path, to: path.join(IN, 'wt-main-1'), branch: 'wt/main-1', done: false },
+			{ from: CANON_B.path, to: path.join(IN, 'wt-main-2'), branch: 'wt/main-2', done: false },
+		]);
+		expect(p.carried).toEqual([]);
+		expect(p.staying.map((s) => s.path)).toEqual([LOOSE.path]);
+	});
+
+	it('repairs nothing — git worktree move rewrites both ends itself — and maps only the relocations', () => {
+		expect(p.repair).toEqual([]);
+		expect(p.pathMap).toEqual([
+			{ from: CANON_A.path, to: path.join(IN, 'wt-main-1') },
+			{ from: CANON_B.path, to: path.join(IN, 'wt-main-2') },
+		]);
+	});
+
+	it('renames only the relocated worktrees\' transcripts, never the repo\'s own', () => {
+		expect(p.transcripts).toEqual([{ from: projectDirName(CANON_A.path), to: projectDirName(path.join(IN, 'wt-main-1')), done: false }]);
+	});
+
+	it('still expects every worktree — moved, staying and already nested — to resolve', () => {
+		expect(p.expectedWorktrees.sort()).toEqual([path.join(IN, 'wt-main-1'), path.join(IN, 'wt-main-2'), LOOSE.path, NATIVE.path].sort());
+	});
+
+	it('only refuses for what it relocates: a dirty or live repo checkout or staying worktree is fine', () => {
+		const dirtyElsewhere = relayout({
+			worktrees: [{ ...MAIN, dirty: [' M a.txt'] }, CANON_A, { ...LOOSE, dirty: ['?? x'] }, { ...NATIVE, dirty: ['?? y'] }],
+			livePaths: [REPO, LOOSE.path, NATIVE.path],
+		});
+		expect(codes(dirtyElsewhere)).toEqual([]);
+		expect(codes(relayout({ worktrees: [MAIN, { ...CANON_A, dirty: [' M b.ts'] }] }))).toEqual(['dirty']);
+		expect(codes(relayout({ livePaths: [CANON_B.path] }))).toEqual(['live-terminal']);
+		expect(codes(relayout({ livePaths: [path.join(IN, 'wt-main-1', 'src')] }))).toEqual(['live-terminal']);
+	});
+
+	it('refuses a worktree with submodules checked out — git will not move one', () => {
+		const q = planMove(relayout({ submoduleWorktrees: [CANON_B.path] }));
+		expect(q.refusals.map((r) => r.code)).toEqual(['submodule-worktree']);
+		expect(q.refusals[0]!.path).toBe(CANON_B.path);
+		expect(codes(relayout({ submoduleWorktrees: [NATIVE.path] }))).toEqual([]); // not moving, not refused
+	});
+
+	it('ignores an absolute submodule gitdir it does not move', () => {
+		expect(codes(relayout({ absoluteSubmodules: [{ path: path.join(REPO, 'lib'), gitdir: 'C:/x/.git/modules/lib' }] }))).toEqual([]);
+		expect(codes(relayout({ absoluteSubmodules: [{ path: path.join(CANON_A.path, 'lib'), gitdir: 'C:/x/.git/modules/lib' }] }))).toEqual(['absolute-submodule']);
+	});
+
+	it('says there is nothing to do once every worktree is nested', () => {
+		const q = planMove(relayout({ worktrees: [MAIN, NATIVE] }));
+		expect(q.refusals.map((r) => r.code)).toEqual(['nothing-to-relayout']);
+		expect(q.refusals[0]!.message).toMatch(/already lives inside the repo/);
+	});
+
+	it('resumes from its journal: a finished relocation is done, its transcript still renamed', () => {
+		const movedA = wt(path.join(IN, 'wt-main-1'), 'wt/main-1');
+		const q = planMove(relayout({
+			worktrees: [MAIN, movedA, CANON_B],
+			priorRelocations: [{ from: CANON_A.path, to: movedA.path }, { from: CANON_B.path, to: path.join(IN, 'wt-main-2') }],
+		}));
+		expect(q.refusals).toEqual([]);
+		expect(q.worktreeMoves).toEqual([
+			{ from: CANON_A.path, to: movedA.path, branch: 'wt/main-1', done: true },
+			{ from: CANON_B.path, to: path.join(IN, 'wt-main-2'), branch: 'wt/main-2', done: false },
+		]);
+		expect(q.transcripts).toEqual([{ from: projectDirName(CANON_A.path), to: projectDirName(movedA.path), done: false }]);
+		expect(describeMovePlan(q)).toMatch(/wt-main-1 \[wt\/main-1\]\s+✓ already/);
+	});
+
+	it('marks a transcript done once a resumed run already renamed it', () => {
+		const movedA = wt(path.join(IN, 'wt-main-1'), 'wt/main-1');
+		const q = planMove(relayout({
+			worktrees: [MAIN, movedA, CANON_B],
+			priorRelocations: [{ from: CANON_A.path, to: movedA.path }],
+			transcriptDirs: [projectDirName(movedA.path)],
+		}));
+		expect(q.transcripts).toEqual([{ from: projectDirName(CANON_A.path), to: projectDirName(movedA.path), done: true }]);
+	});
+
+	it('without a journal, a worktree already inside the repo is just nested — never claimed as a relocation', () => {
+		const movedA = wt(path.join(IN, 'wt-main-1'), 'wt/main-1');
+		const q = planMove(relayout({ worktrees: [MAIN, movedA, CANON_B] }));
+		expect(q.worktreeMoves.map((m) => m.from)).toEqual([CANON_B.path]);
+		expect(q.transcripts).toEqual([]); // CANON_A's transcript is not handed to whatever sits at movedA
+	});
+
+	it('warns when a history is already keyed to a destination path', () => {
+		const stale = projectDirName(path.join(IN, 'wt-main-2'));
+		const q = planMove(relayout({ transcriptDirs: [stale] }));
+		expect(q.refusals).toEqual([]);
+		expect(q.warnings.join('\n')).toContain(stale);
+	});
+
+	it('says in the confirm text that the repo stays and the exclude rule is written first', () => {
+		const text = describeMovePlan(p);
+		expect(text).toContain('stays where it is');
+		expect(text).toContain('.git/info/exclude');
+		expect(text).not.toContain('git worktree repair');
+		expect(text).toContain('the target itself does not change');
+	});
+
+	it('refuses a relayout of a repo that is not there', () => {
+		expect(codes(relayout({ fromExists: false, toExists: false }))).toEqual(['missing']);
+	});
+});
+
 describe('path helpers', () => {
 	it('isInside is separator-bounded', () => {
 		expect(isInside(path.join(R, 'Repo', 'x'), path.join(R, 'Repo'), false)).toBe(true);
@@ -284,8 +406,10 @@ describe('path helpers', () => {
 		expect(remapPath(path.join(R, 'q'), map, false)).toBe(path.join(R, 'q'));
 	});
 
-	it('worktreeRootFor matches worktreePathFor', () => {
-		expect(worktreeRootFor(TO, 'VerticalChess')).toBe(NEW_ROOT);
+	it('worktreeRootFor matches worktreePathFor, and the legacy root is the shared one beside the repo', () => {
+		expect(worktreeRootFor(TO)).toBe(NEW_ROOT);
+		expect(path.dirname(worktreePathFor(TO, 'wt/main-1'))).toBe(NEW_ROOT);
+		expect(legacyWorktreeRootFor(FROM, 'VerticalChess')).toBe(OLD_ROOT);
 	});
 });
 
