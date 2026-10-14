@@ -5,6 +5,15 @@ landed on `main`.
 
 ## Unreleased
 
+**🛡 Closing or removing a worktree no longer deletes what a junction inside it points at**
+- **Removing a worktree used to delete the target of any junction or symlink inside it.**
+  `git worktree remove`, with or without `--force`, deletes *through* a directory junction into
+  its target. This is how the primary checkout's `node_modules` was wiped once: a worktree's
+  `node_modules` was a junction to it, and the worktree was removed. Every removal path now drops
+  each link first, and removes only the link. That covers closing a tile with ×, the
+  pristine-worktree cleanup, and **Prune merged worktrees…**. If a link won't go, nothing is
+  deleted: not the worktree, and not its branch.
+
 **🧹 Prune worktrees whose work is already merged**
 - **⚙ Settings → Targets → Prune merged worktrees…** checks every worktree of every repo target
   and shows the result before anything is removed. Results are grouped by repo, with totals
