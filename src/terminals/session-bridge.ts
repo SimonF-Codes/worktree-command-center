@@ -36,6 +36,15 @@ export class SessionBridge {
 	private onTranscriptOffCb: (() => void) | null = null;
 	private transcriptWatch = new TranscriptOffWatch();
 	private killing: Promise<KillResult> | null = null;
+	/** One death, one report. The sidecar sends an {t:'exit'} frame with claude's code and then
+	 *  exits itself, so the same death also arrives as the process 'exit' event (code 0). Both
+	 *  used to reach onExit: a tile's fresh-fallback ran twice and started two sessions, the
+	 *  second orphaning the first. */
+	private exited = false;
+	/** Set once the owner asks for the kill. From then on this session's output and death are
+	 *  not news to anyone: the owner has either torn down or already started its replacement,
+	 *  and a late "[session ended (code 1)]" from the old one marked the live one dead. */
+	private silenced = false;
 
 	constructor(
 		private sidecarPath: string,
@@ -73,8 +82,14 @@ export class SessionBridge {
 		});
 		this.proc.stdout?.on('data', (d) => this.handleRx(d.toString('utf8')));
 		this.proc.stderr?.on('data', () => { /* sidecar logs nothing to stderr normally */ });
-		this.proc.on('error', (e) => this.onExitCb?.(this.exitFromError(e)));
-		this.proc.on('exit', (code) => this.onExitCb?.(code));
+		this.proc.on('error', (e) => { if (!this.silenced && !this.exited) this.reportExit(this.exitFromError(e)); });
+		this.proc.on('exit', (code) => this.reportExit(code));
+	}
+
+	private reportExit(code: number | null): void {
+		if (this.exited || this.silenced) return;
+		this.exited = true;
+		this.onExitCb?.(code);
 	}
 
 	write(utf8: string): void {
@@ -95,6 +110,7 @@ export class SessionBridge {
 	 *  cleared it unconditionally, so a kill that silently failed left a live process whose
 	 *  pid nothing in the app still held — unreachable by anything but Task Manager. */
 	killTree(): Promise<KillResult> {
+		this.silenced = true; // even if the kill fails: onKillFailure, not onExit, reports that
 		if (this.killing) return this.killing;
 		const pid = this.proc?.pid;
 		if (pid === undefined) { this.proc = null; return Promise.resolve({ ok: true, pid: null }); }
@@ -115,12 +131,13 @@ export class SessionBridge {
 		const { frames, rest } = decodeFrames(this.rxBuf + chunk);
 		this.rxBuf = rest;
 		for (const f of frames) {
+			if (this.silenced) return;
 			if (f.t === 'data' && typeof f.d === 'string') {
 				const text = Buffer.from(f.d, 'base64').toString('utf8');
 				this.onDataCb?.(text);
 				if (this.transcriptWatch.feed(text)) this.onTranscriptOffCb?.();
 			} else if (f.t === 'exit') {
-				this.onExitCb?.(typeof f.code === 'number' ? f.code : 0);
+				this.reportExit(typeof f.code === 'number' ? f.code : 0);
 			} else if (f.t === 'ready') {
 				this.onReadyCb?.();
 			}
