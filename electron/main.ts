@@ -170,7 +170,8 @@ const { parentPort } = require('worker_threads');
 const { spawn } = require('child_process');
 parentPort.on('message', ({ id, command, args, opts }) => {
 	const timeoutMs = (opts && opts.timeoutMs) || 15000;
-	const exe = process.platform === 'win32' ? command + '.exe' : command;
+	// An absolute path to an .exe (gh from winget's folder) is used as-is, never doubled.
+	const exe = process.platform === 'win32' ? (/\\.exe$/i.test(command) ? command : command + '.exe') : command;
 	let proc;
 	try { proc = spawn(exe, args, { cwd: opts && opts.cwd, windowsHide: true }); }
 	catch (err) { parentPort.postMessage({ id, r: { stdout: '', stderr: '', code: null, timedOut: false, error: String(err && err.message) } }); return; }
