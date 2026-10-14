@@ -8,6 +8,8 @@ import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, forgetRepo, retargetRepo, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
 import { planMove, describeMovePlan, describeRefusals, remapRepoLinks, samePath, isInside, legacyWorktreeRootFor, type PathMove } from './move-repo';
 import { gatherMoveFacts, executeMove, describeMoveResult } from './move-repo-io';
+import { planPrune, describePrunePlan, stillPrunable } from './prune-worktrees';
+import { gatherPruneFacts, executePrune, describePruneResults } from './prune-worktrees-io';
 import { runCommand } from './command-runner';
 import { tabLinkOptions, toolbarForLink, defaultNewRepoParent, tabTitle, type TabLinkKind } from './tab-repo';
 import { defaultNewRepoParams, describeNewRepo, seedFiles } from './new-repo-params';
@@ -305,6 +307,7 @@ async function main(): Promise<void> {
 				relayout: (r) => runMoveInteractive(r, r.path),
 				repoint: (r) => repointTargetInteractive(r),
 				forget: (r) => forgetTargetInteractive(r),
+				prune: () => pruneWorktreesInteractive(),
 			},
 		});
 		settingsBtn.addEventListener('click', () => { void settingsPanel.toggle(appEl); });
@@ -910,6 +913,42 @@ async function main(): Promise<void> {
 					return;
 				}
 				if (await promptForConfirm(`${relayout ? 'Nesting the worktrees of' : 'Move of'} ${r.name} stopped`, describeMoveResult(result), 'Re-check and resume')) continue;
+				return;
+			}
+		}
+
+		/** Prune merged worktrees across every repo target. The dry run IS the dialog: every worktree
+		 *  on a line with how it was found merged (or every reason it is kept) and the conversations
+		 *  its removal would orphan. Nothing is removed until it is confirmed, and then only what a
+		 *  fresh look, taken right before, still agrees on. Branches are never deleted. */
+		async function pruneWorktreesInteractive(): Promise<void> {
+			const targets = repos.filter((r) => !r.folder).map((r) => ({ name: r.name, path: r.path }));
+			const gather = () => gatherPruneFacts(targets, { livePaths: allLivePaths(), sessionsFile, caseInsensitive });
+			for (;;) {
+				toast(`Checking ${targets.length} repos: merged, clean, in use, held open, transcripts…`, 'info');
+				let plan;
+				try { plan = planPrune(await gather()); }
+				catch (e) { toast(`Couldn't read the worktrees: ${(e as Error).message}`, 'error'); return; }
+				console.info('[wcc] prune plan', plan.totals);
+				if (!plan.totals.prune) {
+					if (await promptForConfirm('Nothing to prune', describePrunePlan(plan), 'Re-check')) continue;
+					return;
+				}
+				const n = plan.totals.prune;
+				if (!await promptForConfirm(`Prune ${n} merged worktree${n === 1 ? '' : 's'}?`, describePrunePlan(plan), `Remove ${n}`)) return;
+				let fresh;
+				try { fresh = planPrune(await gather()); }
+				catch (e) { toast(`Couldn't re-check the worktrees, so nothing was removed: ${(e as Error).message}`, 'error'); return; }
+				const confirmed = stillPrunable(plan, fresh, caseInsensitive);
+				const results = await executePrune(confirmed);
+				console.info('[wcc] prune', results);
+				await Promise.all([...grids.values()].map((g) => g.rescanWorktrees().catch(() => undefined)));
+				const ok = results.filter((r) => r.ok).length;
+				if (ok === n) { toast(`Removed ${ok} merged worktree${ok === 1 ? '' : 's'}. Every branch is kept.`, 'success', { durationMs: 15000 }); return; }
+				const dropped = n - results.length;
+				const msg = describePruneResults(results, plan)
+					+ (dropped ? `\n\n${dropped} changed between the dry run and the removal and ${dropped === 1 ? 'was' : 'were'} left alone.` : '');
+				if (await promptForConfirm('Prune finished with exceptions', msg, 'Re-check')) continue;
 				return;
 			}
 		}
