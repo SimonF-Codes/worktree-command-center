@@ -1450,8 +1450,12 @@ export class TerminalsGrid {
 			const full = path.join(reqDir, f);
 			let text = '';
 			try { text = fsSync.readFileSync(full, 'utf8'); } catch { continue; }
-			try { fsSync.renameSync(full, path.join(done, f)); } catch { try { fsSync.unlinkSync(full); } catch { /* ignore */ } }
-			void this.handleConnectorRequest(connectorId, text);
+			// Claim it before acting: whichever side moves or removes the file first owns it. A sender
+			// that gave up waiting withdraws an unread request by unlinking it (wcc-client does, so a
+			// spawn can't fire hours later) — if that won the race, this request is not ours to act on.
+			let claimed = false;
+			try { fsSync.renameSync(full, path.join(done, f)); claimed = true; } catch { try { fsSync.unlinkSync(full); claimed = true; } catch { /* withdrawn */ } }
+			if (claimed) void this.handleConnectorRequest(connectorId, text);
 		}
 	}
 
