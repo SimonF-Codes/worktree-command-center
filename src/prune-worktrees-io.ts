@@ -3,6 +3,7 @@ import * as path from 'path';
 import { runCommand } from './command-runner';
 import { parseWorktreePorcelain, parseGitmodulesPaths } from './move-repo';
 import { defaultProjectsDir, probeRenameCode, holdersByCommandLine } from './move-repo-io';
+import { findLinks, unlinkLinksInside } from './terminals/worktree-manager';
 import {
 	planPrune, baseFor, countCherryUnmatched,
 	type PruneFacts, type PruneRepoFacts, type PruneWorktreeFact, type PrunePlan, type RepoPrunePlan, type HeldDir,
@@ -87,33 +88,6 @@ function hasSubmoduleCheckout(dir: string): boolean {
 	return parseGitmodulesPaths(gm).some((sub) => fs.existsSync(path.join(dir, sub, '.git')));
 }
 
-/** Every symlink and junction inside `dir`, never descending into one.
- *
- *  This is why: measured on 2026-10-14, `git worktree remove` FOLLOWS a directory junction and
- *  deletes what it points at — a worktree whose node_modules is a junction to the primary
- *  checkout's took that node_modules with it, exit code 0. Worktrees on this floor are commonly
- *  set up exactly that way. So every link is unlinked (which removes the link alone) before git
- *  is let near the directory. Node's lstat reports a junction as a symbolic link. */
-export async function findLinks(dir: string): Promise<{ path: string; target: string }[]> {
-	const out: { path: string; target: string }[] = [];
-	const walk = async (d: string): Promise<void> => {
-		let ents: fs.Dirent[];
-		try { ents = await fs.promises.readdir(d, { withFileTypes: true }); } catch { return; }
-		for (const e of ents) {
-			const p = path.join(d, e.name);
-			if (e.isSymbolicLink()) {
-				let target = '?';
-				try { target = await fs.promises.readlink(p); } catch { /* unreadable target: still a link */ }
-				out.push({ path: p, target });
-			} else if (e.isDirectory() && !(d === dir && e.name === '.git')) {
-				await walk(p);
-			}
-		}
-	};
-	await walk(dir);
-	return out;
-}
-
 /** Directory name → number of .jsonl conversations in it. */
 export function readTranscriptCounts(projectsDir: string): Record<string, number> {
 	const out: Record<string, number> = {};
@@ -194,15 +168,10 @@ export async function executePrune(repos: readonly RepoPrunePlan[]): Promise<Pru
 		for (const e of r.prune) {
 			const res: PruneResult = { repoName: r.repoName, path: e.path, branch: e.branch, ok: false, detail: '' };
 			out.push(res);
-			// Links first (see findLinks): git would delete through them. Any that will not go,
-			// and the worktree is not removed at all.
-			const links = await findLinks(e.path);
-			const stuck: string[] = [];
-			for (const l of links) {
-				try { fs.unlinkSync(l.path); } catch { /* checked below */ }
-				try { fs.lstatSync(l.path); stuck.push(l.path); } catch { /* gone, as it should be */ }
-			}
-			if (stuck.length) { res.detail = `not removed: could not unlink ${stuck.length} link${stuck.length === 1 ? '' : 's'} inside it (${stuck[0]}), and git would delete through ${stuck.length === 1 ? 'it' : 'them'} into what ${stuck.length === 1 ? 'it points' : 'they point'} at`; continue; }
+			// Links first (unlinkLinksInside): git would delete through them into their targets.
+			// Any that will not go, and the worktree is not removed at all.
+			const { unlinked: links, stuck } = await unlinkLinksInside(e.path);
+			if (stuck.length) { res.detail = `not removed: could not unlink ${stuck.length} link${stuck.length === 1 ? '' : 's'} inside it (${stuck[0]!.path}), and git would delete through ${stuck.length === 1 ? 'it' : 'them'} into what ${stuck.length === 1 ? 'it points' : 'they point'} at`; continue; }
 			const rm = await git(r.repoPath, ['worktree', 'remove', e.path], 60000);
 			if (rm.code !== 0) { res.detail = explainRemoveFailure(firstLine(rm)) + (links.length ? ` (its ${links.length} link${links.length === 1 ? ' was' : 's were'} already unlinked)` : ''); continue; }
 			const list = await git(r.repoPath, ['worktree', 'list', '--porcelain']);

@@ -193,7 +193,55 @@ export async function createWorktree(repoPath: string, baseBranch: string, branc
 	return { worktreePath, branch };
 }
 
-/** Remove the worktree only if pristine; otherwise keep it. Returns the action taken. */
+export interface LinkInfo { path: string; target: string }
+
+/** Every symlink and junction inside `dir`, never descending into one (Node's lstat reports a
+ *  junction as a symbolic link). The worktree's own `.git` is skipped. */
+export async function findLinks(dir: string): Promise<LinkInfo[]> {
+	const out: LinkInfo[] = [];
+	const walk = async (d: string): Promise<void> => {
+		let ents: fs.Dirent[];
+		try { ents = await fs.promises.readdir(d, { withFileTypes: true }); } catch { return; }
+		for (const e of ents) {
+			const p = path.join(d, e.name);
+			if (e.isSymbolicLink()) {
+				let target = '?';
+				try { target = await fs.promises.readlink(p); } catch { /* unreadable target: still a link */ }
+				out.push({ path: p, target });
+			} else if (e.isDirectory() && !(d === dir && e.name === '.git')) {
+				await walk(p);
+			}
+		}
+	};
+	await walk(dir);
+	return out;
+}
+
+/** Drop every link inside `dir` — the LINK only — so that a recursive delete of `dir` afterwards
+ *  has no link to cross.
+ *
+ *  Why: `git worktree remove` (with or without --force) deletes THROUGH a directory junction, into
+ *  its target. Reproduced on 2026-10-14 (exit 0, target emptied), and it is how the primary
+ *  checkout's node_modules was wiped once: a worktree's node_modules was a junction to it.
+ *
+ *  Each link goes with a NON-recursive call: rmdir (RemoveDirectoryW — what .NET's
+ *  Directory.Delete(path, false) calls), which removes a directory junction or symlink itself and
+ *  can never descend; unlink for a file symlink. Never `cmd /c rmdir`: from Git Bash the /c is
+ *  path-mangled and it silently does nothing. A link still there afterwards is in `stuck`, and a
+ *  caller must then NOT delete the directory. */
+export async function unlinkLinksInside(dir: string): Promise<{ unlinked: LinkInfo[]; stuck: LinkInfo[] }> {
+	const unlinked: LinkInfo[] = [], stuck: LinkInfo[] = [];
+	for (const l of await findLinks(dir)) {
+		try { fs.rmdirSync(l.path); } catch { try { fs.unlinkSync(l.path); } catch { /* checked below */ } }
+		let gone = false;
+		try { fs.lstatSync(l.path); } catch { gone = true; }
+		(gone ? unlinked : stuck).push(l);
+	}
+	return { unlinked, stuck };
+}
+
+/** Remove the worktree only if pristine; otherwise keep it. Returns the action taken. Links inside
+ *  it are dropped first (unlinkLinksInside); one that will not go keeps the worktree. */
 export async function removeWorktreeIfPristine(
 	repoPath: string, worktreePath: string, baseBranch: string,
 ): Promise<'removed' | 'kept'> {
@@ -202,14 +250,18 @@ export async function removeWorktreeIfPristine(
 	// Fail safe on both probes: if status OR rev-list errored, treat as NOT pristine so we never delete work we couldn't verify.
 	const count = revs.code === 0 ? (parseInt(revs.stdout.trim() || '0', 10) || 0) : 1;
 	if (!shouldRemoveWorktree(status.code === 0 ? status.stdout : ' M', count)) return 'kept';
+	if ((await unlinkLinksInside(worktreePath)).stuck.length) return 'kept';
 	const rm = await runCommand('git', ['worktree', 'remove', worktreePath, '--force'], { cwd: repoPath, timeoutMs: 15000 });
 	return rm.code === 0 ? 'removed' : 'kept';
 }
 
-/** Hard-delete a worktree AND its branch — used on a manual × (the branch should die). */
+/** Hard-delete a worktree AND its branch — used on a manual × (the branch should die). Links
+ *  inside it are dropped first; if one will not go, NOTHING is deleted — not the worktree (git
+ *  would delete through the link) and not the branch (it is still checked out there). */
 export async function removeWorktreeAndBranch(
 	repoPath: string, worktreePath: string, branch: string,
 ): Promise<void> {
+	if ((await unlinkLinksInside(worktreePath)).stuck.length) return;
 	await runCommand('git', ['worktree', 'remove', worktreePath, '--force'], { cwd: repoPath, timeoutMs: 15000 });
 	await runCommand('git', ['branch', '-D', branch], { cwd: repoPath, timeoutMs: 8000 });
 }

@@ -3,7 +3,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { gatherPruneFacts, executePrune, findLinks, readSavedTerminals, explainRemoveFailure } from '../src/prune-worktrees-io';
+import { gatherPruneFacts, executePrune, readSavedTerminals, explainRemoveFailure } from '../src/prune-worktrees-io';
+import { findLinks } from '../src/terminals/worktree-manager';
 import { planPrune, describePrunePlan } from '../src/prune-worktrees';
 import { projectDirName } from '../src/terminals/resume-target';
 
@@ -144,6 +145,7 @@ describe('executePrune', () => {
 		expect(describePrunePlan(plan)).toMatch(/node_modules is a link to/);
 		const results = await executePrune(plan.repos);
 		expect(results.find((r) => r.path === W('wt-main-1'))!.ok).toBe(true);
+		expect(() => fs.lstatSync(path.join(W('wt-main-1'), 'node_modules'))).toThrow();
 		expect(fs.readFileSync(path.join(shared, 'pkg', 'index.js'), 'utf8')).toBe('precious\n');
 	});
 });
