@@ -5,6 +5,38 @@ landed on `main`.
 
 ## Unreleased
 
+**🧹 Prune worktrees whose work is already merged**
+- **⚙ Settings → Targets → Prune merged worktrees…** checks every worktree of every repo target
+  and shows the result before anything is removed. Results are grouped by repo, with totals
+  ("18 of 30 worktrees in worktree-command-center are prunable, holding 12 conversations"). Each
+  worktree gets one line saying how its work was found merged, or every reason it is kept.
+- **Every line says how many Claude conversations removing it would orphan.** A transcript is
+  keyed to its worktree's path. Remove the worktree and the conversation isn't deleted, but it
+  drops out of the Coordination panel and Reopen can't reach it. That is easy to miss, so the
+  count is always shown.
+- **A worktree is removed only if all of these hold, and each failure is listed separately:**
+  its commits are all in its base branch, nothing is uncommitted, no terminal is running in it,
+  no saved terminal would resume in it, it isn't held open (the held-open probe from **Move…**),
+  it isn't locked or holding submodules, and it isn't the repo's own checkout.
+- **Squash and rebase merges are recognised.** A squash or rebase merge leaves the branch's own
+  commits out of base, which fools `git branch --merged` and `rev-list`. So there are two more
+  checks. `git cherry` matches rebased or cherry-picked commits by patch-id. `git merge-tree`
+  catches a squash: if merging the branch would change nothing, its work is in. Lines merged
+  either way are labelled as such. There is still one blind spot: a squashed branch whose lines
+  base has changed since looks unmerged. It is kept, and its line says so.
+- **Branches are never deleted.** A branch costs nothing, and four of these repos have no remote,
+  so the branch is the only copy. A pruned worktree can come back, conversation included:
+  `git worktree add <path> <branch>`.
+- **Symlinks and junctions inside a worktree are unlinked before it's removed.** Testing showed
+  that `git worktree remove` deletes *through* a directory junction. Worktrees here often
+  junction `node_modules` to the primary checkout's, and a plain removal would have deleted the
+  primary checkout's `node_modules`. The dry run lists every link it will unlink.
+- **Worktrees whose folder is already gone are left alone.** git's entry for one is what lets
+  Reopen recreate it, so there's no blanket `git worktree prune`.
+- Just before removing anything, everything is checked again. A worktree that changed after you
+  confirmed is skipped. `git worktree remove` runs without `--force`, so git refuses anything
+  that turned dirty.
+
 **📂 Worktrees live inside their own repo**
 - **New worktrees are created in `<repo>/.claude-worktrees/<branch>`**, not in a shared
   `.claude-worktrees/<repo>/` folder beside the repo. A repo's worktrees now sit with it and
