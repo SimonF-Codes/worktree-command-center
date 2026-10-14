@@ -15,7 +15,7 @@ import { FitThrottle } from './fit-throttle';
 import { ctrlClickActivator, openExternalUrl } from './links';
 import { promptForConfirm } from '../ui/prompt-dialog';
 import { NoticeGate } from './notice-gate';
-import { shouldStartFresh } from './resume-fallback';
+import { ResumeProbe, shouldStartFresh } from './resume-fallback';
 import { orphanTranscripts, pickResumeFile, projectDirName, type JobRecord } from './resume-target';
 
 /** How long a released backlog waits before being typed in, so the keystroke that emptied the box
@@ -246,18 +246,18 @@ export class GodConsole {
 			PATH: sidecarDir + path.delimiter + (process.env.PATH ?? ''),
 		};
 		fs.mkdirSync(this.opts.godHomeDir, { recursive: true });
-		let probe = ''; // first bytes only (capped) — the refusal text a failed resume prints
+		const probe = new ResumeProbe(2048); // the refusal text a failed resume prints
 		const startedAt = Date.now();
 		this.bridge = new SessionBridge(this.opts.sidecarPath, this.opts.godHomeDir, 'claude', args, env);
-		this.bridge.onData((d) => { if (fallbackFresh && probe.length < 2048) probe += d; this.term?.write(d); this.markBusy(); });
+		this.bridge.onData((d) => { if (fallbackFresh) probe.feed(d); this.term?.write(d); this.markBusy(); });
 		this.bridge.onTranscriptOff(() => this.opts.onTranscriptOff?.());
 		this.bridge.onExit((code) => {
 			const name = this.opts.instanceName ?? 'Kane';
-			if (shouldStartFresh({ fallbackFresh, probe, elapsedMs: Date.now() - startedAt })) {
+			if (shouldStartFresh({ fallbackFresh, probe: probe.text, elapsedMs: Date.now() - startedAt })) {
 				// Say WHY, both here and in devtools: a silent reset is indistinguishable from
 				// "my history vanished for no reason". The new TUI may paint over the line, so the
 				// console.warn is the copy that survives.
-				console.warn(`[god] ${name}: resume failed (code ${code ?? '?'}), starting fresh. First output:`, probe.slice(0, 500));
+				console.warn(`[god] ${name}: resume failed (code ${code ?? '?'}), starting fresh. First output:`, probe.text.slice(0, 500));
 				this.term?.reset();
 				this.term?.write(`\r\n[${name} could not resume the previous conversation — starting a fresh session]\r\n`);
 				this.startSession(false); // fallbackFresh defaults false → a fresh session can never loop back here

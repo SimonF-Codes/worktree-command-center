@@ -21,6 +21,20 @@ const REFUSALS: readonly RegExp[] = [
 	/failed to (resume|continue)/i,
 ];
 
+/** The output a resuming session wrote, kept so its exit can be judged. Capped, because a session
+ *  that really came back keeps writing for hours. */
+export class ResumeProbe {
+	private buf = '';
+
+	constructor(private readonly cap: number) {}
+
+	feed(chunk: string): void {
+		if (this.buf.length < this.cap) this.buf += chunk;
+	}
+
+	get text(): string { return this.buf; }
+}
+
 export interface ResumeExit {
 	/** False for a session that was already fresh — it has nothing to fall back to. */
 	fallbackFresh: boolean;

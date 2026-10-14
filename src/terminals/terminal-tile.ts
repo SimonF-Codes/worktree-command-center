@@ -18,6 +18,7 @@ import { activeTerminalPalette, activeTerminalFont, type TerminalPalette } from 
 import { ctrlClickActivator, openExternalUrl } from './links';
 import { promptForConfirm } from '../ui/prompt-dialog';
 import { stripAnsi } from './usage-parse';
+import { ResumeProbe } from './resume-fallback';
 import { looksDelivered } from './prompt-detect';
 import type { StageTile } from './stage-tile';
 import type { AttentionKind } from './attention';
@@ -788,16 +789,16 @@ export class TerminalTile implements StageTile {
 			COS_TERMINAL_NAME: this.displayName,
 			PATH: sidecarDir + path.delimiter + (process.env.PATH ?? ''),
 		};
-		let probe = ''; // first bytes only (capped) — used to detect the --continue "no conversation" exit
+		const probe = new ResumeProbe(4096); // used to detect the --continue "no conversation" exit
 		this.bridge = new SessionBridge(this.opts.sidecarPath, this.opts.worktree.worktreePath, 'claude', args, env);
-		this.bridge.onData((d) => { if (fallbackFresh && probe.length < 4096) probe += d; this.writeOut(d); });
+		this.bridge.onData((d) => { if (fallbackFresh) probe.feed(d); this.writeOut(d); });
 		this.bridge.onExit((code) => {
 			// Claude's TUI often justifies/wraps text with absolute cursor-position escapes
 			// (ESC[<N>G) INSTEAD of literal spaces between words — stripping the ANSI out then
 			// collapses "No conversation found to continue" to "Noconversationfoundtocontinue"
 			// with no whitespace at all. Strip ANSI first, then allow \s* (not a literal space)
 			// between each word so the match survives either rendering.
-			if (fallbackFresh && /no\s*conversation\s*found\s*to\s*continue/i.test(stripAnsi(probe))) {
+			if (fallbackFresh && /no\s*conversation\s*found\s*to\s*continue/i.test(stripAnsi(probe.text))) {
 				this.hiddenBuf.clear();      // stale pre-reset output must not replay after the reset
 				this.term?.reset();          // --continue had nothing to resume → start fresh in place
 				// ...and SAY so, but NOT into the terminal. Writing the notice here looked right and
