@@ -1,7 +1,11 @@
 /** Pure workspace-list logic — no IO/DOM, so it unit-tests cleanly. A workspace is a named,
  *  id'd group; the id is filesystem-safe (used for the coordination dir + sessions key). */
 
-export interface Workspace { id: string; name: string; }
+/** `repo`, when present, is the absolute path of the target this tab was created FOR — the repo
+ *  picked or created in the new-tab dialog. A path rather than a name because the floor looks
+ *  targets up by name and two repos can share one. Absent on every tab made before tabs were
+ *  born linked, and on a tab deliberately made without one: such a tab behaves exactly as before. */
+export interface Workspace { id: string; name: string; repo?: string; }
 
 export function slugId(name: string): string {
 	return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'workspace';
@@ -19,6 +23,15 @@ export function addWorkspace(list: Workspace[], name: string): { list: Workspace
 	if (!trimmed) return null;
 	const id = uniqueId(slugId(trimmed), list.map((w) => w.id));
 	return { list: [...list, { id, name: trimmed }], id };
+}
+
+/** Point a tab at a repo path, or unlink it with `undefined`. Immutable; an unknown id is a no-op. */
+export function linkWorkspaceRepo(list: Workspace[], id: string, repo: string | undefined): Workspace[] {
+	return list.map((w) => {
+		if (w.id !== id) return w;
+		const { repo: _old, ...rest } = w;
+		return repo ? { ...rest, repo } : rest;
+	});
 }
 
 export function closeWorkspace(list: Workspace[], id: string): Workspace[] {
@@ -41,7 +54,7 @@ export function normalizeWorkspaces(raw: unknown): Workspace[] {
 		for (const w of raw) {
 			const ws = w as Workspace;
 			if (ws && typeof ws.id === 'string' && typeof ws.name === 'string' && ws.id && !out.some((x) => x.id === ws.id)) {
-				out.push({ id: ws.id, name: ws.name });
+				out.push({ id: ws.id, name: ws.name, ...(typeof ws.repo === 'string' && ws.repo ? { repo: ws.repo } : {}) });
 			}
 		}
 	}

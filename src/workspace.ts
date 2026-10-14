@@ -56,3 +56,12 @@ export function mergeRepos(existing: RepoConfig[], add: RepoConfig[]): RepoConfi
 export function reposForWorkspace(repos: RepoConfig[], workspaceId: string): RepoConfig[] {
   return repos.filter((r) => !r.group || r.group === workspaceId);
 }
+
+/** The registered target a tab is linked to (Workspace.repo is a path), or undefined when the tab
+ *  has no link or that repo has since left the floor. Matched by resolved path — the identity
+ *  mergeRepos de-duplicates on — never by name, which two repos can share. */
+export function linkedRepo(repos: RepoConfig[], repoPath: string | undefined): RepoConfig | undefined {
+  if (!repoPath) return undefined;
+  const want = path.resolve(repoPath);
+  return repos.find((r) => path.resolve(r.path) === want);
+}

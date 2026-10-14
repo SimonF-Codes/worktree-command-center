@@ -27,6 +27,8 @@ export interface ClosedWorkspace {
 	 *  render a menu would be silly. */
 	tileCount: number;
 	toolbar?: ToolbarState;
+	/** The tab's linked repo path (Workspace.repo), so a restored tab comes back still linked. */
+	repo?: string;
 }
 
 /** Bounded on purpose: config.json is rewritten on almost every interaction, so a tombstone
@@ -58,6 +60,7 @@ function normalizeOne(raw: unknown): ClosedWorkspace | null {
 		tileCount: typeof o.tileCount === 'number' && o.tileCount >= 0 ? Math.floor(o.tileCount) : 0,
 	};
 	if (o.toolbar && typeof o.toolbar === 'object') entry.toolbar = { ...(o.toolbar as ToolbarState) };
+	if (typeof o.repo === 'string' && o.repo) entry.repo = o.repo;
 	return entry;
 }
 

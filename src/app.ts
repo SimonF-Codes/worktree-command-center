@@ -547,6 +547,7 @@ async function main(): Promise<void> {
 				index: Math.max(0, workspaces.findIndex((w) => w.id === id)),
 				tileCount: summary.total,
 				...(workspaceToolbars[id] ? { toolbar: workspaceToolbars[id] } : {}),
+				...(ws?.repo ? { repo: ws.repo } : {}),
 			};
 			// Queue the rename BEFORE tearing the grid down: everything here shares one persist
 			// chain, so archiving first guarantees the tombstone captures the real records rather
@@ -589,7 +590,7 @@ async function main(): Promise<void> {
 			// A new tab may have claimed the old id in the meantime; the tiles follow the new one.
 			const id = uniqueId(entry.id, workspaces.map((w) => w.id));
 			const movedTiles = await TerminalsGrid.renameGroup(sessionsFile, entry.sessionsKey, id);
-			workspaces = insertAt(workspaces, { id, name: entry.name }, entry.index);
+			workspaces = insertAt(workspaces, { id, name: entry.name, ...(entry.repo ? { repo: entry.repo } : {}) }, entry.index);
 			// Before gridFor: depsFor reads initialToolbar when it constructs the grid.
 			if (entry.toolbar) workspaceToolbars = setToolbarState(workspaceToolbars, id, entry.toolbar);
 			gridFor(id);
