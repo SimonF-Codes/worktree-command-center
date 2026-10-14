@@ -5,6 +5,8 @@ landed on `main`.
 
 ## Unreleased
 
+## 0.11.0 — 2026-10-14
+
 **🚚 Move a repo, and everything that points at it moves too**
 - **⚙ Settings → Targets** lists every target with **Move…**, **Repoint…** and **Forget**.
   Until now a target could only be *added*. A repo whose folder moved kept a dead entry in
@@ -88,6 +90,27 @@ landed on `main`.
   `claude` was alive behind each.
 - `SessionBridge` now reports each death once, and says nothing more, output or exit, once its
   owner has asked for the kill. Every owner (tiles, overseer consoles, probes) gets the fix.
+**🜲 Every duplicate overseer console died on launch; the primary never did**
+- A duplicate opened with 🜲+ gets its own home directory (`.god/<group>-N`), which claude has
+  never seen — so it opens its **workspace-trust dialog** first, with the cursor on "No, exit".
+  The primaries' homes were trusted long ago, which is why only duplicates were affected.
+- Once the folder is trusted, `--continue` finds no conversation and exits 1 with "No conversation
+  found to continue". The fresh fallback missed that on both of its tests: the probe kept the
+  **first** 2048 bytes and the dialog fills them (the panel is repainted on every resize while it
+  waits — captured through the sidecar, the refusal starts at byte 4642 of 4715), and the exit
+  lands ~8s after launch because a person had to answer the dialog, past the 4s catch-all window.
+- The console printed `[… session ended (code 1)]` and never reached a first turn. That is why no
+  duplicate home directory on this machine has a transcript, in any workspace.
+- The probe now keeps the **last** bytes instead of the first, so a refusal is seen wherever it
+  appears in the output.
+
+**🧪 `orphanTranscripts` found no orphan on a POSIX host**
+- It called `path.dirname` on a Windows-spelled path. On Linux `` is not a separator, so the
+  result was `"."`, nothing ever matched the project directory, and every job transcript stayed
+  eligible. CI-only — the app runs on Windows — but it broke the build on `main` and the module's
+  own `norm()` exists precisely to compare paths "either separator, any case". Now splits after
+  normalising, so neither separator is privileged.
+
 **🔌 The connector channel gets a read side**
 - **`floor/state.json`** sits beside `floor/INDEX.md`: the same roster as JSON (`v: 1`), written
   in the same snapshot pass, so the two can't disagree and nothing new polls. Per session: name,
