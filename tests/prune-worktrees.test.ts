@@ -103,6 +103,8 @@ describe('planPrune — every refusal is its own', () => {
 
 	it('tells a sync-engine hold from a process or service hold', () => {
 		expect(heldMessage({ path: 'x', code: 'EBUSY', holders: [] })).toMatch(/OneDrive/);
+		// …but never ONLY OneDrive: Node's rename reports a process's cwd inside the folder as EBUSY.
+		expect(heldMessage({ path: 'x', code: 'EBUSY', holders: [] })).toMatch(/working directory is inside it/);
 		expect(heldMessage({ path: 'x', code: 'EPERM', holders: ['claude (pid 1)'] })).toMatch(/working directory.*reboot.*claude \(pid 1\)/s);
 	});
 });

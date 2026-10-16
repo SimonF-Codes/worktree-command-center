@@ -5,6 +5,13 @@ landed on `main`.
 
 ## Unreleased
 
+**🔧 Fixes**
+- **Prune no longer blames OneDrive for a worktree a terminal is sitting in.** The held-open probe
+  is a rename done by Node, and Node reports a process's working directory inside the folder as
+  `EBUSY`. git calls the same hold "Permission denied". Prune was treating every `EBUSY` as a sync
+  engine and saying "pause syncing". That was measured to be wrong on 2026-10-16. Such a worktree
+  now names both causes, the cwd holder first.
+
 ## 0.12.0 — 2026-10-14
 
 **🛡 Closing or removing a worktree no longer deletes what a junction inside it points at**

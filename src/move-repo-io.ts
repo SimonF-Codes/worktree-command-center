@@ -167,9 +167,10 @@ export async function probeRename(dir: string): Promise<'free' | 'held' | 'absen
 	return r === 'free' || r === 'absent' ? r : 'held';
 }
 
-/** probeRename, keeping the error a held directory gave: EBUSY is a sync engine (OneDrive),
- *  EPERM/EACCES a process's working directory or a service's handle on the folder — the same
- *  "cannot rename" with different fixes, so a caller that explains it needs to know which. */
+/** probeRename, keeping the error a held directory gave. The code narrows the cause without
+ *  settling it: a process's working directory inside the folder comes back as EBUSY from Node
+ *  (git says "Permission denied" for the same hold — measured 2026-10-16), and so does a sync
+ *  engine; a caller that explains a hold has to ask further (src/cli/hold-diagnosis.ts does). */
 export async function probeRenameCode(dir: string): Promise<'free' | 'absent' | 'EPERM' | 'EACCES' | 'EBUSY'> {
 	const probe = `${dir}.wcc-move-probe-${process.pid}`;
 	try { fs.renameSync(dir, probe); } catch (e) {
