@@ -4,6 +4,8 @@ release/
 release-private/
 pty-sidecar/contexts/
 pty-sidecar/settings/
+# built by esbuild.config.mjs from src/cli/
+pty-sidecar/wcc-worktrees.cjs
 *.log
 .DS_Store
 .superpowers/
