@@ -24,9 +24,93 @@ from. The external API built on top of this is in [api.md](api.md).
     and records background tasks
   - `notify-ready.cjs`: the Stop/Notification hook that marks a session ready for input
   - `wcc-client`: the connector client for processes *outside* the app ([api.md](api.md#the-client--wcc-client))
+  - `wcc-worktrees`: prune and relayout from the command line ([below](#the-worktrees-cli-wcc-worktrees))
 
 The whole folder is copied into the installed app as `resources/pty-sidecar` (see
 `package.json` → `build.extraResources`).
+
+## The worktrees CLI: `wcc-worktrees`
+
+The two worktree jobs in **⚙ Settings → Targets**, from a shell, one repo at a time:
+
+```
+wcc-worktrees prune    [<repo>] [--apply]   # remove worktrees whose work is merged
+wcc-worktrees relayout [<repo>] [--apply]   # nest a repo's worktrees inside it
+```
+
+Both are **dry runs unless `--apply` is given**. `<repo>` is a target's name or path from
+`config.json`. Leave it out to act on every repo target. A relayout with `--apply` stops at the
+first repo that fails. Other flags:
+
+- `--no-probe` skips the held-open probe, which renames each candidate in place and back.
+- `--user-data <dir>` (or `WCC_USER_DATA`) points at a different app data folder. The default
+  is `%APPDATA%/worktree-command-center`.
+- `--projects-dir <dir>` points at a different Claude transcript folder. The default is
+  `~/.claude/projects`.
+
+Exit codes: `0` done (or nothing to do), `1` failed, `2` refused, `64` usage. A refusal always
+puts its reason on stderr.
+
+**It decides nothing itself.** It runs the app's own modules: `planPrune`, `describePrunePlan`
+and `executePrune` from `src/prune-worktrees*.ts`, and `planMove`, `describeMovePlan` and
+`executeMove` from `src/move-repo*.ts`. Those are TypeScript and import each other, so a plain
+`.cjs` beside `cos-coord` can't load them. `esbuild.config.mjs` bundles `src/cli/wcc-worktrees.ts`
+into `pty-sidecar/wcc-worktrees.cjs`. That file is generated and git-ignored: run `npm run build`
+(or `node esbuild.config.mjs`) in a source checkout before using it. The installed app ships the
+bundle.
+
+**A relayout updates five things.**
+
+1. The worktree directory, moved with `git worktree move`. The destination's parent is created
+   first, because git won't create it.
+2. Both ends of the worktree link. `git worktree move` rewrites them.
+3. `<repo>/.git/info/exclude` gets `/.claude-worktrees/`.
+4. `~/.claude/projects/<mangled>`, the transcript folder, is renamed. The mangled name is
+   `projectDirName`, which replaces every non-alphanumeric character with `-`.
+5. `.terminal-sessions.json` has each saved terminal's `worktreePath` rewritten. Any
+   `config.json` tab links the path map touches are rewritten too. Both files are backed up
+   (`.bak-<time>`) before the write and read back after it.
+
+The dry run prints every one of these by full path. It also prints the move-repo refusals and
+warnings unchanged:
+
+- refused when both the old and the new transcript folder exist;
+- warned when the destination is already keyed to an earlier worktree;
+- warned, and not renamed, for transcript folders whose mangled name can't be reversed with
+  certainty.
+
+**`--apply` refuses while the app is running.** `persist()` rewrites `config.json` and
+`.terminal-sessions.json` from memory. A session record rewritten from outside would be silently
+put back, leaving a saved terminal pointing at a directory that has moved. The guard
+(`src/cli/app-guard.ts`) is copied from `C:/dev/scripts/repoint-verticalchess.mjs`. It matches
+the *stem* of the image name, because `tasklist` cuts names at 25 characters and prints
+`Worktree Command Center.e`. A process list that can't be read counts as running.
+
+The guard runs twice:
+
+- before anything happens;
+- again just before the sessions file is written. If the app was started mid-run, the relayout
+  stops there, and a re-run picks up where it stopped.
+
+It does not see a dev build started with `npm start`, which runs as `electron.exe`.
+
+A prune dry run works with the app open, but every worktree is then kept as `live-unknown`. Only
+the app knows which terminals are open.
+
+**Why a directory won't move.** There are four causes, and neither git's error text nor Node's
+errno tells them apart. On one held directory, Node's rename said `EBUSY` and
+`git worktree move` said `Permission denied`. So `src/cli/hold-diagnosis.ts` checks the evidence
+in this order:
+
+| Mode | Evidence |
+|---|---|
+| `cwd-holder` | `find-cwd-holder.ps1` (shipped beside the CLI) names a process whose working directory is inside the directory. Checked first, whatever the errno. |
+| `sync-engine` | The directory is under a OneDrive root (`%OneDrive%`, `%OneDriveConsumer%`, `%OneDriveCommercial%`), or git said "Device or resource busy". |
+| `service-handle` | Held, but no process has its cwd there. Antivirus or Windows Search holds the directory, while its contents stay writable. Nothing built in names the holder. A reboot clears it. |
+| `parent-missing` | "No such file or directory": the destination's parent is missing. |
+
+If the detector can't run, the CLI names both Permission-denied causes rather than guessing.
+`who-holds.ps1` is not used. It can't see directory handles.
 
 ## The coordination directory
 

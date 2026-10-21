@@ -74,8 +74,9 @@ export interface PruneRepoFacts {
 }
 
 /** A directory that cannot be removed right now because something holds it open. `code` is the
- *  rename probe's error: EBUSY is a sync engine (OneDrive), EPERM/EACCES a process's working
- *  directory or a service's directory handle — they have different fixes. */
+ *  rename probe's error. Not a verdict on its own: Node reports a process's working directory
+ *  inside the folder as EBUSY (git says "Permission denied" for the same hold — measured
+ *  2026-10-16), and a sync engine (OneDrive) as EBUSY too. */
 export interface HeldDir { path: string; code: string; holders: string[] }
 
 export interface PruneFacts {
@@ -258,7 +259,9 @@ const sumStaleT = (r: RepoPrunePlan): number => r.stale.reduce((n, e) => n + e.t
 /** Why a held directory is held, as far as the error code can say — and what fixes each. */
 export function heldMessage(h: HeldDir): string {
 	const who = h.holders.length ? ` Named: ${sample(h.holders)}.` : '';
-	if (h.code === 'EBUSY') return `Busy (EBUSY) — a sync engine such as OneDrive has it. Pause syncing, or keep worktrees out of synced folders.${who}`;
+	// EBUSY is what Node's rename gives for a process's cwd inside the folder, the commonest hold —
+	// not only for a sync engine. Say both rather than send someone to pause OneDrive.
+	if (h.code === 'EBUSY') return `Busy (EBUSY) — a process's working directory is inside it (C:/dev/scripts/find-cwd-holder.ps1 names it; Node reports that hold as EBUSY), or a sync engine such as OneDrive has it (pause syncing, or keep worktrees out of synced folders).${who}`;
 	return `Held open (${h.code || 'Permission denied'}) — a process's working directory is inside it (C:/dev/scripts/find-cwd-holder.ps1 names it), or a service (antivirus, Search indexer) holds the folder; a reboot clears that one.${who}`;
 }
 

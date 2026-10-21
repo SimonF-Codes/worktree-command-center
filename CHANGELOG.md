@@ -5,6 +5,32 @@ landed on `main`.
 
 ## Unreleased
 
+**⌨ Prune and relayout from the command line: `wcc-worktrees`**
+- **`wcc-worktrees prune [<repo>] [--apply]` and `wcc-worktrees relayout [<repo>] [--apply]`**
+  run the same planning and execution as the **⚙ Settings → Targets** buttons, from a shell, one
+  repo at a time. Both are dry runs unless `--apply` is given. The output is plain text you can
+  read, diff and re-run. The CLI ships in `pty-sidecar/` beside `cos-coord`. It is bundled from
+  the app's own modules, so it can't drift from them. See
+  [docs/architecture.md](docs/architecture.md#the-worktrees-cli-wcc-worktrees).
+- **The relayout dry run lists everything by full path.** That covers every directory move,
+  every transcript folder rename with its conversation count, the `.git/info/exclude` line, and
+  every saved-terminal record rewritten in `.terminal-sessions.json`.
+- **`--apply` refuses while the app is running**, with exit code 2 and the reason on stderr. The
+  app rewrites the sessions file from memory and would undo the change. The check matches the
+  name `tasklist` actually prints (`Worktree Command Center.e`, cut at 25 characters), and an
+  unreadable process list counts as running. The check runs again just before the sessions file
+  is written.
+- **A directory that won't move is put into one of four named cases:** a process's working
+  directory is inside it (and which process), a sync engine, a service's handle, or a missing
+  destination parent.
+
+**🔧 Fixes**
+- **Prune no longer blames OneDrive for a worktree a terminal is sitting in.** The held-open probe
+  is a rename done by Node, and Node reports a process's working directory inside the folder as
+  `EBUSY`. git calls the same hold "Permission denied". Prune was treating every `EBUSY` as a sync
+  engine and saying "pause syncing". That was measured to be wrong on 2026-10-16. Such a worktree
+  now names both causes, the cwd holder first.
+
 ## 0.12.0 — 2026-10-14
 
 **🛡 Closing or removing a worktree no longer deletes what a junction inside it points at**

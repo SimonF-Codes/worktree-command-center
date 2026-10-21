@@ -1,0 +1,5 @@
+#!/bin/sh
+# wcc-worktrees <prune|relayout> — see docs/architecture.md. The .cjs is built by `npm run build`.
+f="$(dirname "$0")/wcc-worktrees.cjs"
+[ -f "$f" ] || { echo "wcc-worktrees: $f is not built — run \`npm run build\` (or \`node esbuild.config.mjs\`) in the app's source first" >&2; exit 1; }
+exec node "$f" "$@"
