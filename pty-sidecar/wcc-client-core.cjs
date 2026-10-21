@@ -20,8 +20,28 @@ const EXIT_FAILED = 2;
 const EXIT_UNCONFIRMED = 3;
 
 // Flags that take a value. Anything else starting with `--` is a boolean switch.
-const VALUE_FLAGS = new Set(['--coord-dir', '--workspace', '--connector', '--wait-ms', '--task', '--base', '--model', '--effort', '--name']);
-const BOOL_FLAGS = new Set(['--json', '--help']);
+const newTabCore = require('./new-tab-core.cjs');
+
+const VALUE_FLAGS = new Set(['--coord-dir', '--workspace', '--connector', '--wait-ms', '--task', '--base', '--model', '--effort', '--name', ...newTabCore.VALUE_FLAGS]);
+const BOOL_FLAGS = new Set(['--json', '--help', ...newTabCore.BOOL_FLAGS]);
+
+// Which command-specific flags each command takes; the global ones (where/who/wait/help) go with
+// any. Parsing is global, so without this `spawn app --repo x` would silently drop --repo.
+const GLOBAL_FLAGS = new Set(['coord-dir', 'workspace', 'connector', 'wait-ms', 'help']);
+const COMMAND_FLAGS = {
+  floor: ['json'],
+  spawn: ['task', 'base', 'model', 'effort', 'name'],
+  tell: [],
+  'new-tab': [...newTabCore.VALUE_FLAGS, ...newTabCore.BOOL_FLAGS].map((f) => f.slice(2)),
+};
+
+/** A flag given to a command that does not take it, or null. Unknown commands are not judged here. */
+function strayFlag(command, flags) {
+  const allowed = COMMAND_FLAGS[command];
+  if (!allowed) return null;
+  const bad = Object.keys(flags).find((k) => !GLOBAL_FLAGS.has(k) && !allowed.includes(k));
+  return bad ? `--${bad} does not apply to ${command}` : null;
+}
 
 /** Split argv into a command, positionals and flags. Unknown flags are an error rather than
  *  being silently ignored — a misspelt `--efort high` must not spawn at the default effort. */
@@ -81,11 +101,17 @@ function resolveConnector(flags, env) {
   return { ok: true, id };
 }
 
-function resolveWaitMs(flags, env) {
+/** `dflt` is the command's own default — new-tab waits longer than spawn/tell (see new-tab-core). */
+function resolveWaitMs(flags, env, dflt = DEFAULT_WAIT_MS) {
   const raw = flags['wait-ms'] != null ? flags['wait-ms'] : env.WCC_WAIT_MS;
-  if (raw == null || raw === '') return DEFAULT_WAIT_MS;
+  if (raw == null || raw === '') return dflt;
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_WAIT_MS;
+  return Number.isFinite(n) && n >= 0 ? n : dflt;
+}
+
+/** A v1 new-tab envelope: the shared field set (new-tab-core buildNewTabFields) in the envelope. */
+function buildNewTabRequest({ id, connector, sentMs, fields }) {
+  return { v: 1, id, connector, sentMs, kind: 'new-tab', ...fields };
 }
 
 /** A v1 spawn envelope. Optional fields are sent as null rather than omitted, matching the
@@ -146,18 +172,24 @@ const USAGE = [
   '  wcc-client floor [--json]',
   '  wcc-client spawn <repo> --task "<task>" [--base <branch>] [--model <m>] [--effort <e>] [--name <n>]',
   '  wcc-client tell <terminal> "<message>"',
+  '  wcc-client new-tab "<tab name>" [--repo <registered target>]',
+  '  wcc-client new-tab "<tab name>" [--new-repo <name>] [--parent <dir>] [--base <branch>]',
+  '                     [--gitignore general|node|python|none] [--claude-md|--no-claude-md]',
+  '                     [--remote none|private|public] [--json]',
   '',
   'Where:   --coord-dir <dir> | WCC_COORD_DIR,  or  --workspace <id> | WCC_WORKSPACE',
-  'Who:     --connector <id> | WCC_CONNECTOR   (registered in config.json "connectors"; spawn/tell only)',
-  'Wait:    --wait-ms <ms> | WCC_WAIT_MS        (default 60000)',
+  'Who:     --connector <id> | WCC_CONNECTOR   (registered in config.json "connectors"; not for floor)',
+  'Wait:    --wait-ms <ms> | WCC_WAIT_MS        (default 60000; new-tab 120000)',
   '',
-  'spawn/tell block until the app writes a receipt. Exit 0 accepted (prints the terminal name);',
-  '2 rejected or never picked up (reason on stderr); 3 picked up but not confirmed in time.',
+  'spawn/tell/new-tab block until the app writes a receipt. Exit 0 accepted (prints the terminal name,',
+  'or for new-tab the new workspace id); 2 rejected or never picked up (reason on stderr); 3 picked',
+  'up but not confirmed in time; 4 (new-tab) failed but left a repo folder on disk.',
+  'new-tab needs "grants": ["new-tab"] on the connector\'s config.json entry.',
   'Reference: docs/api.md',
 ].join('\n');
 
 module.exports = {
   APP_DIR_NAME, DEFAULT_WAIT_MS, POLL_MS, EXIT_OK, EXIT_FAILED, EXIT_UNCONFIRMED, STALE_INTERVALS, USAGE,
-  parseArgs, defaultUserData, resolveCoordDir, resolveConnector, resolveWaitMs,
-  buildSpawnRequest, buildTellRequest, receiptFilename, interpretReceipt, isStale, stateAgeMs, formatFloor,
+  parseArgs, strayFlag, defaultUserData, resolveCoordDir, resolveConnector, resolveWaitMs,
+  buildSpawnRequest, buildTellRequest, buildNewTabRequest, receiptFilename, interpretReceipt, isStale, stateAgeMs, formatFloor,
 };

@@ -15,13 +15,25 @@
  *  explicit about: a connector can only address a terminal by its exact live name (never create,
  *  rename, or retarget one), an ambiguous or journal target is rejected rather than guessed at
  *  (see resolveConnectorTellTarget), the message is size-capped, and every attempt gets a receipt
- *  — so unlike Kane's `tell`, there is no way for this to happen silently or at unbounded volume. */
+ *  — so unlike Kane's `tell`, there is no way for this to happen silently or at unbounded volume.
+ *
+ *  `new-tab` is a bigger grant than either, so it is not part of registration: it has to be
+ *  granted by name (`grants: ["new-tab"]` on the connector's config entry). It adds a tab to the
+ *  operator's own window and a target to the floor that `spawn` can then reach, and it can create
+ *  a folder on disk. The folder is the smaller part — any local process already could — but the
+ *  tab and the registration are the app's to give, so they are opt-in per connector, refused
+ *  with a reason when not granted, and announced in the window when they happen. */
 
 import { EFFORT_LEVELS } from './god';
+import { parseNewTabFields, type NewTabFields, type NewTabResult } from '../new-tab';
+
+/** Grants beyond spawn/tell a connector entry may carry. Unknown names are dropped on parse. */
+export const CONNECTOR_GRANTS = ['new-tab'] as const;
+export type ConnectorGrant = typeof CONNECTOR_GRANTS[number];
 
 /** One entry from config.json's `connectors` list — a local trust boundary between the user's own
  *  apps, not authentication. */
-export interface ConnectorConfig { id: string; label: string; }
+export interface ConnectorConfig { id: string; label: string; grants?: ConnectorGrant[]; }
 
 /** Tolerant parse of config.json's `connectors` key. Drops entries missing a valid id/label;
  *  never throws. */
@@ -32,7 +44,10 @@ export function parseConnectors(v: unknown): ConnectorConfig[] {
 		if (!e || typeof e !== 'object') continue;
 		const o = e as Record<string, unknown>;
 		if (typeof o.id === 'string' && /^[a-z0-9-]+$/.test(o.id) && typeof o.label === 'string' && o.label.trim()) {
-			out.push({ id: o.id, label: o.label });
+			const grants = Array.isArray(o.grants)
+				? CONNECTOR_GRANTS.filter((g) => (o.grants as unknown[]).includes(g))
+				: [];
+			out.push({ id: o.id, label: o.label, ...(grants.length ? { grants } : {}) });
 		}
 	}
 	return out;
@@ -53,7 +68,13 @@ export interface TellConnectorRequest {
 	terminal: string; message: string;
 }
 
-export type ConnectorRequest = SpawnConnectorRequest | TellConnectorRequest;
+/** Open a workspace tab bound to a repo — see new-tab.ts. Needs the `new-tab` grant. */
+export interface NewTabConnectorRequest {
+	v: number; id: string; connector: string; sentMs: number; kind: 'new-tab';
+	fields: NewTabFields;
+}
+
+export type ConnectorRequest = SpawnConnectorRequest | TellConnectorRequest | NewTabConnectorRequest;
 
 export type ParsedConnectorRequest =
 	| { ok: true; request: ConnectorRequest }
@@ -84,8 +105,13 @@ export function parseConnectorRequest(text: string): ParsedConnectorRequest {
 	if (typeof o.v !== 'number') return { ok: false, id, reason: 'malformed request — missing "v"' };
 	if (typeof o.sentMs !== 'number') return { ok: false, id, reason: 'malformed request — missing "sentMs"' };
 	const kind = typeof o.kind === 'string' ? o.kind : '';
-	if (kind !== 'spawn' && kind !== 'tell') {
-		return { ok: false, id, reason: `kind "${kind || '(missing)'}" is not permitted for connectors — only "spawn" or "tell" is` };
+	if (kind !== 'spawn' && kind !== 'tell' && kind !== 'new-tab') {
+		return { ok: false, id, reason: `kind "${kind || '(missing)'}" is not permitted for connectors — only "spawn", "tell" or "new-tab" is` };
+	}
+	if (kind === 'new-tab') {
+		const f = parseNewTabFields(o);
+		if (!f.ok) return { ok: false, id, reason: f.reason };
+		return { ok: true, request: { v: o.v, id, connector: o.connector, sentMs: o.sentMs, kind: 'new-tab', fields: f.fields } };
 	}
 	if (kind === 'tell') {
 		if (typeof o.terminal !== 'string' || !o.terminal.trim() || typeof o.message !== 'string' || !o.message) {
@@ -149,13 +175,21 @@ export type ConnectorOutcome =
  *  the final receipt. */
 export function evaluateConnectorRequest(
 	text: string,
-	opts: { connectorId: string; registeredConnectorIds: string[]; knownRepoNames: string[]; liveTerminals?: LiveTerminal[] },
+	opts: { connectorId: string; registeredConnectorIds: string[]; knownRepoNames: string[]; liveTerminals?: LiveTerminal[]; grants?: readonly string[] },
 ): ConnectorOutcome {
 	const parsed = parseConnectorRequest(text);
 	if (!parsed.ok) return { status: 'rejected', id: parsed.id, reason: parsed.reason };
 	const { request } = parsed;
 	if (!opts.registeredConnectorIds.includes(opts.connectorId)) {
 		return { status: 'rejected', id: request.id, reason: `connector "${opts.connectorId}" is not registered` };
+	}
+	if (request.kind === 'new-tab') {
+		// The repo lookup, folder checks and creation need the app's state and the disk, so they
+		// happen in the app (new-tab.ts planNewTab) once this says the connector may ask at all.
+		if (!(opts.grants ?? []).includes('new-tab')) {
+			return { status: 'rejected', id: request.id, reason: `connector "${opts.connectorId}" is not granted "new-tab" — add "grants": ["new-tab"] to its entry in config.json and restart the app` };
+		}
+		return { status: 'accepted', id: request.id, request };
 	}
 	if (request.kind === 'tell') {
 		const resolved = resolveConnectorTellTarget(request.terminal, opts.liveTerminals ?? []);
@@ -173,9 +207,11 @@ export function evaluateConnectorRequest(
 }
 
 /** `terminalName` is the terminal a `spawn` created or a `tell` was delivered into — present on
- *  every `accepted` receipt, whichever kind produced it. */
+ *  every `accepted` spawn/tell receipt. An accepted `new-tab` carries `newTab` instead; a rejected
+ *  one carries `leftOnDisk` when a folder WAS created (a repo whose initial commit failed). */
 export interface ConnectorReceipt {
 	v: 1; id: string; status: 'accepted' | 'rejected'; reason?: string; terminalName?: string; handledMs: number;
+	newTab?: NewTabResult; leftOnDisk?: string;
 }
 
 /** A receipt filename derived from a sender-chosen `id`, sanitized to a single safe path

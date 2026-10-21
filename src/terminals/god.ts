@@ -21,7 +21,10 @@ export type OutboxMessage =
 	| { kind: 'spawn'; repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null }
 	| { kind: 'rename'; target: string; name: string }
 	| { kind: 'close'; target: string }
-	| { kind: 'personality' };
+	| { kind: 'personality' }
+	// Carried unvalidated: its fields are checked app-side (new-tab.ts parseNewTabFields), so a bad
+	// field comes back on the receipt `cos-coord new-tab` blocks on rather than as a silent drop.
+	| { kind: 'new-tab'; request: Record<string, unknown> };
 
 /** Parse one god-outbox JSON message into a typed command. An untagged {target,message} is
  *  read as a tell (back-compat). Returns null on malformed / missing fields. */
@@ -32,6 +35,8 @@ export function parseOutboxMessage(text: string): OutboxMessage | null {
 	const kind = typeof o.kind === 'string' ? o.kind : 'tell';
 	if (kind === 'personality') {
 		return { kind: 'personality' };
+	} else if (kind === 'new-tab') {
+		return { kind: 'new-tab', request: o as Record<string, unknown> };
 	} else if (kind === 'tell') {
 		if (typeof o.target === 'string' && typeof o.message === 'string' && o.target.trim() && o.message) {
 			return { kind: 'tell', target: o.target, message: o.message };
@@ -221,6 +226,15 @@ export function godSystemPrompt(repos: GodRepo[], coordDir: string, overseerName
 		'    can be reopened later with its transcript. It refuses journals and overseer consoles (you',
 		'    included), and it still closes a busy session but says "(was mid-turn)". It confirms before',
 		'    returning; a non-zero exit means the session was not closed, or the close was not confirmed.',
+		'  - To open a NEW WORKSPACE TAB bound to a repo when the user asks, run one of:',
+		'    cos-coord new-tab "<tab name>" --repo "<target>"          (an existing target, by name)',
+		'    cos-coord new-tab "<tab name>" [--new-repo "<name>"] [--parent <dir>] [--base <branch>]',
+		'        [--gitignore general|node|python|none] [--no-claude-md] [--remote none|private|public]',
+		'    Without --repo it CREATES a repo (named after the tab unless --new-repo): git init, README,',
+		'    .gitignore, CLAUDE.md and an initial commit, then registers it. It refuses an existing folder,',
+		'    a name already on the floor, and a git with no user.name/email. It prints the new workspace',
+		'    id; start a terminal there with  COS_COORD_DIR="<coord dir it prints>" cos-coord spawn …',
+		'    Exit 2 = refused or withdrawn (nothing happened), 3 = not confirmed, 4 = repo left without a commit.',
 		'  - To change code in a repo, cd into its path below. Do NOT edit a repo\'s primary checkout',
 		'    directly — create a git worktree for your change, the same rule the worker terminals follow.',
 		'  - Destructive actions will prompt you for permission right here in this console; that is expected.',

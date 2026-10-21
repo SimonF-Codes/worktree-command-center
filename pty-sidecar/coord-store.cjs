@@ -119,6 +119,15 @@ function spawn(dir, repo, base, task, model, effort, name) { return dropOutbox(d
 function rename(dir, target, to) { return dropOutbox(dir, { kind: 'rename', target, name: to }); }
 function personality(dir) { return dropOutbox(dir, { kind: 'personality' }); }
 function close(dir, target) { return dropOutbox(dir, { kind: 'close', target }); }
+// `fields` is new-tab-core.cjs buildNewTabFields' output: { name, repo, newRepo, parent, … }.
+function newTab(dir, fields) { return dropOutbox(dir, { kind: 'new-tab', ...fields }); }
+
+// Take back a request the app has not drained. The app claims a drop by renaming it into .done/
+// before acting on it (terminals-grid.ts drainOutbox), so exactly one of the two wins: true means
+// it was withdrawn and will never run, false means the app already had it.
+function withdraw(file) {
+  try { fs.unlinkSync(file); return true; } catch { return false; }
+}
 
 // A `tell`'s receipt: the app writes one of these to god-outbox/.receipts/<id>.json once it
 // KNOWS whether the message actually landed on the target's screen (see terminals-grid.ts
@@ -151,6 +160,6 @@ function waitForTellReceipt(dir, id, opts = {}) {
 
 module.exports = {
   acquire, release, readLocks, readHolder, appendBoard, note, taskEvent, appendChat,
-  tell, watch, spawn, rename, personality, close, dropOutbox, sleepSync,
+  tell, watch, spawn, rename, personality, close, newTab, withdraw, dropOutbox, sleepSync,
   receiptPath, waitForTellReceipt,
 };

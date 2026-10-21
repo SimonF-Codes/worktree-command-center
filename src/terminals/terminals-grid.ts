@@ -27,6 +27,7 @@ import { godIndexOf, godRecords, highestGodIndex, PRIMARY_GOD_INDEX } from './go
 import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, planClose, closeResultText, EFFORT_LEVELS, type OutboxMessage, type CloseCandidate, type GodSelfImprove } from './god';
 import { buildFloorState, renderFloorState, FLOOR_STATE_FILE } from './floor-state';
 import { evaluateConnectorRequest, receiptFilename, isReceiptStale, type ConnectorConfig, type ConnectorReceipt } from './connectors';
+import { parseNewTabFields, newTabSummary, type NewTabFields, type NewTabOutcome } from '../new-tab';
 import type { RoleLibraryConfig } from './role-library';
 import { looksLikeMenu, looksErrored, looksBusy } from './prompt-detect';
 import { looksLikePrompt } from './chat-room';
@@ -98,6 +99,10 @@ export interface GridDeps {
 	onWorktreesScanned?: () => void;
 	/** The toolbar's 📊 Report button: rescan, rebuild the floor report and publish it now. */
 	requestFloorReport?: () => void;
+	/** Open a workspace tab bound to a repo, for a session that asked (Kane's `cos-coord new-tab`,
+	 *  or a connector's `new-tab`). A tab is app-wide, not this grid's, so the app does it — through
+	 *  the same code the + tab button uses. `by` names the asker in the window's notice. */
+	newTab?: (fields: NewTabFields, by: string) => Promise<NewTabOutcome>;
 }
 export interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string; }
 
@@ -1372,6 +1377,12 @@ export class TerminalsGrid {
 			const full = path.join(out, f);
 			let text = '';
 			try { text = fsSync.readFileSync(full, 'utf8'); } catch { continue; }
+			// Claim it before acting, as the connector drain does: whichever side moves or removes the
+			// file first owns it. `cos-coord new-tab` withdraws a request nobody picked up by unlinking
+			// it, so a tab cannot appear hours later when the app is next started.
+			let claimed = false;
+			try { fsSync.renameSync(full, path.join(done, f)); claimed = true; } catch { try { fsSync.unlinkSync(full); claimed = true; } catch { /* withdrawn */ } }
+			if (!claimed) continue;
 			const msg = parseOutboxMessage(text);
 			// The id a `tell`'s receipt is filed under (see writeTellReceipt) — the request file's
 			// own name, which `cos-coord tell` already knows because store.tell() returned it.
@@ -1382,7 +1393,6 @@ export class TerminalsGrid {
 			// that dispatched fine. That's the same silent-no-op shape as an unresolved tell/watch
 			// target, so it gets the same treatment.
 			else this.writeGodInbox(`dropped an unreadable god-outbox message (${f}): ${text.slice(0, 200)}`);
-			try { fsSync.renameSync(full, path.join(done, f)); } catch { try { fsSync.unlinkSync(full); } catch { /* ignore */ } }
 		}
 	}
 
@@ -1420,6 +1430,8 @@ export class TerminalsGrid {
 			}
 		} else if (msg.kind === 'close') {
 			void this.closeFromKane(msg.target, id);
+		} else if (msg.kind === 'new-tab') {
+			void this.newTabFromKane(msg.request, id);
 		} else {
 			void this.spawnFromKane(msg.repo, msg.base, msg.task, msg.model, msg.effort, msg.name);
 		}
@@ -1454,6 +1466,26 @@ export class TerminalsGrid {
 		const dropped = this.watchers.filter((w) => w.target === plan.name).length;
 		this.watchers = this.watchers.filter((w) => w.target !== plan.name);
 		this.writeTellReceipt(id, { ok: true, message: closeResultText(plan.name, plan.busy, dropped) });
+	}
+
+	/** Kane's `new-tab`: validate, hand it to the app, and file the outcome on the receipt
+	 *  `cos-coord new-tab` blocks on — the same seam as `tell` and `close`. */
+	private async newTabFromKane(request: Record<string, unknown>, id: string): Promise<void> {
+		const out = await this.runNewTab(request, this.overseerName);
+		if (!out.ok) this.writeGodInbox(`new-tab refused — ${out.reason}`);
+		this.writeTellReceipt(id, out.ok
+			? { ok: true, message: newTabSummary(out.result), newTab: out.result }
+			: { ok: false, reason: out.reason, ...(out.leftOnDisk ? { leftOnDisk: out.leftOnDisk } : {}) });
+	}
+
+	/** The part both channels share: field validation, then the app's newTab. Never throws. A
+	 *  connector's fields were validated by evaluateConnectorRequest already; again is harmless. */
+	private async runNewTab(request: Record<string, unknown> | NewTabFields, by: string): Promise<NewTabOutcome> {
+		const f = parseNewTabFields(request as unknown as Record<string, unknown>);
+		if (!f.ok) return { ok: false, reason: f.reason };
+		if (!this.deps.newTab) return { ok: false, reason: 'this window cannot create tabs' };
+		try { return await this.deps.newTab(f.fields, by); }
+		catch (e) { return { ok: false, reason: `new-tab failed: ${(e as Error).message}` }; }
 	}
 
 	/** Drain every connector subdirectory's requests, then prune its stale receipts. Both are
@@ -1501,6 +1533,7 @@ export class TerminalsGrid {
 		const outcome = evaluateConnectorRequest(text, {
 			connectorId,
 			registeredConnectorIds: this.connectors.map((c) => c.id),
+			grants: this.connectors.find((c) => c.id === connectorId)?.grants ?? [],
 			knownRepoNames: this.repos.map((r) => r.name),
 			liveTerminals: this.allSessions().map((t) => ({ name: t.name, isJournal: t.isJournal })),
 		});
@@ -1511,6 +1544,14 @@ export class TerminalsGrid {
 			return;
 		}
 		const { request } = outcome;
+		if (request.kind === 'new-tab') {
+			const label = this.connectors.find((c) => c.id === connectorId)?.label ?? connectorId;
+			const out = await this.runNewTab(request.fields, label);
+			this.writeConnectorReceipt(connectorId, out.ok
+				? { v: 1, id: request.id, status: 'accepted', newTab: out.result, handledMs: Date.now() }
+				: { v: 1, id: request.id, status: 'rejected', reason: out.reason, ...(out.leftOnDisk ? { leftOnDisk: out.leftOnDisk } : {}), handledMs: Date.now() });
+			return;
+		}
 		if (request.kind === 'tell') {
 			// Resolved against the roster moments ago, in evaluateConnectorRequest — re-check here
 			// rather than trust it blindly, since draining is async and the tile could have closed
@@ -1674,7 +1715,7 @@ export class TerminalsGrid {
 	 *  `waitForTellReceipt`) can report it honestly instead of assuming the outbox drop succeeded.
 	 *  New: no receipt existed for any command before this — see coord-store.cjs's comment.
 	 *  `close` files its outcome here too; `message` is the success line the CLI prints. */
-	private writeTellReceipt(id: string, r: TellResult & { message?: string }): void {
+	private writeTellReceipt(id: string, r: TellResult & { message?: string; newTab?: unknown; leftOnDisk?: string }): void {
 		try {
 			const dir = path.join(this.outboxDir(), '.receipts');
 			fsSync.mkdirSync(dir, { recursive: true });

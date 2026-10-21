@@ -181,6 +181,11 @@ describe('godSystemPrompt', () => {
     expect(p).toMatch(/refuses journals and overseer consoles/);
     expect(p).toContain('(was mid-turn)');
   });
+  it('documents new-tab, both forms, and its exit codes', () => {
+    expect(p).toContain('cos-coord new-tab "<tab name>" --repo "<target>"');
+    expect(p).toContain('[--remote none|private|public]');
+    expect(p).toMatch(/Exit 2 = refused or withdrawn/);
+  });
 });
 
 describe('godSystemPrompt self-improvement', () => {

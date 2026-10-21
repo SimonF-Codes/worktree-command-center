@@ -1,5 +1,5 @@
 'use strict';
-// wcc-client <floor|spawn|tell> — the client for the connector channel, for a process OUTSIDE
+// wcc-client <floor|spawn|tell|new-tab> — the client for the connector channel, for a process OUTSIDE
 // the app (a plain `claude` session in some other directory, a script, another app). Thin IO
 // over wcc-client-core.cjs; the reference is docs/api.md.
 //
@@ -16,6 +16,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const core = require('./wcc-client-core.cjs');
+const newTabCore = require('./new-tab-core.cjs');
 
 function sleepSync(ms) {
   if (ms <= 0) return;
@@ -47,7 +48,7 @@ function floor(coordDir, flags) {
 }
 
 /** Drop one request atomically (temp file, then rename), then block on its receipt. */
-function send(coordDir, connector, body, waitMs) {
+function send(coordDir, connector, body, waitMs, interpret = core.interpretReceipt) {
   const base = path.join(coordDir, 'connectors', connector);
   const reqDir = path.join(base, 'requests');
   const receipt = path.join(base, 'receipts', core.receiptFilename(body.id));
@@ -62,7 +63,7 @@ function send(coordDir, connector, body, waitMs) {
     try {
       const r = JSON.parse(fs.readFileSync(receipt, 'utf8'));
       try { fs.unlinkSync(receipt); } catch { /* receipts are ours to clean up; best effort */ }
-      return core.interpretReceipt(r);
+      return interpret(r);
     } catch { /* not written yet (or mid-rename) — keep polling */ }
     if (Date.now() >= deadline) break;
     sleepSync(core.POLL_MS);
@@ -88,13 +89,29 @@ function main() {
   const { command, args, flags } = parsed;
   if (flags.help || !command || command === 'help') { console.log(core.USAGE); process.exit(command || flags.help ? core.EXIT_OK : core.EXIT_FAILED); }
 
+  const stray = core.strayFlag(command, flags);
+  if (stray) fail(stray);
   const coordDir = need(core.resolveCoordDir(flags, process.env, process.platform, os.homedir())).dir;
   if (command === 'floor') return floor(coordDir, flags);
 
-  if (command !== 'spawn' && command !== 'tell') fail(`unknown command "${command}" — floor, spawn or tell`);
+  if (command !== 'spawn' && command !== 'tell' && command !== 'new-tab') fail(`unknown command "${command}" — floor, spawn, tell or new-tab`);
   const connector = need(core.resolveConnector(flags, process.env)).id;
-  const waitMs = core.resolveWaitMs(flags, process.env);
+  const waitMs = core.resolveWaitMs(flags, process.env, command === 'new-tab' ? newTabCore.NEW_TAB_WAIT_MS : core.DEFAULT_WAIT_MS);
   const envelope = { id: crypto.randomUUID(), connector, sentMs: Date.now() };
+
+  if (command === 'new-tab') {
+    if (args.length > 1) fail(`new-tab takes one tab name, got ${args.length} words — quote it`);
+    const b = newTabCore.buildNewTabFields(args[0], flags, (x) => path.resolve(x));
+    if (!b.ok) fail(`new-tab ${b.reason}`);
+    const r = send(coordDir, connector, core.buildNewTabRequest({ ...envelope, fields: b.fields }), waitMs, newTabCore.interpretNewTabReceipt);
+    if (r.ok) {
+      console.log(flags.json ? JSON.stringify(r.result, null, 2) : r.result.workspaceId);
+      console.error(newTabCore.formatNewTabResult(r.result));
+      process.exit(core.EXIT_OK);
+    }
+    if (r.leftOnDisk) fail(`new-tab failed, and LEFT A REPO ON DISK at ${r.leftOnDisk} — ${r.reason}`, newTabCore.EXIT_LEFT_ON_DISK);
+    return report('new-tab', r);
+  }
 
   if (command === 'spawn') {
     const repo = args[0];

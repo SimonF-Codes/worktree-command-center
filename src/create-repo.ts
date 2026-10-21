@@ -8,6 +8,7 @@ export interface CreateRepoResult {
 	branch?: string;      // the base branch the repo was initialised on
 	error?: string;
 	committed: boolean;   // false if git init succeeded but the initial commit didn't (e.g. no git identity)
+	commitError?: string; // git's last line of complaint when `committed` is false
 }
 
 /** Filesystem-safe directory name from a repo display name; '' if nothing usable remains. Pure. */
@@ -55,5 +56,7 @@ export async function createGitRepo(
 	}
 	await runCommand('git', ['add', '-A'], { cwd: repoPath, timeoutMs: 10000 });
 	const commit = await runCommand('git', ['commit', '-m', 'Initial commit'], { cwd: repoPath, timeoutMs: 10000 });
-	return { ok: true, path: repoPath, branch, committed: commit.code === 0 };
+	if (commit.code === 0) return { ok: true, path: repoPath, branch, committed: true };
+	const why = (commit.error ?? '') || `${commit.stderr}\n${commit.stdout}`.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop();
+	return { ok: true, path: repoPath, branch, committed: false, ...(why ? { commitError: why } : {}) };
 }
