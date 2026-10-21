@@ -937,6 +937,7 @@ async function main(): Promise<void> {
 				try { plan = planPrune(await gather()); }
 				catch (e) { toast(`Couldn't read the worktrees: ${(e as Error).message}`, 'error'); return; }
 				console.info('[wcc] prune plan', plan.totals);
+				if (!plan.totals.worktrees && plan.repos.every((r) => !r.error)) { toast('Nothing to prune: no repo has a worktree besides its main checkout.', 'info'); return; }
 				if (!plan.totals.prune) {
 					if (await promptForConfirm('Nothing to prune', describePrunePlan(plan), 'Re-check')) continue;
 					return;

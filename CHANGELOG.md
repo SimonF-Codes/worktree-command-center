@@ -48,6 +48,12 @@ landed on `main`.
     whether the folder is empty or still holds leftover entries that aren't worktrees.
   - If the folder doesn't exist, the button is hidden.
   - The empty folder is never deleted.
+- **"Prune merged worktrees…" says plainly when there is nothing to prune.** The dialog used to
+  open with "0 of N worktrees can be removed". Now it opens with "Nothing to prune", followed by a
+  count of the reasons each worktree is kept, e.g. "Kept: 5 with unmerged commits, 2 with
+  uncommitted changes". Repos with no worktrees are listed together on one line instead of as
+  empty sections. If no repo has any worktree, a toast says so and no dialog opens.
+  `wcc-worktrees prune` prints the same text.
 - **Prune no longer blames OneDrive for a worktree a terminal is sitting in.** The held-open probe
   is a rename done by Node, and Node reports a process's working directory inside the folder as
   `EBUSY`. git calls the same hold "Permission denied". Prune was treating every `EBUSY` as a sync

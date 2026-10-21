@@ -198,7 +198,7 @@ describe('prune', () => {
 	it('dry run while the app is running: every worktree kept as live-unknown, said on stderr', async () => {
 		const r = await run(['prune'], true);
 		expect(r.code).toBe(EXIT.ok);
-		expect(r.out).toMatch(/0 of 2 worktrees can be removed/);
+		expect(r.out).toMatch(/^Nothing to prune: none of the 2 worktrees is merged, clean and unused. Kept: 2 not checked for running terminals/);
 		expect(r.err).toMatch(/the app is running/);
 	});
 
