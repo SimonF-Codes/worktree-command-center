@@ -4,6 +4,7 @@ import { promptForChoice, promptForTopic, promptForConfirm } from './prompt-dial
 import type { ToastVariant } from './toast-queue';
 import { parseAutoClose, thresholdLabel, AUTO_CLOSE_CHOICES } from '../terminals/auto-close';
 import type { RepoConfig } from '../terminals/terminals-grid';
+import type { NestButton } from '../move-repo';
 import * as fs from 'fs';
 
 export interface SettingsPanelDeps {
@@ -22,8 +23,9 @@ export interface SettingsPanelDeps {
 	targets?: {
 		list: () => RepoConfig[];
 		move: (r: RepoConfig) => Promise<void>;
-		/** Worktrees still sit in the old shared root beside the repo (builds before 0.12). */
-		hasLegacyWorktrees?: (r: RepoConfig) => boolean;
+		/** The Nest button for a repo whose worktrees may still sit in the old shared root beside it
+		 *  (builds before 0.12): hidden, disabled with the reason, or enabled — move-repo's nestButton. */
+		nestButton?: (r: RepoConfig) => Promise<NestButton>;
 		/** Move them inside the repo — the same plan-first machinery as move, with the repo staying put. */
 		relayout?: (r: RepoConfig) => Promise<void>;
 		repoint: (r: RepoConfig) => Promise<void>;
@@ -95,7 +97,7 @@ export class SettingsPanel {
 		});
 
 		this.renderAutoClose(this.el, cfg0.autoClose);
-		this.renderTargets(this.el);
+		await this.renderTargets(this.el);
 
 		const section = this.el.createDiv({ cls: 'wcc-settings-section' });
 		section.createDiv({ cls: 'wcc-settings-sub', text: 'Convert destinations — where a journal note\'s "Convert to…" can send it' });
@@ -131,7 +133,7 @@ export class SettingsPanel {
 	 *  be ADDED (mergeRepos appends), so one whose folder moved stayed in config.json forever.
 	 *  Move does the whole move in one go; Repoint is for a folder already moved by hand; Forget
 	 *  drops the entry and touches nothing on disk. */
-	private renderTargets(parent: HTMLElement): void {
+	private async renderTargets(parent: HTMLElement): Promise<void> {
 		const t = this.deps.targets;
 		if (!t) return;
 		const s = parent.createDiv({ cls: 'wcc-settings-section' });
@@ -149,15 +151,18 @@ export class SettingsPanel {
 		}
 		const listEl = s.createDiv({ cls: 'wcc-settings-list' });
 		const repos = t.list();
+		// Asked before the first row is drawn: each is one git call, and a row must not change under the cursor.
+		const nest = await Promise.all(repos.map((r) => (!r.folder && t.relayout && t.nestButton ? t.nestButton(r).catch((): NestButton => ({ show: false })) : Promise.resolve<NestButton>({ show: false }))));
 		if (!repos.length) listEl.createDiv({ cls: 'wcc-settings-empty', text: 'No targets yet — use ➕ Add folder.' });
-		for (const r of repos) {
+		for (const [i, r] of repos.entries()) {
 			const row = listEl.createDiv({ cls: 'wcc-settings-row' });
 			const info = row.createDiv({ cls: 'wcc-settings-row-info' });
 			const missing = !fs.existsSync(r.path);
 			info.createDiv({ cls: 'wcc-settings-row-label', text: `${r.folder ? '📁 ' : ''}${r.name}${missing ? ' · ⚠ folder not found' : ''}` });
 			info.createDiv({ cls: 'wcc-settings-row-sub', text: r.path });
-			const act = (label: string, title: string, run: (r: RepoConfig) => Promise<void>): void => {
-				const b = row.createEl('button', { cls: 'wcc-settings-remove', text: label, attr: { title } });
+			const act = (label: string, title: string, run: (r: RepoConfig) => Promise<void>, enabled = true): void => {
+				const b = row.createEl('button', { cls: 'wcc-settings-remove', text: label, attr: { title } }) as HTMLButtonElement;
+				b.disabled = !enabled;
 				b.addEventListener('click', (e) => {
 					e.stopPropagation();
 					void (async () => {
@@ -167,7 +172,8 @@ export class SettingsPanel {
 				});
 			};
 			if (!r.folder) act('Move…', 'Move this repo and everything that points at it — shows the full plan first', t.move);
-			if (!r.folder && t.relayout && t.hasLegacyWorktrees?.(r)) act('Nest worktrees…', 'Move this repo\'s worktrees from the old shared .claude-worktrees folder beside it into <repo>/.claude-worktrees — transcripts and saved terminals follow; shows the full plan first', t.relayout);
+			const nb = nest[i]!;
+			if (nb.show && t.relayout) act('Nest worktrees…', nb.title, t.relayout, nb.enabled);
 			act('Repoint…', 'The folder was moved by hand: point this target at where it is now', t.repoint);
 			act('Forget', 'Remove this target from the floor. Nothing on disk is touched', t.forget);
 		}

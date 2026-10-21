@@ -6,7 +6,7 @@ import { parseGodSelfImprove } from './terminals/god';
 import { parseRoleLibrary } from './terminals/role-library';
 import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, forgetRepo, retargetRepo, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
-import { planMove, describeMovePlan, describeRefusals, remapRepoLinks, samePath, isInside, legacyWorktreeRootFor, type PathMove } from './move-repo';
+import { planMove, describeMovePlan, describeRefusals, remapRepoLinks, samePath, isInside, legacyWorktreeRootFor, nestButton, type PathMove } from './move-repo';
 import { gatherMoveFacts, executeMove, describeMoveResult } from './move-repo-io';
 import { planPrune, describePrunePlan, stillPrunable } from './prune-worktrees';
 import { gatherPruneFacts, executePrune, describePruneResults } from './prune-worktrees-io';
@@ -303,7 +303,14 @@ async function main(): Promise<void> {
 			targets: {
 				list: () => repos,
 				move: (r) => moveTargetInteractive(r),
-				hasLegacyWorktrees: (r) => fs.existsSync(legacyWorktreeRootFor(r.path, r.name)),
+				nestButton: async (r) => {
+					const root = legacyWorktreeRootFor(r.path, r.name);
+					if (!fs.existsSync(root)) return nestButton(r.path, r.name, false, null, 0, caseInsensitive);
+					const list = await runCommand('git', ['worktree', 'list', '--porcelain'], { cwd: r.path, timeoutMs: 8000 });
+					let entries = 0;
+					try { entries = fs.readdirSync(root).length; } catch { /* only the wording of the reason */ }
+					return nestButton(r.path, r.name, true, list.code === 0 ? list.stdout : null, entries, caseInsensitive);
+				},
 				relayout: (r) => runMoveInteractive(r, r.path),
 				repoint: (r) => repointTargetInteractive(r),
 				forget: (r) => forgetTargetInteractive(r),

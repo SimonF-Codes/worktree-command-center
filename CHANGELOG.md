@@ -39,6 +39,15 @@ landed on `main`.
     branch.
   - One limit is still there: a squash-merged branch whose lines the base has changed again
     since can't be told apart from unmerged work. It is kept.
+- **"Nest worktrees…" is greyed out when there's nothing left to nest.** The button used to
+  appear whenever the old shared `.claude-worktrees/<repo>` folder existed. A successful relayout
+  leaves that folder behind empty, so the button stayed and did nothing when clicked. The button
+  now counts the worktrees `git worktree list` reports in the old folder:
+  - If there's at least one, the button is enabled and its tooltip gives the count.
+  - If there are none, the button is shown but disabled, and its tooltip says why. It also says
+    whether the folder is empty or still holds leftover entries that aren't worktrees.
+  - If the folder doesn't exist, the button is hidden.
+  - The empty folder is never deleted.
 - **Prune no longer blames OneDrive for a worktree a terminal is sitting in.** The held-open probe
   is a rename done by Node, and Node reports a process's working directory inside the folder as
   `EBUSY`. git calls the same hold "Permission denied". Prune was treating every `EBUSY` as a sync

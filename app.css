@@ -322,7 +322,8 @@ html, body {
 .wcc-settings-row-label { font-weight: 600; font-size: 12.5px; }
 .wcc-settings-row-sub { color: var(--text-muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 .wcc-settings-remove { flex: none; background: transparent; color: var(--text-muted); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 11.5px; }
-.wcc-settings-remove:hover { color: var(--color-red); border-color: var(--color-red); }
+.wcc-settings-remove:hover:not(:disabled) { color: var(--color-red); border-color: var(--color-red); }
+.wcc-settings-remove:disabled { opacity: .45; cursor: not-allowed; }
 .wcc-settings-add { display: block; width: 100%; background: var(--background-secondary-alt); color: var(--text-normal); border: 1px dashed var(--background-modifier-border); border-radius: 6px; padding: 7px 10px; cursor: pointer; margin-bottom: 8px; }
 .wcc-settings-input { flex: 1; min-width: 0; background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 6px 9px; font-size: 12.5px; }
 .wcc-settings-close { background: var(--background-secondary-alt); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 6px 12px; cursor: pointer; }

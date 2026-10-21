@@ -227,6 +227,33 @@ export function plannedDestinations(f: Pick<MoveFacts, 'from' | 'to' | 'repoName
 		.map((w) => remapPath(w.path, [{ from: oldRoot, to: newRoot }], f.caseInsensitive));
 }
 
+/** The Settings row's "Nest worktrees…" button. */
+export type NestButton = { show: false } | { show: true; enabled: boolean; title: string };
+
+const NEST_TITLE = 'Move this repo\'s worktrees from the old shared .claude-worktrees folder beside it into <repo>/.claude-worktrees — transcripts and saved terminals follow; shows the full plan first';
+
+/** Whether there is anything to nest, from what GIT lists under the old root, never from the
+ *  folder: a successful relayout leaves the old root behind empty, and a directory can hold
+ *  leftovers git no longer knows as worktrees. No old root at all → hidden. An old root git lists
+ *  nothing under → shown but disabled, with the reason (greyed out rather than gone, so the row
+ *  still says where the worktrees went). `porcelain` is `git worktree list --porcelain`, null when
+ *  that failed — then the button stays enabled, since the relayout reads git again and says what
+ *  it finds. `entries` is how many names the old root holds, for the reason only. */
+export function nestButton(
+	repoPath: string, repoName: string, rootExists: boolean, porcelain: string | null, entries: number, ci: boolean,
+): NestButton {
+	if (!rootExists) return { show: false };
+	const root = legacyWorktreeRootFor(repoPath, repoName);
+	if (porcelain === null) return { show: true, enabled: true, title: `${NEST_TITLE}. (git could not list the worktrees here, so whether any are left in ${root} is not known.)` };
+	const n = plannedDestinations({ from: repoPath, to: repoPath, repoName, worktrees: parseWorktreePorcelain(porcelain).map((w) => ({ ...w, dirty: [] })), caseInsensitive: ci }).length;
+	if (n > 0) return { show: true, enabled: true, title: `${NEST_TITLE}. ${n} worktree${n === 1 ? ' is' : 's are'} still in ${root}.` };
+	return {
+		show: true, enabled: false,
+		title: `Nothing left to nest: git lists no worktree of ${repoName} in ${root}. `
+			+ (entries === 0 ? 'The folder is empty and can be deleted.' : `The folder still holds ${entries} entr${entries === 1 ? 'y' : 'ies'} git does not know as worktrees — look before deleting it.`),
+	};
+}
+
 const sample = (xs: readonly string[], n = 3): string => xs.slice(0, n).join(', ') + (xs.length > n ? `, +${xs.length - n} more` : '');
 
 /** Compute the whole move: every directory to move, every link to repair, every transcript to
