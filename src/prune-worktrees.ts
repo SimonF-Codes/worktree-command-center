@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { projectDirName } from './terminals/resume-target';
-import { shouldRemoveWorktree } from './terminals/worktree-manager';
+import { shouldRemoveWorktree, countCherryUnmatched, type MergedBy } from './terminals/worktree-manager';
 import { isInside, samePath } from './move-repo';
 
 // Pruning merged worktrees — the PURE half. Given what is on disk (gathered by
@@ -31,8 +31,7 @@ import { isInside, samePath } from './move-repo';
 // a squash-merged branch whose lines base has since changed again: it reads as unmerged and is
 // kept, and the refusal says so rather than pretending it is unmerged work.
 
-/** How a worktree's commits were found to be in its base. */
-export type MergedBy = 'ancestor' | 'patch-id' | 'content';
+export { countCherryUnmatched, type MergedBy };
 
 /** One worktree, with everything the decision needs. Every git answer is nullable: null means
  *  the command failed, and an unanswered question never counts in a worktree's favour. */
@@ -151,11 +150,6 @@ export function baseFor(branch: string, branches: readonly string[]): string | n
 export function stillPrunable(confirmed: PrunePlan, fresh: PrunePlan, ci: boolean): RepoPrunePlan[] {
 	const ok = fresh.repos.flatMap((r) => r.prune);
 	return confirmed.repos.map((r) => ({ ...r, prune: r.prune.filter((e) => ok.some((o) => samePath(o.path, e.path, ci) && o.branch === e.branch)) }));
-}
-
-/** `git cherry` output: how many commits have no equivalent patch upstream ('+' lines). */
-export function countCherryUnmatched(s: string): number {
-	return String(s).split('\n').filter((l) => l.startsWith('+')).length;
 }
 
 /** How the commits were found to be in base, or null when no check held. */

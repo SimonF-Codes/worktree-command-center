@@ -1987,7 +1987,7 @@ export class TerminalsGrid {
 			`Close "${tile.name}"?`,
 			isFolder
 				? 'This kills the session. The folder and its files are left alone.'
-				: `This kills the session and removes its worktree + branch (${tile.branch}). It can't be undone.`,
+				: `This kills the session and removes its worktree. Its branch (${tile.branch}) is deleted only if every commit is already in ${(tile as TerminalTile).baseBranch}; otherwise it is kept, with any uncommitted work committed onto it.`,
 			'Close',
 		);
 		if (!ok) return;
@@ -2021,6 +2021,7 @@ export class TerminalsGrid {
 				void this.deps.promptForTopic('Rename terminal', 'New name', cur, 'Rename').then((name) => { if (name && name.trim()) t.setName(name.trim()); });
 			},
 			onClosed: (t) => { this.idleTiles.delete(t.tileId); if (this.lockedTileId === t.tileId) this.lockedTileId = null; if (this.centeredId === t.tileId) this.centeredId = null; this.q = rqClose(this.q, t.tileId).state; this.tiles = this.tiles.filter((x) => x !== t); void this.persist(); this.applyLayout(); this.autoCenter(); },
+			onCloseKept: (t, r) => this.deps.toast(`${t.name} closed — ${r.branch === 'kept' ? `branch ${t.branch} kept` : 'branch deleted'}${r.worktree === 'kept' ? ', worktree kept' : ''}: ${r.reason}${r.parked ? '. Its uncommitted work was committed onto the branch first' : ''}`, 'warn'),
 			onHide: (t) => this.hideTile(t),
 			onLock: (t) => this.toggleLockById(t.tileId),
 			onCenter: (t) => this.handleClick(t.tileId),

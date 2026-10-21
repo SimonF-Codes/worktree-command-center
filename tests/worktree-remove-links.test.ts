@@ -52,7 +52,7 @@ const isGone = (p: string): boolean => { try { fs.lstatSync(p); return false; } 
 
 describe('removing a worktree never deletes through a link inside it', () => {
 	it('removeWorktreeAndBranch: the junction goes, its target survives', async () => {
-		await removeWorktreeAndBranch(repo, wt, 'wt/main-1');
+		await removeWorktreeAndBranch(repo, wt, 'wt/main-1', 'main');
 		expect(isGone(path.join(wt, 'node_modules'))).toBe(true);
 		expect(fs.existsSync(wt)).toBe(false);
 		expect(fs.readFileSync(sentinel, 'utf8')).toBe('must survive\n');
@@ -61,7 +61,7 @@ describe('removing a worktree never deletes through a link inside it', () => {
 	it('removeWorktreeAndBranch: a junction nested deep inside, too', async () => {
 		fs.mkdirSync(path.join(wt, 'vendor', 'deep'), { recursive: true });
 		fs.symlinkSync(shared, path.join(wt, 'vendor', 'deep', 'link'), 'junction');
-		await removeWorktreeAndBranch(repo, wt, 'wt/main-1');
+		await removeWorktreeAndBranch(repo, wt, 'wt/main-1', 'main');
 		expect(fs.existsSync(wt)).toBe(false);
 		expect(fs.readFileSync(sentinel, 'utf8')).toBe('must survive\n');
 	});

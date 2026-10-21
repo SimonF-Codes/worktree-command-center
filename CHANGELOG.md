@@ -25,6 +25,20 @@ landed on `main`.
   destination parent.
 
 **🔧 Fixes**
+- **Closing a tile with × no longer deletes a branch that holds unmerged commits.** The × ran
+  `git branch -D`, which force-deletes without checking anything. On 2026-10-21 it deleted
+  apartment-planner's `wt/main-2` with three unmerged commits on it. They survived only because a
+  remote happened to have a copy. Now × works in this order:
+  - It commits any uncommitted work onto the branch as a `wip:` commit, as ending a session does.
+  - It removes the worktree.
+  - It deletes the branch only if every commit is already in the base branch. That is checked
+    three ways: by ancestry, by patch-id (`git cherry`, which catches a rebase or cherry-pick) and
+    by content (`git merge-tree`, the only check that catches a squash of several commits).
+  - Otherwise it keeps the branch and a toast says why, e.g. "3 commits not in main".
+  - If it can't establish merged-ness (for example, the base branch is gone), it also keeps the
+    branch.
+  - One limit is still there: a squash-merged branch whose lines the base has changed again
+    since can't be told apart from unmerged work. It is kept.
 - **Prune no longer blames OneDrive for a worktree a terminal is sitting in.** The held-open probe
   is a rename done by Node, and Node reports a process's working directory inside the folder as
   `EBUSY`. git calls the same hold "Permission denied". Prune was treating every `EBUSY` as a sync

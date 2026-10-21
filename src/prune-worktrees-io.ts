@@ -3,9 +3,9 @@ import * as path from 'path';
 import { runCommand } from './command-runner';
 import { parseWorktreePorcelain, parseGitmodulesPaths } from './move-repo';
 import { defaultProjectsDir, probeRenameCode, holdersByCommandLine } from './move-repo-io';
-import { findLinks, unlinkLinksInside } from './terminals/worktree-manager';
+import { findLinks, unlinkLinksInside, countCherryUnmatched, mergesToNothing } from './terminals/worktree-manager';
 import {
-	planPrune, baseFor, countCherryUnmatched,
+	planPrune, baseFor,
 	type PruneFacts, type PruneRepoFacts, type PruneWorktreeFact, type PrunePlan, type RepoPrunePlan, type HeldDir,
 } from './prune-worktrees';
 
@@ -69,17 +69,6 @@ async function gatherRepo(t: PruneTarget): Promise<PruneRepoFacts> {
 		f.contentMerged = await mergesToNothing(t.path, base, sha);
 	}
 	return out;
-}
-
-/** Would merging `sha` into `base` leave base's tree exactly as it is? Exit 1 is a conflict —
- *  certainly not merged; anything else unexpected is unknown (null). */
-async function mergesToNothing(repo: string, base: string, sha: string): Promise<boolean | null> {
-	const mt = await git(repo, ['merge-tree', '--write-tree', base, sha], 30000);
-	if (mt.code === 1) return false;
-	if (mt.code !== 0) return null;
-	const tree = await git(repo, ['rev-parse', `${base}^{tree}`], 8000);
-	if (tree.code !== 0) return null;
-	return mt.stdout.split('\n')[0]!.trim() === tree.stdout.trim();
 }
 
 function hasSubmoduleCheckout(dir: string): boolean {
