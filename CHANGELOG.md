@@ -5,6 +5,39 @@ landed on `main`.
 
 ## Unreleased
 
+**🆕 A session can open a new tab, already bound to a repo: `new-tab`**
+- **`cos-coord new-tab "<tab>" --repo <target>`** binds a new workspace tab to a registered
+  target. **Without `--repo`, it creates a repo first.** The repo is named after the tab unless
+  `--new-repo` is given, and the same initial parameters as the 🆕 form apply: `--parent`,
+  `--base`, `--gitignore`, `--claude-md`/`--no-claude-md`, `--remote`. Creating means a folder,
+  `git init`, README and seeds, the initial commit, registration, and the tab. The verb is Kane's
+  (`COS_ROLE=god`). It prints the new workspace id and blocks for the app's answer.
+- **Outside the app, `wcc-client new-tab`** does the same through the connector channel, but
+  only for a connector whose `config.json` entry has `"grants": ["new-tab"]`. Registration alone
+  still gives only `spawn`/`tell`. An ungranted or unregistered caller gets a rejected receipt
+  with the fix, not silence. The trust boundary is argued in
+  [docs/api.md](docs/api.md#what-a-connector-may-do).
+- **One implementation.** The 🆕 form, the **+** tab flow and both session channels now share
+  `createRepoFromParams` → `instantiateRepo`, and `openLinkedTab`. The form refuses what a
+  session is refused. A tab a session made is announced in the window with an **Open** button,
+  and the active tab is never switched under you.
+- **The refusals that matter, before anything is written:** the target folder already exists
+  (empty or not), the name is already a target on the floor (two checkouts can't share one name),
+  the parent folder is missing, or git has no `user.name`/`user.email` (probed with `git var`, so
+  the initial commit can't fail on it halfway). A commit that fails anyway is exit **4** with the
+  path, never a success.
+- **`gh` missing never fails a creation.** `gh` is looked for under
+  `%LOCALAPPDATA%\Microsoft\WinGet\Packages\GitHub.cli_*\bin` as well as `PATH`. If it isn't
+  there, the repo and tab are still made, and the receipt carries a warning saying so.
+- **A request nobody drains is withdrawn, never fired later.** The god-outbox drain now claims a
+  request before acting on it, as the connector drain already did, so the CLI's withdrawal races
+  it cleanly. Exit codes are 0 / 2 (refused or withdrawn) / 3 (not confirmed) / 4 (repo left
+  without a commit). The contract is in
+  [docs/api.md](docs/api.md#new-tab-a-workspace-tab-bound-to-a-repo).
+- **Also:** the 🆕 form now refuses a repo name already registered, and a git with no identity,
+  up front. It used to create the repo and toast afterwards. `wcc-client` now refuses a flag
+  that belongs to another command (`spawn … --repo`) instead of dropping it.
+
 **⌨ Prune and relayout from the command line: `wcc-worktrees`**
 - **`wcc-worktrees prune [<repo>] [--apply]` and `wcc-worktrees relayout [<repo>] [--apply]`**
   run the same planning and execution as the **⚙ Settings → Targets** buttons, from a shell, one
