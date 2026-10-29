@@ -30,6 +30,9 @@ landed on `main`.
   `EBUSY`. git calls the same hold "Permission denied". Prune was treating every `EBUSY` as a sync
   engine and saying "pause syncing". That was measured to be wrong on 2026-10-16. Such a worktree
   now names both causes, the cwd holder first.
+- **The overseer console's buttons and refresh prompt use its current name.** The ⟳ and ×
+  tooltips and the "Refresh …?" confirm still said "Kane" after the console was renamed. They
+  now follow the console's name, and a rename updates the tooltips right away.
 
 ## 0.12.0 — 2026-10-14
 

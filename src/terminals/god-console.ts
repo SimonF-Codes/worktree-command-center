@@ -46,6 +46,8 @@ export interface GodConsoleOpts {
 export class GodConsole {
 	private el: HTMLElement | null = null;
 	private nameSpan: HTMLElement | null = null;
+	private refreshBtn: HTMLElement | null = null;
+	private hideBtn: HTMLElement | null = null;
 	private bodyEl: HTMLElement | null = null;
 	private term: Terminal | null = null;
 	private fit: FitAddon | null = null;
@@ -123,10 +125,11 @@ export class GodConsole {
 		this.queueEl = head.createSpan({ cls: 'cos-notice-queue' });
 		this.queueEl.style.display = 'none';
 		this.queueEl.addEventListener('click', (e) => { e.stopPropagation(); this.gate.flushNow(); });
-		const refreshBtn = head.createEl('button', { text: '⟳', cls: 'cos-term-refresh', attr: { title: 'Refresh Kane — reload with --continue (keeps the conversation)' } });
-		refreshBtn.addEventListener('click', (e) => { e.stopPropagation(); void this.refresh(); });
-		const hide = head.createEl('button', { text: '×', attr: { title: 'Hide Kane (session keeps running)' } });
-		hide.addEventListener('click', (e) => { e.stopPropagation(); this.onHide(); });
+		this.refreshBtn = head.createEl('button', { text: '⟳', cls: 'cos-term-refresh' });
+		this.refreshBtn.addEventListener('click', (e) => { e.stopPropagation(); void this.refresh(); });
+		this.hideBtn = head.createEl('button', { text: '×' });
+		this.hideBtn.addEventListener('click', (e) => { e.stopPropagation(); this.onHide(); });
+		this.renderHeaderTitles();
 
 		this.bodyEl = this.el.createDiv({ cls: 'cos-god-body' });
 		this.term = new Terminal({ fontSize: 12, convertEol: false, cursorBlink: false, scrollback: 5000, theme: activeTerminalPalette(), ...activeTerminalFont(),
@@ -327,7 +330,8 @@ export class GodConsole {
 	 *  Confirms first only if he's mid-output. */
 	async refresh(): Promise<void> {
 		if (this.busy) {
-			const ok = await promptForConfirm('Refresh Kane?', 'Kane is mid-response. Refreshing interrupts it and reloads with --continue (the conversation is kept).', 'Refresh');
+			const name = this.opts.instanceName ?? 'Kane';
+			const ok = await promptForConfirm(`Refresh ${name}?`, `${name} is mid-response. Refreshing interrupts it and reloads with --continue (the conversation is kept).`, 'Refresh');
 			if (!ok) return;
 		}
 		this.restartInPlace();
@@ -362,6 +366,14 @@ export class GodConsole {
 	setDisplayName(name: string): void {
 		this.opts.instanceName = name;
 		this.nameSpan?.setText(`🜲 ${name}`);
+		this.renderHeaderTitles();
+	}
+
+	/** The header buttons' tooltips name the console, so they are re-set on every rename. */
+	private renderHeaderTitles(): void {
+		const name = this.opts.instanceName ?? 'Kane';
+		this.refreshBtn?.setAttr('title', `Refresh ${name} — reload with --continue (keeps the conversation)`);
+		this.hideBtn?.setAttr('title', `Hide ${name} (session keeps running)`);
 	}
 
 	/** Last ≤20 non-blank lines of Kane's buffer — for the phone floor view. */
