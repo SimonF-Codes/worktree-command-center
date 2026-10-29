@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { projectDirName, normDir, orphanTranscripts, pickResumeFile, type Transcript } from '../src/terminals/resume-target';
+import { projectDirName, normDir, orphanTranscripts, pickResumeFile, supersede, stillSuperseded, type Transcript } from '../src/terminals/resume-target';
 
 /** Windows paths, spelled with String.raw so the backslashes stay backslashes. */
 const PROJ = String.raw`C:\Users\fridl\.claude\projects\C--Users-fridl-AppData-Roaming-worktree-command-center--coordination--god-default`;
@@ -92,5 +92,44 @@ describe('pickResumeFile', () => {
 
 	it('returns null for an empty folder', () => {
 		expect(pickResumeFile([], new Set())).toBeNull();
+	});
+});
+describe('superseded by a fresh start', () => {
+	const POISONED = 'aaaaaaaa-0000-4000-8000-000000000001';
+	const FRESH = 'bbbbbbbb-0000-4000-8000-000000000002';
+
+	it('resumes the NEW conversation, though the old one is newer on disk', () => {
+		// Clock skew or a write racing the kill can leave the poisoned file the newer one; mtime
+		// must not decide this.
+		const sup = supersede([t(POISONED, 5_000)]);
+		const now = [t(POISONED, 5_000), t(FRESH, 4_000)];
+		expect(pickResumeFile(now, stillSuperseded(sup, now))).toBe(file(FRESH));
+	});
+
+	it('resumes nothing when the fresh session has not written a transcript yet', () => {
+		// Bare --continue here would take the poisoned conversation straight back.
+		const sup = supersede([t(POISONED, 5_000)]);
+		const now = [t(POISONED, 5_000)];
+		expect(pickResumeFile(now, stillSuperseded(sup, now))).toBeNull();
+	});
+
+	it('stops skipping a superseded transcript once it is written to again', () => {
+		// The user ran /resume back into it and talked: it is a live conversation again.
+		const sup = supersede([t(POISONED, 5_000)]);
+		const now = [t(POISONED, 9_000), t(FRESH, 6_000)];
+		expect(stillSuperseded(sup, now).size).toBe(0);
+		expect(pickResumeFile(now, stillSuperseded(sup, now))).toBe(file(POISONED));
+	});
+
+	it('keys paths the way pickResumeFile and the job orphans do', () => {
+		const sup = supersede([t(POISONED, 1)]);
+		const spelled = { file: file(POISONED).replace(/\\/g, '/').toUpperCase(), mtimeMs: 1 };
+		const skip = new Set([...orphanTranscripts([{ linkScanPath: file(FRESH) }], PROJ), ...stillSuperseded(sup, [spelled])]);
+		expect(pickResumeFile([t(POISONED, 1), t(FRESH, 2)], skip)).toBeNull();
+	});
+
+	it('supersedes nothing by default', () => {
+		const now = [t(POISONED, 1)];
+		expect(stillSuperseded(new Map(), now).size).toBe(0);
 	});
 });

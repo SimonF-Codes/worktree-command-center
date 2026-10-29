@@ -16,7 +16,7 @@ import { ctrlClickActivator, openExternalUrl } from './links';
 import { promptForConfirm } from '../ui/prompt-dialog';
 import { NoticeGate } from './notice-gate';
 import { ResumeProbe, shouldStartFresh } from './resume-fallback';
-import { orphanTranscripts, pickResumeFile, projectDirName, type JobRecord } from './resume-target';
+import { orphanTranscripts, pickResumeFile, projectDirName, stillSuperseded, supersede, type JobRecord, type Transcript } from './resume-target';
 
 /** How long a released backlog waits before being typed in, so the keystroke that emptied the box
  *  lands first. Nothing to do with the 250/900ms Enter pair in writeNotice. */
@@ -48,6 +48,9 @@ export class GodConsole {
 	private nameSpan: HTMLElement | null = null;
 	private refreshBtn: HTMLElement | null = null;
 	private hideBtn: HTMLElement | null = null;
+	private freshBtn: HTMLElement | null = null;
+	/** Transcripts left behind by the last startFresh() — resume skips them while untouched. */
+	private superseded: ReadonlyMap<string, number> = new Map();
 	private bodyEl: HTMLElement | null = null;
 	private term: Terminal | null = null;
 	private fit: FitAddon | null = null;
@@ -125,6 +128,8 @@ export class GodConsole {
 		this.queueEl = head.createSpan({ cls: 'cos-notice-queue' });
 		this.queueEl.style.display = 'none';
 		this.queueEl.addEventListener('click', (e) => { e.stopPropagation(); this.gate.flushNow(); });
+		this.freshBtn = head.createEl('button', { text: '✦', cls: 'cos-term-refresh' });
+		this.freshBtn.addEventListener('click', (e) => { e.stopPropagation(); void this.startFresh(); });
 		this.refreshBtn = head.createEl('button', { text: '⟳', cls: 'cos-term-refresh' });
 		this.refreshBtn.addEventListener('click', (e) => { e.stopPropagation(); void this.refresh(); });
 		this.hideBtn = head.createEl('button', { text: '×' });
@@ -278,33 +283,44 @@ export class GodConsole {
 	 *  came back dead after a restart while an orphaned job still held the session (2026-09-16).
 	 *  When such a job is on disk we name the file we want instead. Everything else — no job, no
 	 *  project folder yet, an unreadable one — falls through to the old `--continue`, so a home
-	 *  that never spawned a job takes exactly the path it always did. */
+	 *  that never spawned a job takes exactly the path it always did.
+	 *
+	 *  Transcripts left behind by startFresh() are skipped the same way (see supersede in
+	 *  resume-target.ts), so ⟳ after a fresh start never reaches back for the old conversation. */
 	private resumeArgs(): string[] {
 		const CONTINUE = ['--continue'];
 		try {
 			const home = process.env.USERPROFILE || process.env.HOME;
 			if (!home) return CONTINUE;
 			const projectDir = path.join(home, '.claude', 'projects', projectDirName(this.opts.godHomeDir));
-			const files = fs.readdirSync(projectDir).filter((f) => f.endsWith('.jsonl'));
-			if (files.length === 0) return CONTINUE; // nothing to resume — --continue starts fresh itself
+			const transcripts = this.listTranscripts(projectDir);
+			if (transcripts.length === 0) return CONTINUE; // nothing to resume — --continue starts fresh itself
 			const jobsDir = path.join(home, '.claude', 'jobs');
 			const jobs: JobRecord[] = [];
-			for (const id of fs.readdirSync(jobsDir)) {
-				try {
-					const st = JSON.parse(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')) as { linkScanPath?: string };
-					jobs.push({ linkScanPath: st.linkScanPath }); // matched by PATH — a job folder's id is a short prefix of its transcript's
-				} catch { /* a plain file (pins.json), a job mid-write, a job without a transcript */ }
-			}
-			const orphans = orphanTranscripts(jobs, projectDir);
-			if (orphans.size === 0) return CONTINUE; // nothing to disambiguate — unchanged behaviour
-			const pick = pickResumeFile(files.map((f) => ({
-				file: path.join(projectDir, f),
-				mtimeMs: fs.statSync(path.join(projectDir, f)).mtimeMs,
-			})), orphans);
-			// Every transcript here belongs to a background job → none of them is this console's
-			// conversation, so start fresh rather than adopting a stranger's.
+			try {
+				for (const id of fs.readdirSync(jobsDir)) {
+					try {
+						const st = JSON.parse(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')) as { linkScanPath?: string };
+						jobs.push({ linkScanPath: st.linkScanPath }); // matched by PATH — a job folder's id is a short prefix of its transcript's
+					} catch { /* a plain file (pins.json), a job mid-write, a job without a transcript */ }
+				}
+			} catch { /* no jobs dir — no jobs */ }
+			const skip = new Set([...orphanTranscripts(jobs, projectDir), ...stillSuperseded(this.superseded, transcripts)]);
+			if (skip.size === 0) return CONTINUE; // nothing to disambiguate — unchanged behaviour
+			const pick = pickResumeFile(transcripts, skip);
+			// Every transcript here belongs to a background job or was superseded by a fresh start →
+			// none of them is this console's current conversation, so start fresh instead.
 			return pick ? ['--resume', pick] : [];
 		} catch { return CONTINUE; }
+	}
+
+	/** The `.jsonl` transcripts in this home's project folder, with their mtimes. Throws if the
+	 *  folder is unreadable — callers decide what that means. */
+	private listTranscripts(projectDir: string): Transcript[] {
+		return fs.readdirSync(projectDir).filter((f) => f.endsWith('.jsonl')).map((f) => ({
+			file: path.join(projectDir, f),
+			mtimeMs: fs.statSync(path.join(projectDir, f)).mtimeMs,
+		}));
 	}
 
 	/** Kane has no ready-marker, so approximate "busy" from output activity: any output marks
@@ -340,6 +356,31 @@ export class GodConsole {
 	/** Restart Kane's session in place WITHOUT confirming — the account switch uses this so
 	 *  a live Kane moves to the new session env too (env re-read inside startSession). */
 	restartInPlace(): void {
+		this.tearDownSession();
+		this.startSession(true, true); // try to resume; if that cannot start, fall back to a fresh session
+	}
+
+	/** Start a NEW conversation in place — the escape hatch when the current one is dead (e.g. a
+	 *  turn a safety classifier stopped, which re-trips on every --continue, so ⟳ replays it
+	 *  forever). Always confirms: it drops the context. Never automatic — a silent reset reads as
+	 *  "my history vanished". The old transcript stays on disk for /resume. */
+	async startFresh(): Promise<void> {
+		const name = this.opts.instanceName ?? 'Kane';
+		const ok = await promptForConfirm(`Start a fresh ${name} session?`,
+			`${name} starts a new conversation without the current context. The old conversation stays on disk and can be resumed with /resume.`, 'Start fresh');
+		if (!ok) return;
+		// Remember what is on disk now, so the next ⟳ resumes the NEW conversation — not the old
+		// one, which is still the newest transcript until the fresh session writes its own.
+		try {
+			const home = process.env.USERPROFILE || process.env.HOME;
+			if (home) this.superseded = supersede(this.listTranscripts(path.join(home, '.claude', 'projects', projectDirName(this.opts.godHomeDir))));
+		} catch { /* no project folder yet — nothing to supersede */ }
+		this.tearDownSession();
+		this.startSession(false);
+	}
+
+	/** Stop the running session and clear the console for a new one (refresh and fresh start). */
+	private tearDownSession(): void {
 		if (this.busyTimer !== null) { window.clearTimeout(this.busyTimer); this.busyTimer = null; }
 		this.busy = false;
 		this.bridge?.kill();
@@ -347,7 +388,6 @@ export class GodConsole {
 		// New TUI, empty input box — but anything queued is KEPT and goes out on the next ready
 		// marker, rather than being typed into a session that is still booting.
 		this.gate.reset();
-		this.startSession(true, true); // try to resume; if that cannot start, fall back to a fresh session
 	}
 
 	/** Show/hide the panel WITHOUT killing the session. Refits on show. */
@@ -374,6 +414,7 @@ export class GodConsole {
 		const name = this.opts.instanceName ?? 'Kane';
 		this.refreshBtn?.setAttr('title', `Refresh ${name} — reload with --continue (keeps the conversation)`);
 		this.hideBtn?.setAttr('title', `Hide ${name} (session keeps running)`);
+		this.freshBtn?.setAttr('title', `Start a fresh ${name} session — the old conversation stays on disk and can be resumed with /resume`);
 	}
 
 	/** Last ≤20 non-blank lines of Kane's buffer — for the phone floor view. */
