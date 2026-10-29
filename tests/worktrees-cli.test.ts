@@ -9,6 +9,10 @@ import { appIsRunning, tasklistShows, psShows, imageStem, APP_IMAGE } from '../s
 import { diagnose, errorKind, parseCwdHolderOutput, realDiagnoseDeps, type DiagnoseDeps } from '../src/cli/hold-diagnosis';
 import { projectDirName } from '../src/terminals/resume-target';
 
+// hold-diagnosis reads Windows paths (drive letters, backslash parents, OneDrive roots); on the
+// ubuntu CI runner Node's posix path functions don't parse them. Same guard as tests/resolve-on-path.test.ts.
+const winOnly = it.skipIf(process.platform !== 'win32');
+
 // Real git, real directories, all inside a temp root — never a live worktree. The fixture is the
 // apartment-planner shape the brief names as the pilot: a repo with its worktrees in the old
 // shared root beside it (<parent>/.claude-worktrees/apartment-planner), wt-main-2 on wt/main-2
@@ -362,14 +366,14 @@ describe('the four failure modes, told apart', () => {
 		expect((await diagnose('EBUSY', 'C:\\w', null, deps([]))).mode).toBe('service-handle');
 	});
 
-	it('sync-engine: under a OneDrive root, or git\'s "Device or resource busy" — once no cwd holder is found', async () => {
+	winOnly('sync-engine: under a OneDrive root, or git\'s "Device or resource busy" — once no cwd holder is found', async () => {
 		expect((await diagnose('EBUSY', 'C:\\Users\\u\\OneDrive\\dev\\w', null, deps([], ['C:\\Users\\u\\OneDrive']))).mode).toBe('sync-engine');
 		expect((await diagnose('EBUSY', 'C:\\Users\\u\\OneDriveX\\w', null, deps([], ['C:\\Users\\u\\OneDrive']))).mode).toBe('service-handle');
 		expect((await diagnose('error: failed: Device or resource busy', 'C:\\w', null, deps([]))).mode).toBe('sync-engine');
 		expect((await diagnose('Device or resource busy', 'C:\\w', null, deps(['bash (pid 4)']))).mode).toBe('cwd-holder');
 	});
 
-	it('No such file → parent-missing, naming the parent', async () => {
+	winOnly('No such file → parent-missing, naming the parent', async () => {
 		const d = await diagnose('No such file or directory', 'C:\\old\\w', 'C:\\new\\nest\\w', deps([]));
 		expect(d.mode).toBe('parent-missing');
 		expect(d.message).toMatch(/C:\\new\\nest is missing/);
