@@ -186,6 +186,17 @@ A session that was mid-turn is still closed, and the result says `(was mid-turn)
 within `COS_COORD_CLOSE_WAIT_MS` (default 45 s) it exits 2 and reports the close as *not
 confirmed*. It never reports that as success.
 
+`cos-coord new-tab "<tab>" [--repo <target> | --new-repo …]` asks the app for a workspace tab bound
+to a repo: an existing target, or one it creates (folder, `git init`, seeds, initial commit,
+optional GitHub remote). It blocks on the same receipt seam and is the one `cos-coord` command
+that never fails open. Because a tab appearing hours later would be worse than none,
+`drainOutbox` now **claims a drop by renaming it into `.done/` before acting** (the connector
+drain always did this). A `new-tab` that nobody picked up within its wait is withdrawn by deleting
+it, and exactly one of the two wins. The connector channel carries the same verb, behind a
+per-connector grant. Both channels end in the same app code as the window's **+** and 🆕 buttons.
+The contract, with every reason and exit code, is in
+[api.md](api.md#new-tab-a-workspace-tab-bound-to-a-repo).
+
 ### `connectors/`: requests from outside
 
 A separate, narrower path for a local process that is *not* the overseer to **request** work:

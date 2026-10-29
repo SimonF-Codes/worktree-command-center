@@ -12,12 +12,14 @@ import { planPrune, describePrunePlan, stillPrunable } from './prune-worktrees';
 import { gatherPruneFacts, executePrune, describePruneResults } from './prune-worktrees-io';
 import { runCommand } from './command-runner';
 import { tabLinkOptions, toolbarForLink, defaultNewRepoParent, tabTitle, type TabLinkKind } from './tab-repo';
-import { defaultNewRepoParams, describeNewRepo, seedFiles } from './new-repo-params';
-import { findGh, createGitHubRemote } from './gh-cli';
+import { defaultNewRepoParams, describeNewRepo, type NewRepoParams } from './new-repo-params';
+import { planNewTab, newRepoRefusal, uncommittedReason, newTabSummary, type NewTabFields, type NewTabOutcome, type NewTabResult } from './new-tab';
+import { instantiateRepo, pathKind, remoteWarning, type RepoInstantiation } from './instantiate-repo';
+import { findGh } from './gh-cli';
 import { promptForNewRepo } from './ui/new-repo-dialog';
 import { SerialWriter } from './serial-writer';
 import { normalizeToolbars, setToolbarState, pruneToolbars, type WorkspaceToolbars } from './terminals/toolbar-state';
-import { createGitRepo, repoDirName } from './create-repo';
+import { repoDirName } from './create-repo';
 import { UsageProbe } from './terminals/usage-probe';
 import { reapUsageProbeStrays } from './terminals/stray-reaper';
 import { UsageWidget } from './ui/usage-widget';
@@ -231,6 +233,11 @@ async function main(): Promise<void> {
 		const roleLibrary = parseRoleLibrary(cfg.roleLibrary);
 
 		const sessionsFile = path.join(userData, '.terminal-sessions.json');
+		// A grid drains its outbox and connectors in its constructor — before the new-tab code
+		// further down exists. A request already waiting at launch holds until it does.
+		let newTabFromSession: (fields: NewTabFields, by: string) => Promise<NewTabOutcome> = async () => ({ ok: false, reason: 'the app is still starting' });
+		let newTabReady!: () => void;
+		const newTabIsReady = new Promise<void>((resolve) => { newTabReady = resolve; });
 		const depsFor = (id: string): GridDeps => ({
 			// Scoped, not the whole list: a repo tagged with a `group` belongs to that workspace
 			// alone. Untagged repos (every existing config) still appear everywhere.
@@ -250,6 +257,7 @@ async function main(): Promise<void> {
 			godSelfImprove,
 			roleLibrary,
 			connectors,
+			newTab: async (fields, by) => { await newTabIsReady; return newTabFromSession(fields, by); },
 			sessionEnv: () => sessionEnvProvider({ workspaceId: id }),
 			overseerName: typeof cfg.overseerName === 'string' ? cfg.overseerName : undefined,
 			toast,
@@ -545,10 +553,35 @@ async function main(): Promise<void> {
 			grids.forEach((g, id) => g.setRepos(reposForWorkspace(repos, id)));
 		};
 
-		/** The one way to make a repo: form → confirm (what and where, before anything is written)
-		 *  → createGitRepo → optional GitHub remote. Shared by the 🆕 button and the new-tab flow.
-		 *  Resolves the REGISTERED target — looked up by path, since mergeRepos keeps an existing
-		 *  entry — or null when nothing was created. */
+		/** The one way to make a repo: refuse what newRepoRefusal refuses (a name already on the
+		 *  floor, a missing parent, a target folder that exists) → instantiateRepo (git identity
+		 *  probe, createGitRepo, optional GitHub remote) → register it. Behind the 🆕 form AND a
+		 *  session's new-tab, so the two cannot drift. Resolves the REGISTERED target — looked up by
+		 *  path, since mergeRepos keeps an existing entry — or the reason nothing was created. */
+		async function createRepoFromParams(
+			params: NewRepoParams, gh: string | null, hooks: { onRemoteStart?: () => void } = {},
+		): Promise<{ ok: false; error: string } | { ok: true; repo: RepoConfig; branch: string; made: RepoInstantiation }> {
+			const refusal = newRepoRefusal(params, { repos, pathKind });
+			if (refusal) return { ok: false, error: refusal };
+			const made = await instantiateRepo(params, gh, hooks);
+			if (!made.ok || !made.path) return { ok: false, error: made.error ?? 'unknown error' };
+
+			const parent = params.parentDir;
+			lastNewRepoParent = parent;
+			void configWriter.push(async () => {
+				const fresh = await window.wcc.getConfig();
+				await window.wcc.setConfig({ ...fresh, newRepoParent: parent });
+			});
+			registerRepos(discoverRepos(made.path));
+			persist();
+			const repo = linkedRepo(repos, made.path)!;
+			statusSpan.textContent = `${repos.length} repos · created ${repo.name}`;
+			return { ok: true, repo, branch: made.branch ?? params.branch, made };
+		}
+
+		/** The 🆕 form around createRepoFromParams: form → confirm (what and where, before anything
+		 *  is written) → create, back to the form with the reason on a refusal. Shared by the 🆕
+		 *  button and the + tab flow. Null when nothing was created. */
 		async function createRepoInteractive(suggestedName: string): Promise<{ repo: RepoConfig; branch: string } | null> {
 			const gh = findGh();
 			let params = defaultNewRepoParams(suggestedName, defaultNewRepoParent(lastNewRepoParent, repos));
@@ -560,33 +593,23 @@ async function main(): Promise<void> {
 				error = undefined;
 				// Back to the form (values kept) rather than out of the whole flow.
 				if (!await promptForConfirm('Create this repository?', describeNewRepo(params), 'Create')) continue;
-				const res = await createGitRepo(params.parentDir, params.name, { branch: params.branch, files: seedFiles(params) });
-				if (!res.ok || !res.path) { error = `Couldn't create it: ${res.error ?? 'unknown error'}`; continue; }
-
-				const parent = params.parentDir;
-				lastNewRepoParent = parent;
-				void configWriter.push(async () => {
-					const fresh = await window.wcc.getConfig();
-					await window.wcc.setConfig({ ...fresh, newRepoParent: parent });
-				});
-				registerRepos(discoverRepos(res.path));
-				persist();
-				const repo = linkedRepo(repos, res.path)!;
-				statusSpan.textContent = `${repos.length} repos · created ${repo.name}`;
-
-				if (!res.committed) {
+				const name = repoDirName(params.name);
+				const r = await createRepoFromParams(params, gh, { onRemoteStart: () => toast(`Created "${name}" — now creating its GitHub repo…`, 'info') });
+				if (!r.ok) { error = `Couldn't create it: ${r.error}`; continue; }
+				const { repo, made } = r;
+				const warning = remoteWarning(made.remote);
+				if (!made.committed) {
 					// Not a quiet state: without a commit there is nothing to branch from, so every
 					// terminal on this repo would fail to start. Held on screen long enough to act on.
-					toast(`Created "${repo.name}", but it has NO commit yet, so no terminal can start in it — worktrees need a commit to branch from. Set git user.name and user.email, then commit in ${res.path}.${params.remote !== 'none' ? ' The GitHub remote was skipped: there was nothing to push.' : ''}`, 'error', { durationMs: 30000 });
-				} else if (params.remote !== 'none' && gh) {
-					toast(`Created "${repo.name}" — now creating its GitHub repo…`, 'info');
-					const rr = await createGitHubRemote(gh, res.path, repoDirName(params.name), params.remote);
-					if (rr.ok) toast(`Created "${repo.name}" with a ${params.remote} GitHub remote${rr.url ? ` — ${rr.url}` : ''}`, 'success');
-					else toast(`Created "${repo.name}" locally, but the GitHub remote failed: ${rr.error}. The local repo is fine — add a remote later with \`gh repo create\`.`, 'warn', { durationMs: 20000 });
+					toast(`Created "${repo.name}", but it has NO commit yet, so no terminal can start in it — worktrees need a commit to branch from. Set git user.name and user.email, then commit in ${made.path}.${warning ? ` ${warning}.` : ''}`, 'error', { durationMs: 30000 });
+				} else if (made.remote.state === 'created') {
+					toast(`Created "${repo.name}" with a ${params.remote} GitHub remote${made.remote.url ? ` — ${made.remote.url}` : ''}`, 'success');
+				} else if (warning) {
+					toast(`Created "${repo.name}" locally, but ${warning}.`, 'warn', { durationMs: 20000 });
 				} else {
 					toast(`Created "${repo.name}" — ready for worktrees`, 'success');
 				}
-				return { repo, branch: res.branch ?? params.branch };
+				return { repo, branch: r.branch };
 			}
 		}
 
@@ -642,18 +665,82 @@ async function main(): Promise<void> {
 			if (!name || !name.trim()) return;
 			const link = await chooseTabRepo(name.trim());
 			if (link === null) return;
+			const id = openLinkedTab(name, link);
+			if (id) await switchTo(id);
+		}
+
+		/** Add a tab — linked to `link` unless 'none' — and construct its grid, so its outbox and
+		 *  connector watchers are armed at once. The tail of the + button's flow and of a session's
+		 *  new-tab, so a tab made either way is the same tab. Returns the new tab's id. */
+		function openLinkedTab(name: string, link: { repo: RepoConfig; branch?: string } | 'none'): string | null {
 			const r = addWorkspace(workspaces, name);
-			if (!r) return;
+			if (!r) return null;
 			workspaces = r.list;
 			if (link !== 'none') {
 				workspaces = linkWorkspaceRepo(workspaces, r.id, link.repo.path);
-				// Before switchTo → gridFor: depsFor reads initialToolbar when it constructs the grid.
+				// Before gridFor: depsFor reads initialToolbar when it constructs the grid.
 				workspaceToolbars = setToolbarState(workspaceToolbars, r.id, toolbarForLink(link.repo, link.branch));
 			}
+			gridFor(r.id);
 			persist();
 			bar.refresh();
-			await switchTo(r.id);
+			return r.id;
 		}
+
+		/** A session's new-tab (Kane's `cos-coord new-tab`, or a connector's): planNewTab decides,
+		 *  then the same createRepoFromParams and openLinkedTab the 🆕 form and + button use. No
+		 *  dialog — the asker is blocked on the answer — so the tab is announced instead, with an
+		 *  Open action, and the active tab is left alone rather than switched out from under you. */
+		async function newTabFromSessionNow(fields: NewTabFields, by: string): Promise<NewTabOutcome> {
+			const gh = findGh();
+			const plan = planNewTab(fields, { repos, pathKind, defaultParent: defaultNewRepoParent(lastNewRepoParent, repos), ghAvailable: !!gh });
+			if (!plan.ok) return { ok: false, reason: plan.reason };
+			let link: { repo: RepoConfig; branch?: string };
+			let warnings: string[] = [];
+			let remoteUrl: string | null = null;
+			if (plan.kind === 'existing') {
+				link = { repo: plan.repo };
+			} else {
+				const r = await createRepoFromParams(plan.params, gh);
+				if (!r.ok) return { ok: false, reason: r.error };
+				if (!r.made.committed) {
+					const reason = uncommittedReason(r.made.path!, r.repo.name, fields.name, r.made.commitError);
+					toast(`${by}: ${reason}`, 'error', { durationMs: 30000 });
+					return { ok: false, reason, leftOnDisk: r.made.path! };
+				}
+				link = { repo: r.repo, branch: r.branch };
+				const w = remoteWarning(r.made.remote);
+				warnings = [...plan.warnings, ...(w ? [w] : [])];
+				if (r.made.remote.state === 'created') remoteUrl = r.made.remote.url ?? null;
+			}
+			const id = openLinkedTab(fields.name, link);
+			if (!id) return { ok: false, reason: 'the tab could not be added' };
+			const result: NewTabResult = {
+				workspaceId: id,
+				tab: workspaces.find((w) => w.id === id)?.name ?? fields.name,
+				repo: link.repo.name,
+				repoPath: link.repo.path,
+				branch: link.branch ?? null,
+				created: plan.kind === 'new',
+				coordDir: path.join(userData, '.coordination', id),
+				remoteUrl,
+				warnings,
+			};
+			toast(`${newTabSummary(result, by)}${warnings.length ? ` — ${warnings.join('; ')}` : ''}`, warnings.length ? 'warn' : 'success', {
+				durationMs: 15000,
+				action: { label: 'Open', run: () => void switchTo(id) },
+			});
+			return { ok: true, result };
+		}
+		// One at a time: two requests for the same name must not both pass planNewTab's checks
+		// before either has registered its repo.
+		let newTabChain: Promise<unknown> = Promise.resolve();
+		newTabFromSession = (fields, by) => {
+			const run = newTabChain.then(() => newTabFromSessionNow(fields, by));
+			newTabChain = run.catch(() => undefined);
+			return run;
+		};
+		newTabReady();
 
 		/** ALWAYS confirms — an empty tab gets one line, a tab with dirty worktrees gets a warning.
 		 *  The count comes from the PERSISTED sessions file unless the grid has actually restored

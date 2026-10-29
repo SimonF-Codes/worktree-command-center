@@ -11,8 +11,11 @@ on the same machine. There are three pieces:
 | piece | direction | what it is |
 | --- | --- | --- |
 | [`floor/state.json`](#floor-state--floorstatejson) | read | who is on the floor right now, as JSON |
-| [requests and receipts](#requests-and-receipts) | write, then read | `spawn` a new terminal, or `tell` a live one |
+| [requests and receipts](#requests-and-receipts) | write, then read | `spawn` a new terminal, `tell` a live one, or open a [`new-tab`](#new-tab-a-workspace-tab-bound-to-a-repo) (granted connectors only) |
 | [`wcc-client`](#the-client--wcc-client) | both | a CLI that wraps the two above |
+
+A session **inside** the app reaches the same `new-tab` through `cos-coord new-tab`, Kane's own
+channel. Both are documented together under [new-tab](#new-tab-a-workspace-tab-bound-to-a-repo).
 
 Everything here is a contract. A field that changes meaning or disappears is a version bump (`v`),
 not a refactor. Additive fields keep the version.
@@ -44,10 +47,12 @@ A connector is identified by a slug (`[a-z0-9-]`), e.g. `brain-2-0`. Before any 
 is honoured, it must be listed in `config.json`:
 
 ```json
-{ "connectors": [{ "id": "brain-2-0", "label": "Brain 2.0" }] }
+{ "connectors": [{ "id": "brain-2-0", "label": "Brain 2.0", "grants": ["new-tab"] }] }
 ```
 
-Both fields are required, and an entry missing either is ignored. This is a **local trust boundary
+`id` and `label` are required, and an entry missing either is ignored. `grants` is optional and
+lists the verbs beyond `spawn`/`tell` this connector may use; today the only one is `"new-tab"`.
+Unknown grant names are dropped. This is a **local trust boundary
 between the user's own apps, not authentication**. A request from an id that isn't registered is
 still answered, with a rejected receipt, so a misconfigured caller finds out at once.
 
@@ -59,9 +64,25 @@ present but is not what's checked.
 
 ## What a connector may do
 
-**`spawn` and `tell`, nothing else.** Not `watch`, `rename`, `close` or `personality`: those act on
-the operator's own workspace (Kane's watchers, Kane's mode), not on requesting work, so they stay
-the overseer's alone.
+**`spawn` and `tell`, plus `new-tab` when granted, nothing else.** Not `watch`, `rename`, `close`
+or `personality`: those act on the operator's own workspace (Kane's watchers, Kane's mode), not on
+requesting work, so they stay the overseer's alone.
+
+`new-tab` is a bigger grant than `spawn`, so registration alone does not give it. It does three
+things a spawn cannot: it adds a tab to the operator's window, it registers a new target that
+later `spawn` requests can reach, and it can create a folder on disk. The folder is the smallest
+of the three. Any local process running as the user can already `mkdir` and `git init`, and the
+app is not a sandbox. The tab and the registration are the app's to give, so:
+
+- it must be granted by name, per connector (`"grants": ["new-tab"]`);
+- an ungranted request is answered with a rejected receipt that names the fix, never ignored;
+- every tab it makes is announced in the window, saying which connector asked, with an **Open**
+  button. The active tab is never switched under the operator;
+- it never writes into an existing folder, and never takes a name already on the floor.
+
+That is the honest boundary: it stops a connector from changing the operator's window or floor
+without being granted to, and makes whatever it does visible. It does not stop a local process
+from writing files, and nothing here could.
 
 `tell` may address **any** live terminal by its exact name, but only one that already exists. It
 can't create, rename or retarget one, and an ambiguous name or a journal is rejected rather than
@@ -202,7 +223,7 @@ the delete fails because the file is gone, the app took it first. `wcc-client` d
 | `id` | `string` | your own unique id. The receipt is named after it and echoes it. Use a UUID |
 | `connector` | `string` | your connector id (required; identity is the directory, see above) |
 | `sentMs` | `number` | when you sent it (epoch ms) |
-| `kind` | `"spawn" \| "tell"` | |
+| `kind` | `"spawn" \| "tell" \| "new-tab"` | `new-tab` needs the grant; its fields are under [new-tab](#new-tab-a-workspace-tab-bound-to-a-repo) |
 
 ### `spawn`: open a new worktree terminal
 
@@ -244,7 +265,9 @@ For every request that carried an `id`, the app writes `receipts/<id>.json`. Cha
 | `v` | `1` | |
 | `id` | `string` | the request's `id` |
 | `status` | `"accepted" \| "rejected"` | |
-| `terminalName` | `string` | on `accepted`: the terminal a `spawn` created or a `tell` was delivered into |
+| `terminalName` | `string` | on `accepted` `spawn`/`tell`: the terminal a `spawn` created or a `tell` was delivered into |
+| `newTab` | `NewTabResult` | on `accepted` `new-tab`: see [its result](#the-result-newtabresult) |
+| `leftOnDisk` | `string` | on `rejected` `new-tab` only, and only when a folder **was** created (its initial commit failed) |
 | `reason` | `string` | on `rejected`: always present, human-readable |
 | `handledMs` | `number` | when the app settled it |
 
@@ -269,11 +292,14 @@ nothing to name one after. Those are the first three rows.
 | no `connector` | `malformed request — missing "connector"` |
 | no numeric `v` | `malformed request — missing "v"` |
 | no numeric `sentMs` | `malformed request — missing "sentMs"` |
-| any other `kind` | `kind "<kind>" is not permitted for connectors — only "spawn" or "tell" is` |
+| any other `kind` | `kind "<kind>" is not permitted for connectors — only "spawn", "tell" or "new-tab" is` |
+| new-tab: a field check fails | one of the [field reasons](#every-new-tab-reason-in-order), rows 1–10 |
 | tell without `terminal`/`message` | `malformed tell request — "terminal" and "message" are required` |
 | tell message over 4000 chars | `message is too long (<n> chars, max 4000) — trim it before sending` |
 | spawn without `repo`/`task` | `malformed spawn request — "repo" and "task" are required` |
 | directory id not in `config.json` | `connector "<id>" is not registered` |
+| new-tab: no `"new-tab"` in the entry's `grants` | `connector "<id>" is not granted "new-tab" — add "grants": ["new-tab"] to its entry in config.json and restart the app` |
+| new-tab: anything after that | the [app-side reasons](#every-new-tab-reason-in-order), rows 11 on |
 | tell: no such name | `no such terminal "<name>". Live: <names>` |
 | tell: case-insensitive match hits several | `"<name>" is ambiguous — matches <names>` |
 | tell: target is a journal | `"<name>" is a journal tile, not a terminal — it can't accept a message` |
@@ -287,7 +313,8 @@ nothing to name one after. Those are the first three rows.
 | spawn: worktree or session failed to start | `couldn't spawn in repo "<repo>" — see the app's toast for detail` |
 
 Registration is checked right after the envelope parses, before any lookup. So an unregistered
-connector never learns the floor's repo list or terminal roster from a reason string.
+connector never learns the floor's repo list or terminal roster from a reason string, and an
+ungranted one never learns anything a `new-tab` lookup would tell it.
 
 The source of truth is `parseConnectorRequest` / `evaluateConnectorRequest` /
 `resolveConnectorTellTarget` in `src/terminals/connectors.ts` and their tests
@@ -343,6 +370,10 @@ error, so a misspelt `--efort` can't silently spawn at the default effort. `--` 
 wcc-client floor [--json]
 wcc-client spawn <repo> --task "<task>" [--base <branch>] [--model <m>] [--effort <e>] [--name <n>]
 wcc-client tell <terminal> "<message>"
+wcc-client new-tab "<tab name>" [--repo <target>]
+wcc-client new-tab "<tab name>" [--new-repo <name>] [--parent <dir>] [--base <branch>]
+                   [--gitignore general|node|python|none] [--claude-md|--no-claude-md]
+                   [--remote none|private|public] [--json]
 ```
 
 - **`floor`** prints one line per session from `state.json`, or the file itself with `--json`. A
@@ -350,6 +381,11 @@ wcc-client tell <terminal> "<message>"
   exits 2.
 - **`spawn`** and **`tell`** print the receipt's `terminalName` alone on stdout, so
   `name=$(wcc-client spawn …)` works.
+- **`new-tab`** prints the new tab's workspace id alone on stdout (`--json`: the whole
+  [result](#the-result-newtabresult)), and the details and any warnings on stderr. Its default
+  wait is 120000 ms, not 60000. See [new-tab](#new-tab-a-workspace-tab-bound-to-a-repo).
+- A flag that belongs to a different command (`spawn … --repo x`, `new-tab … --task y`) is an
+  error, not ignored.
 
 ### Exit codes
 
@@ -358,6 +394,7 @@ wcc-client tell <terminal> "<message>"
 | `0` | accepted; the terminal name is on stdout | — |
 | `2` | rejected (the app's `reason` on stderr), bad usage, or **withdrawn**: the app never picked the request up within the wait, so it was deleted and nothing will happen | yes, after fixing the cause |
 | `3` | the app took the request but sent no receipt within the wait. **It may still happen** | no: check `floor` first. A blind retry of a `spawn` can open two terminals |
+| `4` | `new-tab` only: it failed, **but a repo folder was created** (its initial commit failed). The path is on stderr | no: fix the cause, commit in that folder, then `new-tab … --repo <name>` |
 
 ### End to end
 
@@ -391,3 +428,213 @@ if ($LASTEXITCODE -eq 0) { wcc-client tell $name "Also update the API docs." }
 The same thing without the client takes three steps: write the envelope as in
 [Writing a request](#writing-a-request), poll `receipts/<id>.json` until it exists, then read
 `status`.
+
+## new-tab: a workspace tab bound to a repo
+
+A session asks the app for a new **workspace tab** that is already linked to a repo. If it names
+a registered target, the tab is bound to that one. If it names none, the app **creates** a fresh
+repo and binds the tab to it. The repo gets a folder, `git init -b <base>`, a README, the seed
+files, an **initial commit**, and optionally a GitHub remote. The tab then opens on that repo with
+its branch selected, exactly as if you had used **+** → **🆕 New repo…** in the window.
+
+The initial commit is not optional. Every terminal here is a git worktree, and a worktree can't
+branch from a repo with no commits. So a repo that ends up without one is reported as a failure
+(exit 4, `leftOnDisk`), never as a success with a footnote.
+
+### Which channel
+
+| caller | channel | command | authority |
+| --- | --- | --- | --- |
+| Kane, the overseer console inside the app (`COS_ROLE=god`) | `god-outbox/`, Kane's own | `cos-coord new-tab …` | the overseer's; refused without `COS_ROLE=god` |
+| anything **outside** the app: a plain `claude` session, a script, another app | `connectors/<id>/requests/` | `wcc-client new-tab …` | a registered connector **with** `"grants": ["new-tab"]` |
+
+A worker terminal inside the app has neither. Opening tabs is not part of one task's worth of
+authority, so `cos-coord new-tab` refuses it like `spawn`. If a worker really needs to, register a
+connector for it and use `wcc-client`. That makes the decision a line in `config.json` rather than
+an accident.
+
+Both channels end in the **same app code** as the window's own buttons: `planNewTab`
+(`src/new-tab.ts`) decides, `createRepoFromParams` → `instantiateRepo` (`src/instantiate-repo.ts`)
+makes the repo, and `openLinkedTab` adds the tab. The 🆕 form goes through `createRepoFromParams`
+too, and refuses the same things through the same `newRepoRefusal`. Neither path can accept
+something the other refuses.
+
+A tab a session made is **announced** in the window: who asked, the tab, the repo, any warnings,
+and an **Open** button. The tab you're on is left alone.
+
+### Request fields
+
+On the connector channel these sit in the [envelope](#envelope-every-request) with
+`"kind": "new-tab"`. On Kane's channel `cos-coord` writes the same fields itself. Every optional
+field is `null` when unset, never absent.
+
+| field | type | CLI flag | |
+| --- | --- | --- | --- |
+| `name` | `string` | the positional | the tab's display name, at most 80 characters. **Required** |
+| `repo` | `string \| null` | `--repo` | an existing registered target, matched case-insensitively. Excludes every field below |
+| `newRepo` | `string \| null` | `--new-repo` | the repo to create. With `repo` also null, the repo is named after the tab. The folder name is the name with anything outside `[A-Za-z0-9._-]` turned into `-` |
+| `parent` | `string \| null` | `--parent` | absolute folder to create it in. null = where the 🆕 form would propose: beside the last repo created, else beside the first registered git repo. The CLIs resolve a relative `--parent` against **their own** working directory |
+| `base` | `string \| null` | `--base` | the base branch, cut at `git init`. null = `main` |
+| `gitignore` | `"general" \| "node" \| "python" \| "none" \| null` | `--gitignore` | null = `general` |
+| `claudeMd` | `boolean \| null` | `--claude-md` / `--no-claude-md` | seed a `CLAUDE.md`. null = yes |
+| `remote` | `"none" \| "private" \| "public" \| null` | `--remote` | a GitHub repo through `gh`, added as `origin` and pushed. null = `none` |
+
+These are the initial parameters from `src/new-repo-params.ts`, the same set the 🆕 form shows,
+with the same defaults. Each is there because it's awkward to change after the first commit,
+which is the commit every worktree branches from.
+
+```json
+{ "v": 1, "id": "…", "connector": "my-agent", "sentMs": 0, "kind": "new-tab",
+  "name": "Site", "repo": null, "newRepo": "site", "parent": "C:\\dev", "base": null,
+  "gitignore": "node", "claudeMd": null, "remote": "private" }
+```
+
+### The result: `NewTabResult`
+
+On success it's in the connector receipt's `newTab` field and on Kane's receipt. `--json` prints
+it.
+
+| field | type | |
+| --- | --- | --- |
+| `workspaceId` | `string` | the new tab's id. It is the `--workspace` / `WCC_WORKSPACE` that reaches it, and what the CLIs print on stdout |
+| `tab` | `string` | its display name |
+| `repo` | `string` | the bound target's name, the one `spawn` takes |
+| `repoPath` | `string` | its absolute path |
+| `branch` | `string \| null` | the branch its toolbar opens on: the new repo's base, or null for an existing target |
+| `created` | `boolean` | true when a repo was created, false when an existing one was bound |
+| `coordDir` | `string` | the new tab's coordination directory |
+| `remoteUrl` | `string \| null` | the GitHub URL when a remote was created |
+| `warnings` | `string[]` | what was asked for and didn't happen, e.g. no `gh` (see below). Empty when everything did |
+
+### `gh` missing, or the remote failing
+
+A remote is the one part that **degrades instead of failing**. The local repo is what the tab
+needs, and a remote can be added by hand later. `gh` is looked for on `PATH`, then under
+`%LOCALAPPDATA%\Microsoft\WinGet\Packages\GitHub.cli_*\bin` (a per-user winget install, which is
+**not** on `PATH`), then `Program Files\GitHub CLI`. If it isn't found anywhere, the repo, commit,
+registration and tab all happen, `remote` is treated as `none`, and `warnings` says:
+
+```
+no GitHub remote: the GitHub CLI (gh) was not found on PATH, under %LOCALAPPDATA%\Microsoft\WinGet\Packages\GitHub.cli_*\bin, or in Program Files\GitHub CLI — the repo was created locally; add a remote later with `gh repo create`
+```
+
+If `gh` is found but `gh repo create` fails (not logged in, name taken, offline), it's the same:
+success, with `the GitHub remote failed: <gh's own line>. The local repo is fine — add a remote
+later with \`gh repo create\`` in `warnings`.
+
+### Every new-tab reason, in order
+
+The same order on both channels. Rows 1–10 are field checks. On the connector channel they come
+before registration (like spawn's field checks) and reveal nothing about the floor. Rows 11 on run
+in the app, after registration and the grant. Two requests are planned and run one at a time,
+so two requests for one name can't both pass row 16.
+
+| # | when | `reason` |
+| --- | --- | --- |
+| 1 | no `name` | `malformed new-tab request — "name" (the tab name) is required` |
+| 2 | `name` over 80 chars | `tab name is too long (<n> chars, max 80)` |
+| 3 | `repo` and `newRepo` both set | `"repo" and "newRepo" are mutually exclusive — name an existing target or a repo to create, not both` |
+| 4 | a creation field beside `repo` | `"<field>" only applies when creating a repo — it was sent with "repo" (an existing target)` |
+| 5 | bad `gitignore` | `invalid gitignore "<x>". Valid: general, node, python, none` |
+| 6 | bad `remote` | `invalid remote "<x>". Valid: none, private, public` |
+| 7 | `claudeMd` not a boolean | `"claudeMd" must be true, false or null` |
+| 8 | `parent` not absolute | `parent "<p>" is not an absolute path` |
+| 9 | bad `base` | `"<b>" is not a valid git branch name` |
+| 10 | nothing to name the folder after | `repo name "<x>" has no letter or number to make a folder name from` (or, naming the tab: `… — pass "newRepo"`) |
+| 11 | `repo`: no such target | `unknown repo "<x>". Known: <names>` |
+| 12 | `repo`: the name is shared by several targets | `"<x>" is ambiguous — <n> registered targets share that name (<paths>). Two checkouts cannot both own one name: forget or repoint one in Settings → Targets first` |
+| 13 | `repo`: grouped to another tab | `"<x>" belongs to the tab "<group>" — a target grouped to one tab cannot be linked to another` |
+| 14 | `repo`: its folder is gone | `"<x>" is registered at <path>, but that folder no longer exists — repoint or forget it in Settings → Targets` |
+| 15 | new: no `parent` and nothing to default it from | `no parent folder — pass "parent"; no repo is registered yet to put a new one beside` |
+| 16 | new: the name is already a target | `a target named "<x>" is already registered (<path>) — two checkouts cannot both own one name; pick another name, or use the existing target` |
+| 17 | new: `parent` doesn't exist | `parent folder <p> does not exist — create it first; a new repo never creates the folders above it` |
+| 18 | new: `parent` is a file | `parent <p> is a file, not a folder` |
+| 19 | new: target folder exists, with content | `<path> already exists and has content — a new repo is never written into an existing folder` |
+| 20 | new: target folder exists, empty | `<path> already exists (empty) — a new repo only goes in a folder that is not there yet; remove it or pick another name` |
+| 21 | new: target is a file | `<path> already exists as a file` |
+| 22 | new: git has no identity | `git has no identity (user.name / user.email), so the initial commit would fail and no worktree could branch from the repo — nothing was created. Fix: git config --global user.name "Your Name" && git config --global user.email "you@example.com"` |
+| 23 | new: `git init` / `mkdir` failed | git's or the OS's own first line |
+| 24 | new: the initial commit failed anyway | `created <path>, but its initial commit failed (<git's line>) — a worktree cannot branch from a repo with no commits, so no tab was made. It is registered as "<name>". Fix the cause (usually: git config --global user.name / user.email), commit in <path>, then: new-tab "<tab>" --repo <name>` **with `leftOnDisk`, exit 4** |
+| 25 | the app couldn't add the tab | `the tab could not be added` |
+
+Row 22 is checked **before anything is written**, with `git var GIT_AUTHOR_IDENT` /
+`GIT_COMMITTER_IDENT` run in the parent folder. These fail by the same rule `git commit` does. One
+case can't be decided from outside the repo: identity that comes only from an
+`includeIf "gitdir:…"`. When git has any conditional include, the probe stands aside, and the
+commit decides (row 24).
+
+Withdrawal isn't a reason, because nothing reached the app. It's exit 2 from the CLI, below.
+
+Source of truth: `parseNewTabFields`, `planNewTab`, `newRepoRefusal` in `src/new-tab.ts`;
+`instantiateRepo` in `src/instantiate-repo.ts`; `newTabFromSessionNow` in `src/app.ts`. Tests:
+`tests/new-tab.test.ts`, `tests/instantiate-repo.test.ts` (real git, temp folders),
+`tests/new-tab-cli.test.ts` (both CLIs end to end).
+
+### Exit codes (both CLIs)
+
+| code | meaning | safe to retry? |
+| --- | --- | --- |
+| `0` | the tab exists. Workspace id on stdout, details and warnings on stderr | — |
+| `2` | refused (reason on stderr), bad usage, not the overseer (`cos-coord`), or **withdrawn**: nobody drained it within the wait, so the CLI deleted the request and **nothing will happen, ever** | yes, after fixing the cause |
+| `3` | the app took it and didn't answer within the wait. **It may still happen** | no: look at the tab bar first |
+| `4` | it failed **after creating a folder**: the repo exists and is registered, without its initial commit. The path is on stderr | no: commit in that folder, then `new-tab "<tab>" --repo <name>` |
+
+**Withdrawal** is what keeps a request from firing hours later. Both drains, `god-outbox/` and
+`connectors/`, claim a request by renaming it into `.done/` **before** acting on it. The CLI
+withdraws by deleting the file. Exactly one of the two succeeds. If the delete wins, the app never
+had it. If the rename won, the CLI reports exit 3, not 2.
+
+| | env | default |
+| --- | --- | --- |
+| `cos-coord new-tab` wait | `COS_COORD_NEW_TAB_WAIT_MS` | 120000 |
+| `wcc-client new-tab` wait | `--wait-ms` / `WCC_WAIT_MS` | 120000 |
+
+`cos-coord new-tab` is the one `cos-coord` command that never fails open. Without
+`COS_COORD_DIR`, or on an unexpected error, it exits 2 rather than 0.
+
+### End to end: from outside
+
+`config.json`, then restart the app:
+
+```json
+{ "connectors": [{ "id": "my-agent", "label": "My agent", "grants": ["new-tab"] }] }
+```
+
+```sh
+export WCC_WORKSPACE=default WCC_CONNECTOR=my-agent
+
+# A fresh repo named after the tab, in C:\dev, Node .gitignore, private GitHub remote:
+ws=$(wcc-client new-tab "Recipe Site" --parent C:/dev --gitignore node --remote private) || exit $?
+# stderr: tab "Recipe Site" (workspace recipe-site) on Recipe-Site — C:\dev\Recipe-Site, created on branch main
+#         coord dir: C:\Users\…\worktree-command-center\.coordination\recipe-site
+#         warning: no GitHub remote: the GitHub CLI (gh) was not found …     ← only when gh is absent
+
+# Start the first terminal in it. The repo name is the folder name:
+wcc-client --workspace "$ws" spawn Recipe-Site --task "Scaffold a Vite + TypeScript app and commit it"
+
+# Or bind a tab to a repo already on the floor:
+wcc-client new-tab "API work" --repo app
+```
+
+PowerShell:
+
+```powershell
+$env:WCC_WORKSPACE = 'default'; $env:WCC_CONNECTOR = 'my-agent'
+$ws = wcc-client new-tab "Recipe Site" --parent C:\dev --gitignore node
+switch ($LASTEXITCODE) {
+  0 { wcc-client --workspace $ws spawn Recipe-Site --task "Scaffold the app" }
+  4 { Write-Warning 'Repo created without its initial commit - set git user.name/user.email, commit, then use --repo' }
+  default { Write-Warning "new-tab did not happen (exit $LASTEXITCODE)" }
+}
+```
+
+### End to end: Kane
+
+```sh
+ws=$(cos-coord new-tab "Recipe Site" --gitignore node) || exit $?
+# start a terminal in the new tab, through that tab's own outbox:
+COS_COORD_DIR="$(dirname "$COS_COORD_DIR")/$ws" cos-coord spawn Recipe-Site --task "Scaffold the app"
+```
+
+`cos-coord spawn` without that override would open the terminal in **Kane's own** tab. Every
+tab's coordination directory sits next to the others under `.coordination/`.

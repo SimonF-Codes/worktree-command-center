@@ -9,9 +9,14 @@
 // store.waitForTellReceipt) — dropping the outbox file was never proof the message was typed
 // into anything, let alone submitted. `close` blocks the same way: it exits 0 only once the app
 // says the session actually ended, and 2 with the app's reason when it refused.
+// `new-tab` (also GOD-only) blocks too, and is the one command that never fails open: it exits 0
+// only on the app's word, 2 when refused or WITHDRAWN (nobody drained it in time, so it was taken
+// back and will never run), 3 when the app took it but did not answer, 4 when it failed but left
+// a repo folder behind. Reference: docs/api.md, "new-tab".
 const path = require('path');
 const core = require('./coord-core.cjs');
 const store = require('./coord-store.cjs');
+const newTabCore = require('./new-tab-core.cjs');
 
 function env(name, dflt) { return process.env[name] != null ? process.env[name] : dflt; }
 function flag(args, name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; }
@@ -35,10 +40,44 @@ function requireArgs(cmd, ok, usage) {
   process.exit(2);
 }
 
+function newTabFail(reason, code = 2) {
+  console.error(`coord: new-tab ${reason}`);
+  process.exit(code);
+}
+
+// Kane opens a workspace tab bound to a repo. Not fail-open like the rest of this file: a tab
+// and a repo either happened or they did not, and the exit code must say which.
+function newTab(dir) {
+  if (env('COS_ROLE') !== 'god') denyGodOnly('new-tab');
+  if (!dir) newTabFail('needs COS_COORD_DIR — run it from a session the app opened');
+  const p = newTabCore.parseNewTabArgv(process.argv.slice(3));
+  if (!p.ok) newTabFail(p.reason);
+  const b = newTabCore.buildNewTabFields(p.name, p.flags, (x) => path.resolve(x));
+  if (!b.ok) newTabFail(b.reason);
+  let file;
+  try { file = store.newTab(dir, b.fields); } catch (e) { newTabFail(`could not write the request: ${e.message}`); }
+  const id = path.basename(file, '.json');
+  const waitMs = Number(env('COS_COORD_NEW_TAB_WAIT_MS', String(newTabCore.NEW_TAB_WAIT_MS)));
+  const r = store.waitForTellReceipt(dir, id, { waitMs });
+  if (r.timedOut) {
+    if (store.withdraw(file)) newTabFail(`was WITHDRAWN — the app never picked it up within ${Math.round(waitMs / 1000)}s, so nothing was created and nothing will be. Is the app running?`);
+    newTabFail(`was NOT confirmed — the app took it but gave no answer within ${Math.round(waitMs / 1000)}s; it may still happen. Check the tab bar before retrying`, 3);
+  }
+  const out = newTabCore.interpretNewTabReceipt(r);
+  if (!out.ok) {
+    if (out.leftOnDisk) newTabFail(`failed, and LEFT A REPO ON DISK at ${out.leftOnDisk} — ${out.reason}`, newTabCore.EXIT_LEFT_ON_DISK);
+    newTabFail(`refused — ${out.reason}`);
+  }
+  console.log(p.flags.json ? JSON.stringify(out.result, null, 2) : out.result.workspaceId);
+  console.error(newTabCore.formatNewTabResult(out.result));
+  process.exit(0);
+}
+
 function main() {
   const dir = env('COS_COORD_DIR');
   const terminal = env('COS_TERMINAL_NAME', `pid${process.pid}`);
   const holderId = Number(env('COS_TERMINAL_ID', String(process.pid)));
+  if (process.argv[2] === 'new-tab') { try { return newTab(dir); } catch (e) { return newTabFail(`failed: ${e.message}`); } }
   if (!dir) { process.exit(0); } // coordination not configured → allow
   const [cmd, resource, ...rest] = process.argv.slice(2);
 
@@ -147,7 +186,7 @@ function main() {
     process.exit(0);
   }
 
-  console.error('usage: cos-coord <status|acquire|release|note|chat|tell|watch|spawn|rename|close|personality> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--to "…"]');
+  console.error('usage: cos-coord <status|acquire|release|note|chat|tell|watch|spawn|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--to "…"]');
   process.exit(0);
 }
 

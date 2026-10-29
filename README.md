@@ -45,16 +45,18 @@ A standalone desktop app (Electron). Originally Windows-first; this fork adds ma
 
 Another process on the same machine can read the floor and ask it to do work. That might be a
 plain `claude` session in another folder, a script, or another app. It goes through the
-**connector channel**, which carries `spawn` and `tell` only and gives a receipt for every
-request. The quickest way in is the bundled client:
+**connector channel**, which carries `spawn` and `tell` and, for a connector granted it, `new-tab`.
+It gives a receipt for every request. The quickest way in is the bundled client:
 
 ```sh
 wcc-client floor --workspace default
 wcc-client spawn app --task "do X" --workspace default --connector my-agent
+wcc-client new-tab "Recipe Site" --gitignore node --workspace default --connector my-agent   # a tab on a fresh repo
 ```
 
 The connector id must be registered in `config.json` first. The full contract, including PATH setup
-and exit codes, is in **[docs/api.md](docs/api.md)**.
+and exit codes, is in **[docs/api.md](docs/api.md)**. Inside the app, Kane does the same with
+`cos-coord new-tab`.
 
 #### Kane's own channel (internal, not an external integration point)
 
