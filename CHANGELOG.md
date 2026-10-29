@@ -24,12 +24,26 @@ landed on `main`.
   directory is inside it (and which process), a sync engine, a service's handle, or a missing
   destination parent.
 
+**✦ A fresh start for the overseer console**
+- **A new ✦ button next to ⟳ starts a fresh overseer session.** ⟳ runs `claude --continue`.
+  If the conversation itself is broken, for example a turn that a safety classifier stops again
+  on every resume, ⟳ replays it forever. ✦ always asks first, because the new session drops the
+  context. The old conversation stays on disk and `/resume` can bring it back. The console never
+  does this on its own: a silent reset would look like the history vanished.
+- **After a fresh start, ⟳ resumes the new conversation.** Until the fresh session writes its
+  own transcript, the old one is still the newest file, and `--continue` would take it straight
+  back. The transcripts on disk at the fresh start are now skipped while
+  they stay unwritten. If you `/resume` into one and keep talking, it counts again.
+
 **🔧 Fixes**
 - **Prune no longer blames OneDrive for a worktree a terminal is sitting in.** The held-open probe
   is a rename done by Node, and Node reports a process's working directory inside the folder as
   `EBUSY`. git calls the same hold "Permission denied". Prune was treating every `EBUSY` as a sync
   engine and saying "pause syncing". That was measured to be wrong on 2026-10-16. Such a worktree
   now names both causes, the cwd holder first.
+- **The overseer console's buttons and refresh prompt use its current name.** The ⟳ and ×
+  tooltips and the "Refresh …?" confirm still said "Kane" after the console was renamed. They
+  now follow the console's name, and a rename updates the tooltips right away.
 
 ## 0.12.0 — 2026-10-14
 

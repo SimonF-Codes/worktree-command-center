@@ -67,3 +67,28 @@ export function pickResumeFile(transcripts: readonly Transcript[], orphans: Read
 	}
 	return best?.file ?? null;
 }
+
+// ── Superseded by a fresh start ──
+//
+// The console's "Fresh" button starts a new conversation on purpose, usually because the old one
+// is poisoned (a turn that trips a safety classifier on every resume). The new session may not
+// have written a transcript yet when ⟳ is next pressed, and then bare --continue reaches straight
+// back for the poisoned one — the newest file on disk. So a fresh start
+// records the transcripts it left behind, and resume skips them while they stay untouched.
+
+/** The transcripts on disk at a fresh start: normalised path → its mtime then. */
+export function supersede(transcripts: readonly Transcript[]): Map<string, number> {
+	return new Map(transcripts.map((t) => [norm(t.file), t.mtimeMs]));
+}
+
+/** The superseded transcripts resume should still skip: those not written since the fresh start.
+ *  One whose mtime moved has been taken up again (the user ran /resume into it and talked), so it
+ *  is a live conversation and competes on mtime like any other. Keys match pickResumeFile's. */
+export function stillSuperseded(superseded: ReadonlyMap<string, number>, transcripts: readonly Transcript[]): Set<string> {
+	const out = new Set<string>();
+	for (const t of transcripts) {
+		const k = norm(t.file);
+		if (superseded.get(k) === t.mtimeMs) out.add(k);
+	}
+	return out;
+}
