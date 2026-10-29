@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { projectDirName } from './terminals/resume-target';
-import { shouldRemoveWorktree } from './terminals/worktree-manager';
+import { shouldRemoveWorktree, countCherryUnmatched, type MergedBy } from './terminals/worktree-manager';
 import { isInside, samePath } from './move-repo';
 
 // Pruning merged worktrees — the PURE half. Given what is on disk (gathered by
@@ -31,8 +31,7 @@ import { isInside, samePath } from './move-repo';
 // a squash-merged branch whose lines base has since changed again: it reads as unmerged and is
 // kept, and the refusal says so rather than pretending it is unmerged work.
 
-/** How a worktree's commits were found to be in its base. */
-export type MergedBy = 'ancestor' | 'patch-id' | 'content';
+export { countCherryUnmatched, type MergedBy };
 
 /** One worktree, with everything the decision needs. Every git answer is nullable: null means
  *  the command failed, and an unanswered question never counts in a worktree's favour. */
@@ -151,11 +150,6 @@ export function baseFor(branch: string, branches: readonly string[]): string | n
 export function stillPrunable(confirmed: PrunePlan, fresh: PrunePlan, ci: boolean): RepoPrunePlan[] {
 	const ok = fresh.repos.flatMap((r) => r.prune);
 	return confirmed.repos.map((r) => ({ ...r, prune: r.prune.filter((e) => ok.some((o) => samePath(o.path, e.path, ci) && o.branch === e.branch)) }));
-}
-
-/** `git cherry` output: how many commits have no equivalent patch upstream ('+' lines). */
-export function countCherryUnmatched(s: string): number {
-	return String(s).split('\n').filter((l) => l.startsWith('+')).length;
 }
 
 /** How the commits were found to be in base, or null when no check held. */
@@ -279,11 +273,15 @@ function entryLine(e: PruneEntry): string {
 export function describePrunePlan(p: PrunePlan): string {
 	const t = p.totals;
 	const lines: string[] = [];
-	lines.push(`${t.prune} of ${t.worktrees} worktrees can be removed, stranding ${plural(t.transcriptsAtStake, 'conversation')}. ${t.survive} survive.`);
-	lines.push('Branches are never deleted. A removed worktree comes back with `git worktree add <path> <branch>`, and its conversation with it.');
+	if (!t.prune) lines.push(nothingToPrune(p));
+	else {
+		lines.push(`${t.prune} of ${t.worktrees} worktrees can be removed, stranding ${plural(t.transcriptsAtStake, 'conversation')}. ${t.survive} survive.`);
+		lines.push('Branches are never deleted. A removed worktree comes back with `git worktree add <path> <branch>`, and its conversation with it.');
+	}
 	if (t.byWeakerCheck) lines.push(`⚠ ${t.byWeakerCheck} of them merged by rebase or squash, not ancestry — matched by patch-id or by content. Check those names before confirming.`);
 	for (const r of p.repos) {
 		const n = r.prune.length + r.keep.length + r.stale.length;
+		if (!n && !r.error) continue; // listed together at the end
 		lines.push('');
 		if (r.error) { lines.push(`${r.repoName}: could not be read — ${r.error}`); continue; }
 		const at = r.prune.reduce((s, e) => s + e.transcripts, 0);
@@ -299,5 +297,25 @@ export function describePrunePlan(p: PrunePlan): string {
 		for (const e of r.stale) lines.push(`  · ${path.basename(e.path)}${e.branch ? ` [${e.branch}]` : ''} — already gone from disk, entry kept — ${plural(e.transcripts, 'conversation')}`);
 		for (const w of r.warnings) lines.push(`  ⚠ ${w}`);
 	}
+	const none = p.repos.filter((r) => !r.error && !(r.prune.length + r.keep.length + r.stale.length)).map((r) => r.repoName);
+	if (none.length) lines.push('', `No worktrees besides the main checkout: ${none.join(', ')}.`);
 	return lines.join('\n');
+}
+
+const KEPT_FOR: Record<PruneRefusalCode, string> = {
+	'main-checkout': 'the main checkout', unmerged: 'with unmerged commits', 'no-base': 'with no base branch', unverified: 'not provably merged',
+	detached: 'on a detached HEAD', dirty: 'with uncommitted changes', 'live-terminal': 'in use by a running terminal', 'live-unknown': 'not checked for running terminals',
+	'saved-terminal': 'resumed by a saved terminal', 'held-open': 'held open', locked: 'locked', submodules: 'with submodules checked out',
+};
+
+/** The first line when nothing can go: say so, and why the rest stays, tallied by reason — not a
+ *  "0 of N can be removed" that reads like a dialog with nothing in it. */
+function nothingToPrune(p: PrunePlan): string {
+	const t = p.totals;
+	if (!t.worktrees) return 'Nothing to prune: no repo has a worktree besides its main checkout.';
+	const tally = new Map<PruneRefusalCode, number>();
+	for (const e of p.repos.flatMap((r) => r.keep)) for (const c of new Set(e.refusals.map((x) => x.code))) tally.set(c, (tally.get(c) ?? 0) + 1);
+	const why = [...tally].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${n} ${KEPT_FOR[c]}`);
+	if (t.stale) why.push(`${t.stale} already gone from disk`);
+	return `Nothing to prune: none of the ${plural(t.worktrees, 'worktree')} is merged, clean and unused. Kept: ${why.join(', ')}. Each is listed below with every reason.`;
 }

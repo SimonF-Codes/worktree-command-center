@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { SessionBridge, safeSessionEnv } from './session-bridge';
 import { readClipboardText, writeClipboardText } from './clipboard';
-import { removeWorktreeAndBranch, terminalSystemPrompt, folderSystemPrompt, worktreeSettingsPath, type WorktreeInfo } from './worktree-manager';
+import { removeWorktreeAndBranch, terminalSystemPrompt, folderSystemPrompt, worktreeSettingsPath, type WorktreeInfo, type CloseOutcome } from './worktree-manager';
 import { loadRolePrompt } from './role-loader';
 import type { SessionFact } from './role-library';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
@@ -54,6 +54,8 @@ export interface TerminalTileOpts {
 	roleSlug?: string;
 	sessionEnv?: () => Record<string, string>;
 	onClosed: (tile: TerminalTile) => void;
+	/** The × kept the branch or the worktree — what was kept and why, for the user. */
+	onCloseKept?: (tile: TerminalTile, outcome: CloseOutcome) => void;
 	onHide?: (tile: TerminalTile) => void;
 	onLock?: (tile: TerminalTile) => void;
 	onCenter?: (tile: TerminalTile) => void;
@@ -749,9 +751,11 @@ export class TerminalTile implements StageTile {
 		this.el?.remove();
 	}
 
-	/** Close from the × button: tear down AND delete the worktree + its branch IMMEDIATELY —
-	 *  no confirmation, dirty or not. × means "throw this away"; use Minimize (hide) to keep a
-	 *  session you care about. The branch dies with it.
+	/** Close from the × button: tear down, remove the worktree, and delete its branch — but only
+	 *  what loses nothing. No confirmation: × still means "I am done with this", so the worktree
+	 *  goes either way, after any uncommitted work is parked onto the branch. The branch is deleted
+	 *  only when every commit is already in the base branch; otherwise it is kept and onCloseKept
+	 *  says so (removeWorktreeAndBranch has the whole rule, and the incident behind it).
 	 *
 	 *  FOLDER targets are the exception: that directory is the user's own, not a scratch copy we
 	 *  created, so × only ends the session. Deleting it (or a branch of whatever repo happens to
@@ -759,9 +763,8 @@ export class TerminalTile implements StageTile {
 	async close(): Promise<void> {
 		this.kill();
 		if (!this.opts.folder) {
-			try {
-				await removeWorktreeAndBranch(this.opts.repoPath, this.opts.worktree.worktreePath, this.opts.worktree.branch);
-			} catch { /* best effort */ }
+			const r = await removeWorktreeAndBranch(this.opts.repoPath, this.opts.worktree.worktreePath, this.opts.worktree.branch, this.opts.baseBranch);
+			if (r.reason) this.opts.onCloseKept?.(this, r);
 		}
 		this.opts.onClosed(this);
 	}

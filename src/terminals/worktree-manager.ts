@@ -255,15 +255,108 @@ export async function removeWorktreeIfPristine(
 	return rm.code === 0 ? 'removed' : 'kept';
 }
 
-/** Hard-delete a worktree AND its branch — used on a manual × (the branch should die). Links
- *  inside it are dropped first; if one will not go, NOTHING is deleted — not the worktree (git
- *  would delete through the link) and not the branch (it is still checked out there). */
+/** `git cherry` output: how many commits have no equivalent patch upstream ('+' lines). */
+export function countCherryUnmatched(s: string): number {
+	return String(s).split('\n').filter((l) => l.startsWith('+')).length;
+}
+
+/** Would merging `sha` into `base` leave base's tree exactly as it is? Exit 1 is a conflict —
+ *  certainly not merged; anything else unexpected is unknown (null). */
+export async function mergesToNothing(repo: string, base: string, sha: string): Promise<boolean | null> {
+	const mt = await runCommand('git', ['merge-tree', '--write-tree', base, sha], { cwd: repo, timeoutMs: 30000 });
+	if (mt.code === 1) return false;
+	if (mt.code !== 0) return null;
+	const tree = await runCommand('git', ['rev-parse', `${base}^{tree}`], { cwd: repo, timeoutMs: 8000 });
+	if (tree.code !== 0) return null;
+	return mt.stdout.split('\n')[0]!.trim() === tree.stdout.trim();
+}
+
+/** How a branch's commits were found to be in its base — the prune's three checks, strongest
+ *  first (prune-worktrees.ts explains each). */
+export type MergedBy = 'ancestor' | 'patch-id' | 'content';
+
+/** Is every commit of `branch` already in `base`? `merged` is how that held, or null when no check
+ *  did; `ahead` is `rev-list --count base..branch`, null when git could not say (a base that no
+ *  longer resolves, say). Never throws, and an unanswered question never counts as merged.
+ *
+ *  Why three checks and not `git branch -d`'s one: -d, like `branch --merged` and rev-list, asks
+ *  only about ancestry, so a branch landed by rebase or squash reads as unmerged. `git cherry`
+ *  compares patch-ids and sees a rebase, a cherry-pick, or a squash of ONE commit; only merge-tree
+ *  sees a squash of several. What none of them can tell from unmerged work is a squashed branch
+ *  whose lines base has changed again since — that reads as unmerged, which errs toward keeping. */
+export async function branchMergedInto(repoPath: string, base: string, branch: string): Promise<{ merged: MergedBy | null; ahead: number | null }> {
+	try {
+		if (!base) return { merged: null, ahead: null };
+		const sha = await runCommand('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: repoPath, timeoutMs: 8000 });
+		if (sha.code !== 0) return { merged: null, ahead: null };
+		const head = sha.stdout.trim();
+		const revs = await runCommand('git', ['rev-list', '--count', `${base}..${head}`], { cwd: repoPath, timeoutMs: 8000 });
+		const n = parseInt(revs.stdout.trim(), 10);
+		if (revs.code !== 0 || !Number.isFinite(n)) return { merged: null, ahead: null };
+		if (n === 0) return { merged: 'ancestor', ahead: 0 };
+		const cherry = await runCommand('git', ['cherry', base, head], { cwd: repoPath, timeoutMs: 15000 });
+		if (cherry.code === 0 && countCherryUnmatched(cherry.stdout) === 0) return { merged: 'patch-id', ahead: n };
+		if (await mergesToNothing(repoPath, base, head) === true) return { merged: 'content', ahead: n };
+		return { merged: null, ahead: n };
+	} catch {
+		return { merged: null, ahead: null };
+	}
+}
+
+/** What the tile × actually did. */
+export interface CloseOutcome {
+	worktree: 'removed' | 'kept';
+	branch: 'deleted' | 'kept';
+	/** Uncommitted work was committed onto the branch first (parkWorktree). */
+	parked: boolean;
+	/** Why the branch or worktree was kept, in words for the user; '' when both went. */
+	reason: string;
+}
+
+/** The tile × — remove a worktree, and delete its branch only when that loses nothing.
+ *
+ *  It used to be `worktree remove --force` + `branch -D`, a force delete that never looked. On
+ *  2026-10-21 that took a branch holding three unmerged commits, which survived only because a
+ *  remote happened to have them. Now, in order:
+ *   1. Links inside are dropped (unlinkLinksInside); one that will not go keeps EVERYTHING — git
+ *      would delete through it, and the branch is still checked out there.
+ *   2. Uncommitted work is parked onto the branch (parkWorktree), so removing the worktree does
+ *      not discard it. A park that fails keeps the worktree: --force would throw that work away.
+ *   3. The worktree is removed. The directory is the cheap part — `git worktree add` restores it.
+ *   4. The branch is deleted only when branchMergedInto finds every commit in `baseBranch`. If any
+ *      commit would be lost, or merged-ness cannot be established, the branch is KEPT and the
+ *      outcome says why — the promise parkForSessionEnd already makes: ending a session never
+ *      destroys work. Never throws. */
 export async function removeWorktreeAndBranch(
-	repoPath: string, worktreePath: string, branch: string,
-): Promise<void> {
-	if ((await unlinkLinksInside(worktreePath)).stuck.length) return;
-	await runCommand('git', ['worktree', 'remove', worktreePath, '--force'], { cwd: repoPath, timeoutMs: 15000 });
-	await runCommand('git', ['branch', '-D', branch], { cwd: repoPath, timeoutMs: 8000 });
+	repoPath: string, worktreePath: string, branch: string, baseBranch: string, nowIso = new Date().toISOString(),
+): Promise<CloseOutcome> {
+	const out: CloseOutcome = { worktree: 'kept', branch: 'kept', parked: false, reason: '' };
+	try {
+		const { stuck } = await unlinkLinksInside(worktreePath);
+		if (stuck.length) { out.reason = `could not unlink ${stuck[0]!.path}, and git would delete through it`; return out; }
+		if (fs.existsSync(worktreePath)) {
+			const park = await parkWorktree(worktreePath, nowIso);
+			if (park === 'failed') { out.reason = 'its uncommitted work could not be committed, so the worktree was left as it is'; return out; }
+			out.parked = park === 'parked';
+		}
+		const rm = await runCommand('git', ['worktree', 'remove', worktreePath, '--force'], { cwd: repoPath, timeoutMs: 15000 });
+		if (rm.code === 0) out.worktree = 'removed';
+		if (!branch) return out;
+		const m = await branchMergedInto(repoPath, baseBranch, branch);
+		if (m.merged === null) {
+			out.reason = m.ahead === null
+				? `could not tell whether it is merged into ${baseBranch || 'its base'}`
+				: `${m.ahead} commit${m.ahead === 1 ? '' : 's'} not in ${baseBranch}${out.parked ? ', including its parked uncommitted work' : ''}`;
+			return out;
+		}
+		if (out.worktree !== 'removed') { out.reason = 'the worktree could not be removed, and the branch is still checked out in it'; return out; }
+		const del = await runCommand('git', ['branch', '-D', branch], { cwd: repoPath, timeoutMs: 8000 });
+		if (del.code === 0) out.branch = 'deleted';
+		else out.reason = `git branch -D failed: ${(del.error ?? del.stderr).trim().split('\n')[0]}`;
+	} catch (e) {
+		out.reason = `the close failed part-way: ${(e as Error).message}`;
+	}
+	return out;
 }
 
 /** Auto-save a dirty worktree as a recoverable commit on ITS OWN branch. Returns the

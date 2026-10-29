@@ -137,6 +137,25 @@ describe('planPrune — the conversations at stake', () => {
 		expect(p.totals).toMatchObject({ worktrees: 3, prune: 2, keep: 1, survive: 1 });
 	});
 
+	it('nothing prunable: says so first, and tallies why each worktree stays', () => {
+		const p = planPrune(facts([
+			wt('wt-main-1', { ahead: 2, cherryUnmatched: 2, contentMerged: false }),
+			wt('wt-main-2', { ahead: 1, cherryUnmatched: 1, contentMerged: false, dirty: [' M a'] }),
+			wt('wt-main-3', { dirty: [' M b'] }),
+		]));
+		const text = describePrunePlan(p);
+		expect(text.split('\n')[0]).toBe('Nothing to prune: none of the 3 worktrees is merged, clean and unused. Kept: 2 with unmerged commits, 2 with uncommitted changes. Each is listed below with every reason.');
+		expect(text).not.toMatch(/Branches are never deleted/);
+		expect(text).toMatch(/Repo: 0 of 3 worktrees prunable/);
+	});
+
+	it('no worktrees at all: one sentence, and repos with none are named together, not as empty sections', () => {
+		const f = facts([]);
+		f.repos.push({ repoName: 'Other', repoPath: path.join(R, 'Other'), remotes: [], worktrees: [] });
+		const text = describePrunePlan(planPrune(f));
+		expect(text).toBe('Nothing to prune: no repo has a worktree besides its main checkout.\n\nNo worktrees besides the main checkout: Repo, Other.');
+	});
+
 	it('leaves a worktree already gone from disk alone, and counts what clearing it would orphan', () => {
 		const p = planPrune(facts([wt('wt-main-1', { missing: true })], { transcripts: tx }));
 		expect(p.repos[0]!.stale.map((e) => e.path)).toEqual([W('wt-main-1')]);

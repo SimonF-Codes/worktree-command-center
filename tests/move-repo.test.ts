@@ -3,7 +3,7 @@ import * as path from 'path';
 import {
 	planMove, plannedDestinations, remapPath, isInside, worktreeRootFor, legacyWorktreeRootFor, parseWorktreePorcelain,
 	parseGitmodulesPaths, gitdirOf, isAbsoluteGitdir, remapRepoLinks, remapSessionRecords,
-	configPathRefs, describeMovePlan, describeRefusals, type MoveFacts, type WorktreeFact, type RefusalCode,
+	configPathRefs, describeMovePlan, describeRefusals, nestButton, type MoveFacts, type WorktreeFact, type RefusalCode,
 } from '../src/move-repo';
 import { projectDirName } from '../src/terminals/resume-target';
 import { worktreePathFor } from '../src/terminals/worktree-manager';
@@ -471,5 +471,46 @@ describe('applying the path map', () => {
 		const cfg = { repos: [{ path: FROM }], workspaces: [{ repo: FROM }], god: { sourceRepo: FROM }, roleLibrary: { path: path.join(R, 'vault') }, list: [path.join(FROM, 'x')], n: 3 };
 		expect(configPathRefs(cfg, FROM, false)).toEqual(['god.sourceRepo', 'list[0]']);
 		expect(planMove(facts({ configRefs: ['god.sourceRepo'] })).warnings.join('\n')).toContain('god.sourceRepo');
+	});
+});
+
+describe('nestButton — counts what git lists under the old root, never the folder', () => {
+	// The machine on 2026-10-21: ChessEdu with 10 left, QMK-Flasher with 1, apartment-planner with
+	// an old root a relayout emptied, the rest with no old root at all.
+	const porcelain = (...paths: string[]): string =>
+		paths.map((p, i) => `worktree ${p.split(path.sep).join('/')}\nHEAD ${String(i).padStart(40, '0')}\nbranch refs/heads/b${i}\n`).join('\n');
+	const nested = (n: string): string => path.join(FROM, '.claude-worktrees', n);
+
+	it('worktrees still in the old root: enabled, with the count', () => {
+		const b = nestButton(FROM, 'VerticalChess', true, porcelain(FROM, path.join(OLD_ROOT, 'wt-main-1'), path.join(OLD_ROOT, 'wt-main-2'), nested('wt-main-3')), 2, false);
+		expect(b).toMatchObject({ show: true, enabled: true });
+		expect(b.show && b.title).toContain('2 worktrees are still in');
+	});
+
+	it('an old root emptied by a relayout: shown, but DISABLED with the reason', () => {
+		const b = nestButton(FROM, 'VerticalChess', true, porcelain(FROM, nested('wt-main-1'), nested('wt-main-2')), 0, false);
+		expect(b).toMatchObject({ show: true, enabled: false });
+		expect(b.show && b.title).toMatch(/^Nothing left to nest: git lists no worktree of VerticalChess in .*The folder is empty/);
+	});
+
+	it('leftovers in the folder that git does not know as worktrees do not count', () => {
+		const b = nestButton(FROM, 'VerticalChess', true, porcelain(FROM), 3, false);
+		expect(b).toMatchObject({ show: true, enabled: false });
+		expect(b.show && b.title).toMatch(/still holds 3 entries git does not know as worktrees/);
+	});
+
+	it('a worktree in a sibling repo\'s old root is not this repo\'s', () => {
+		const sibling = path.join(R, 'VerticalChess3DPrint', '.claude-worktrees', 'VerticalChess2', 'wt-main-1');
+		expect(nestButton(FROM, 'VerticalChess', true, porcelain(FROM, sibling), 1, false)).toMatchObject({ enabled: false });
+	});
+
+	it('no old root at all: hidden', () => {
+		expect(nestButton(FROM, 'VerticalChess', false, null, 0, false)).toEqual({ show: false });
+	});
+
+	it('git could not list: left enabled, saying so — the relayout reads git again', () => {
+		const b = nestButton(FROM, 'VerticalChess', true, null, 4, false);
+		expect(b).toMatchObject({ show: true, enabled: true });
+		expect(b.show && b.title).toMatch(/could not list/);
 	});
 });
