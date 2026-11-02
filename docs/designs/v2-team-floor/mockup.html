@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V2 Team Floor — mockup</title>
+<!--
+  Static MOCKUP for "Worktree Command Center — V2 Team Floor" (vault: Personal/Code/Designs/).
+  Not a prototype: imports nothing from src/, reads no state. Self-contained — no network at all.
+  Placeholder content only. The panel's pin rule is approximated with a media query here; the real
+  rule is computed from minTileSize (bubble-layout.ts:42), never a pixel breakpoint.
+-->
+<style>
+  :root {
+    /* Light — Olympus-like */
+    --bg: #f4f2ea; --bg-alt: #ede9dc; --surface: #ffffff; --surface-2: #f7f5ee;
+    --border: #cfc8b6; --text: #1b1a16; --muted: #55503f; --faint: #7a735f;
+    --accent: #2b5cff; --on-accent: #ffffff;
+    --well: #ffffff; --well-text: #1b1a16;
+    /* State tokens (Design Library Q2) */
+    --st-input: #a87a00; --st-input-bg: #fff1c2;
+    --st-help: #c0291f; --st-help-bg: #ffe1dd;
+    --st-done: #0f8a43; --st-done-bg: #d9f5e4;
+    --st-busy: #2b5cff;
+    --mgr: #8a5a00;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, ui-monospace, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #100f0c; --bg-alt: #16140f; --surface: #1b1813; --surface-2: #241f17;
+      --border: #383128; --text: #ede7d8; --muted: #a99f89; --faint: #8a8170;
+      --accent: #d39a2e; --on-accent: #1a1408;
+      --well: #0e0f17; --well-text: #d8d4c8;
+      --st-input: #f2cd54; --st-input-bg: #463b12;
+      --st-help: #ff6b63; --st-help-bg: #4a1614;
+      --st-done: #5fd07f; --st-done-bg: #123122;
+      --st-busy: #6fa0c8; --mgr: #e7c97a;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #100f0c; --bg-alt: #16140f; --surface: #1b1813; --surface-2: #241f17;
+    --border: #383128; --text: #ede7d8; --muted: #a99f89; --faint: #8a8170;
+    --accent: #d39a2e; --on-accent: #1a1408;
+    --well: #0e0f17; --well-text: #d8d4c8;
+    --st-input: #f2cd54; --st-input-bg: #463b12;
+    --st-help: #ff6b63; --st-help-bg: #4a1614;
+    --st-done: #5fd07f; --st-done-bg: #123122;
+    --st-busy: #6fa0c8; --mgr: #e7c97a;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.4 var(--sans); }
+  .mono { font-family: var(--mono); }
+  button { font: inherit; color: inherit; }
+
+  /* ---------- Shell ---------- */
+  .app { display: grid; grid-template-columns: minmax(220px, 260px) minmax(0, 1fr); height: 100vh; }
+  .side { background: var(--bg-alt); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  .main { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+
+  /* ---------- Sidebar ---------- */
+  .side-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .side-head .sp { flex: 1; }
+  .icon-btn { background: none; border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; cursor: pointer; color: var(--muted); }
+  .icon-btn:hover, .icon-btn:focus-visible { border-color: var(--border); color: var(--text); outline: none; }
+  .side-scroll { overflow: auto; flex: 1; padding: 6px 0 10px; }
+  .sec { padding: 8px 12px 2px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); font-weight: 600; display: flex; gap: 6px; align-items: center; }
+  .sec .sp { flex: 1; }
+  .ws { margin-top: 4px; }
+  .ws-head { display: flex; align-items: center; gap: 6px; padding: 5px 12px; font-weight: 600; cursor: default; }
+  .ws-head .caret { color: var(--faint); width: 10px; }
+  .ws-head .repo { display: block; font-weight: 400; font-size: 11px; color: var(--faint); }
+  .ws-head .sp { flex: 1; }
+  .roll { display: inline-flex; gap: 6px; font-size: 11px; font-weight: 600; }
+  .row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto auto; gap: 6px; align-items: center; padding: 3px 12px; border-radius: 6px; margin: 0 4px; }
+  .row:hover { background: var(--surface-2); }
+  .row.l1 { padding-left: 22px; }
+  .row.l2 { padding-left: 34px; }
+  .row .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .warn-note { grid-column: 2 / -1; font-size: 11px; color: var(--st-help); }
+  .wsr { display: flex; gap: 6px; align-items: baseline; padding: 4px 12px 1px 22px; font-size: 11.5px; color: var(--muted); }
+  .wsr .id { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+  .wsr .sp { flex: 1; }
+  .wsr .age { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+  .vacant { font-style: italic; color: var(--faint); }
+
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .dot.busy { background: var(--st-busy); }
+  .dot.input { background: var(--st-input); }
+  .dot.help { background: var(--st-help); }
+  .dot.done { background: var(--st-done); }
+  .dot.idle { background: transparent; border: 1.5px solid var(--faint); }
+  .glyph { font-size: 11px; line-height: 1; text-align: center; }
+  .chip { font-family: var(--mono); font-size: 10px; padding: 0 5px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+  .chip.agent { border-style: dashed; }
+  .chip.m-wt { }
+  .chip.m-ro { color: var(--st-busy); border-color: currentColor; }
+  .chip.m-rw { color: var(--st-input); border-color: currentColor; }
+  .chip.m-scr { color: var(--st-done); border-color: currentColor; }
+  .star { color: var(--mgr); }
+  .floor-badge { font-size: 10px; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 5px; }
+  .agents .row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .side-foot { border-top: 1px solid var(--border); padding: 8px 12px; display: flex; gap: 10px; color: var(--muted); font-size: 12px; }
+
+  /* ---------- Header ---------- */
+  .hdr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .hdr .ttl { font-weight: 600; }
+  .hdr .meta { color: var(--muted); font-size: 12px; }
+  .hdr .sp { flex: 1; }
+  .pill-btn { border: 1px solid var(--border); background: var(--surface-2); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12px; }
+  .pill-btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+
+  /* ---------- Body: stage + panel + dock ---------- */
+  .body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px) minmax(200px, 260px); min-height: 0; }
+  .stage { padding: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); grid-auto-rows: minmax(150px, 1fr); gap: 10px; overflow: auto; min-width: 0; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; min-height: 0; }
+  .tile.centred { box-shadow: 0 0 0 2px var(--st-done); }
+  .tile-head { display: flex; gap: 6px; align-items: center; padding: 4px 8px; font-size: 11px; border-bottom: 1px solid var(--border); }
+  .tile-head .nm { font-weight: 600; }
+  .tile-head .br { color: var(--faint); font-family: var(--mono); }
+  .tile-head .sp { flex: 1; }
+  .well { flex: 1; background: var(--well); color: var(--well-text); font: 11px/1.45 var(--mono); padding: 6px 8px; overflow: hidden; white-space: pre-wrap; border-radius: 0 0 6px 6px; }
+  .well .p { color: var(--st-input); }
+  .well .ok { color: var(--st-done); }
+  .well .er { color: var(--st-help); }
+
+  .panel { border-left: 1px solid var(--border); background: var(--surface); overflow: auto; padding: 12px 14px; min-width: 0; }
+  .panel h2 { font-size: 12px; margin: 0 0 8px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  .panel h3 { font-size: 10.5px; margin: 14px 0 6px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .headline { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+  .headline .big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .headline .tag { font-size: 11px; color: var(--muted); }
+  .prov { display: block; font-size: 10.5px; color: var(--faint); margin-top: 2px; }
+  .mrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+  .mrow .k { color: var(--muted); }
+  .mrow .v { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+  .mrow .prov { grid-column: 1 / -1; margin: 0; }
+  .unavail .v { font-weight: 400; font-style: italic; color: var(--faint); }
+  .work { list-style: none; margin: 0; padding: 0; }
+  .work li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; align-items: baseline; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .work .id { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+  .work .own { grid-column: 2 / 3; font-size: 11px; color: var(--muted); }
+  .feed { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+  .feed li { padding: 3px 0; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 6px; }
+  .feed time { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .sugg { background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: 6px 8px; font-size: 12px; }
+
+  .dock { border-left: 1px solid var(--border); background: var(--surface-2); display: flex; flex-direction: column; min-width: 0; }
+  .dock-head { padding: 6px 10px; font-weight: 600; border-bottom: 1px solid var(--border); color: var(--mgr); display: flex; gap: 6px; }
+  .dock .well { border-radius: 0; }
+
+  .legend { font-size: 11px; color: var(--muted); padding: 6px 12px 0; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+
+  /* Narrower than "stage can seat a tile beside the panel": panel stops pinning, opens as a view */
+  @media (max-width: 1500px) {
+    .body { grid-template-columns: minmax(0, 1fr) minmax(200px, 260px); }
+    .panel { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--border); }
+    .body { grid-template-rows: minmax(0, 1fr) auto; }
+    .stage { grid-row: 1; }
+    .dock { grid-row: 1; }
+  }
+  @media (max-width: 1100px) {
+    .dock { display: none; }
+    .body { grid-template-columns: minmax(0, 1fr); }
+  }
+  /* Phone: sidebar becomes a full-width list above; everything stacks; page scrolls */
+  @media (max-width: 700px) {
+    .app { grid-template-columns: minmax(0, 1fr); height: auto; }
+    .side { border-right: 0; border-bottom: 1px solid var(--border); }
+    .side-scroll { overflow: visible; }
+    .main { grid-template-rows: auto auto; }
+    .body { display: block; }
+    .stage { grid-template-columns: minmax(0, 1fr); grid-auto-rows: 150px; overflow: visible; padding: 10px 16px; }
+    .panel { padding: 12px 16px; }
+    .hdr { padding: 8px 16px; }
+    .hide-phone { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ================= SIDEBAR ================= -->
+  <nav class="side" aria-label="Sessions">
+    <div class="side-head">🌳 WCC <span class="sp"></span>
+      <button class="icon-btn" id="theme" title="Toggle light/dark" aria-label="Toggle light or dark theme">◐</button>
+      <button class="icon-btn" aria-label="Menu">⌄</button>
+    </div>
+    <div class="side-scroll">
+
+      <div class="sec">Floor <span class="sp"></span><span class="floor-badge">floor-wide</span></div>
+      <div class="row"><span class="glyph" style="color:var(--accent)">◆</span><span class="nm">Workflow Auditor</span><span class="chip agent">prop</span><span class="dot idle" title="idle"></span></div>
+
+      <!-- Workspace 1, expanded -->
+      <div class="ws">
+        <div class="ws-head"><span class="caret">▾</span>
+          <span>worktree-command-center <span class="repo mono">C:\dev\worktree-command-center</span></span>
+          <span class="sp"></span>
+        </div>
+
+        <div class="row l1"><span class="glyph">🜲</span><span class="nm">Alpha</span><span class="chip agent">op</span><span class="dot input" title="needs input"></span></div>
+
+        <div class="row l1" title="Manager because its role file has spawns:, not because of position">
+          <span class="glyph star">★</span><span class="nm"><b>Team Lead</b></span><span class="chip agent">op</span><span class="dot busy" title="working"></span>
+        </div>
+
+        <div class="wsr"><span class="id">ws-12</span><span>Lease claims</span><span class="sp"></span><span class="age">2d</span></div>
+        <div class="row l2"><span class="dot input" title="needs input"></span><span class="nm">lease-claims</span><span class="chip agent">W</span><span class="chip m-rw" title="shared-write, holds the lease">rw🔒</span></div>
+        <div class="row l2"><span class="dot busy" title="working"></span><span class="nm">claims-research</span><span class="chip agent">R</span><span class="chip m-ro" title="shared-readonly">ro</span></div>
+
+        <div class="wsr"><span class="id">ws-14</span><span>Team sidebar</span><span class="sp"></span><span class="age">5h</span></div>
+        <div class="row l2"><span class="dot busy"></span><span class="nm">team-sidebar <span class="mono" style="color:var(--faint);font-size:11px">↑2 ✎</span></span><span class="chip agent">W</span><span class="chip m-wt" title="own worktree">wt</span></div>
+
+        <div class="wsr"><span class="id">ws-15</span><span>Metrics CLI</span><span class="sp"></span><span class="vacant">vacant</span></div>
+
+        <div class="sec" style="padding-left:22px">Unassigned</div>
+        <div class="row l1"><span class="dot done" title="done, unread"></span><span class="nm">v2-team-design</span><span class="chip agent">W</span><span class="chip m-scr" title="scratch: writes outside any repo">scr</span></div>
+        <div class="row l1"><span class="dot idle"></span><span class="nm">hand-made-wt</span><span class="chip agent">W</span><span class="chip m-wt">wt</span>
+          <span class="warn-note">⚠ outside delegation — parent cannot spawn worker-terminal</span></div>
+
+        <div class="row l1" style="color:var(--muted)"><span class="glyph">▸</span><span class="nm">Journals (2) · Parked (3) · Hidden (1)</span><span></span><span></span></div>
+      </div>
+
+      <!-- Collapsed workspaces still roll up -->
+      <div class="ws">
+        <div class="ws-head"><span class="caret">▸</span><span>chessedu</span><span class="sp"></span>
+          <span class="roll"><span class="star" title="1 manager">★1</span><span style="color:var(--st-input)" title="1 needs you">⏳1</span><span style="color:var(--st-done)" title="2 done">✓2</span></span></div>
+      </div>
+      <div class="ws">
+        <div class="ws-head"><span class="caret">▸</span><span>brain-2-0</span><span class="sp"></span>
+          <span class="roll"><span style="color:var(--st-done)">✓1</span></span></div>
+      </div>
+      <div class="ws">
+        <div class="ws-head"><span class="caret">▸</span><span>notes <span class="repo">folder · no repo</span></span><span class="sp"></span>
+          <span class="roll"><span style="color:var(--faint)">—</span></span></div>
+      </div>
+
+      <div class="sec agents">Agents <span class="sp"></span><span style="text-transform:none;letter-spacing:0">▸ all</span></div>
+      <div class="agents">
+        <div class="row"><span class="nm">Worker Terminal</span><span class="chip agent">op</span><button class="icon-btn" aria-label="New Worker Terminal session">▶</button></div>
+        <div class="row"><span class="nm">Team Lead <span class="star">★</span></span><span class="chip agent">op</span><button class="icon-btn" aria-label="New Team Lead session">▶</button></div>
+        <div class="row"><span class="nm">Researcher</span><span class="chip agent">prop</span><button class="icon-btn" aria-label="New Researcher session">▶</button></div>
+        <div class="row"><span class="nm">Folder Terminal</span><span class="chip agent">op</span><button class="icon-btn" aria-label="New Folder Terminal session">▶</button></div>
+      </div>
+
+      <div class="legend">
+        <span><span class="chip m-wt">wt</span> worktree</span>
+        <span><span class="chip m-ro">ro</span> read-only</span>
+        <span><span class="chip m-rw">rw🔒</span> shared-write, leased</span>
+        <span><span class="chip m-scr">scr</span> scratch</span>
+      </div>
+    </div>
+    <div class="side-foot">↩ Closed (2) <span>⚙</span><span>📋</span><span>📱</span></div>
+  </nav>
+
+  <!-- ================= MAIN ================= -->
+  <main class="main">
+    <header class="hdr">
+      <span class="ttl">worktree-command-center</span>
+      <span class="meta mono">main</span>
+      <span class="meta hide-phone">▦ Auto · 🔒 · 5h 62% · RAM 41%</span>
+      <span class="meta" style="color:var(--st-input)">⚠ 2</span>
+      <span class="sp"></span>
+      <button class="pill-btn primary">+ New session</button>
+      <button class="pill-btn" aria-pressed="true">📊 Project</button>
+    </header>
+
+    <div class="body">
+      <!-- Stage -->
+      <section class="stage" aria-label="Stage">
+        <article class="tile centred">
+          <div class="tile-head"><span class="dot input"></span><span class="nm">lease-claims</span><span class="br">wt/main-38</span><span class="sp"></span><span class="chip m-rw">rw🔒</span></div>
+          <div class="well">● Edit pty-sidecar/coord-store.cjs
+  + renew(dir, resource, sessionId)
+<span class="p">Do you want to make this edit?</span>
+<span class="p">❯ 1. Yes   2. Yes, always   3. No</span></div>
+        </article>
+        <article class="tile">
+          <div class="tile-head"><span class="dot busy"></span><span class="nm">team-sidebar</span><span class="br">wt/main-39</span><span class="sp"></span><span class="chip m-wt">wt</span></div>
+          <div class="well">● Running npx vitest run tests/team.test.ts
+  <span class="ok">✓ buildTeam places a manager with no children</span>
+  <span class="ok">✓ invalid delegation renders unassigned</span>
+  … 14 passed</div>
+        </article>
+        <article class="tile">
+          <div class="tile-head"><span class="dot busy"></span><span class="nm">claims-research</span><span class="br">main (read)</span><span class="sp"></span><span class="chip m-ro">ro</span></div>
+          <div class="well">● Read src/terminals/terminals-grid.ts
+● Grep "acquire(" — 6 matches
+Writing Findings/2026-11-02 — WCC — lease TTL.md</div>
+        </article>
+        <article class="tile">
+          <div class="tile-head"><span class="dot done"></span><span class="nm">v2-team-design</span><span class="br">scratch</span><span class="sp"></span><span class="chip m-scr">scr</span></div>
+          <div class="well"><span class="ok">✓ Wrote Designs/…V2 Team Floor.md</span>
+<span class="ok">✓ Committed docs/designs/v2-team-floor/mockup.html</span>
+Idle — waiting for input</div>
+        </article>
+      </section>
+
+      <!-- Project panel -->
+      <aside class="panel" aria-label="Project panel">
+        <h2>Project · worktree-command-center</h2>
+
+        <div class="headline">
+          <div class="tag">Lead time · median, 14 d</div>
+          <div><span class="big">1.8 d</span> <span class="chip">proxy</span></div>
+          <span class="prov">source: git log --first-parent --merges main · as of 2 min ago · ≤5m</span>
+        </div>
+
+        <h3>Open work (3)</h3>
+        <ul class="work">
+          <li><span class="id">ws-12</span><span>Lease claims</span><span class="dot input" title="needs input"></span><span class="own">Team Lead → lease-claims · 2d</span></li>
+          <li><span class="id">ws-14</span><span>Team sidebar</span><span class="dot busy"></span><span class="own">Team Lead → team-sidebar · 5h</span></li>
+          <li><span class="id">ws-15</span><span>Metrics CLI</span><span class="dot idle"></span><span class="own vacant">vacant · 1d</span></li>
+        </ul>
+        <span class="prov">source: workstreams.jsonl · live</span>
+
+        <h3>Flow</h3>
+        <div class="mrow"><span class="k">Blocked now</span><span class="v">2 sessions</span><span class="prov">attention classifier · live</span></div>
+        <div class="mrow unavail"><span class="k">Blocked time</span><span class="v">unavailable</span><span class="prov">needs attention.jsonl (migration step 11)</span></div>
+        <div class="mrow"><span class="k">Rework rate</span><span class="v">1 / 9 · 11%</span><span class="prov">git reverts only (reopen half unavailable) · ≤5m</span></div>
+        <div class="mrow"><span class="k">Landed, 7 d</span><span class="v">9 merges</span><span class="prov">git · ≤5m</span></div>
+        <div class="mrow"><span class="k">Idle but alive</span><span class="v">3</span><span class="prov">session memory idleSince ≥ 20m · tracker cadence</span></div>
+        <div class="mrow unavail"><span class="k">Isolation cost</span><span class="v">unavailable</span><span class="prov">needs isolation.jsonl (migration step 8)</span></div>
+
+        <h3>Updates · append-only</h3>
+        <ul class="feed">
+          <li><time>10:42</time><span>merged <span class="mono">wt/main-32</span> — tab bound to a repo <span class="mono" style="color:var(--faint)">e9b0e83</span></span></li>
+          <li><time>09:15</time><span>merged <span class="mono">wt/main-31</span> — tile × keeps unmerged branches <span class="mono" style="color:var(--faint)">9b53b34</span></span></li>
+          <li><time>08:03</time><span>merged <span class="mono">wt/main-35</span> — overseer console Fresh button <span class="mono" style="color:var(--faint)">4050c57</span></span></li>
+        </ul>
+
+        <h3>Highlights</h3>
+        <div class="mrow"><span class="k">Release</span><span class="v">v0.14.2</span><span class="prov">git tag · ≤5m</span></div>
+
+        <h3>Suggestions</h3>
+        <div class="sugg">◆ <b>tag + changelog</b> seen ×5 in 14 d → <i>script</i> · est. ~40 min/week
+          <span class="prov">Workflow Auditor · Proposals/2026-11-01 — tag and changelog.md · on demand</span></div>
+      </aside>
+
+      <!-- Overseer dock -->
+      <aside class="dock" aria-label="Overseer dock">
+        <div class="dock-head">🜲 Alpha <span style="color:var(--st-input);font-weight:400">⏳ input</span></div>
+        <div class="well">Spawn a researcher on ws-12?
+  cos-coord spawn … --role researcher
+<span class="p">❯ approve?</span></div>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<script>
+  // Optional: a light/dark toggle. The page renders fully without it.
+  (function () {
+    var btn = document.getElementById('theme');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var root = document.documentElement;
+      var cur = root.getAttribute('data-theme');
+      var dark = cur ? cur === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.setAttribute('data-theme', dark ? 'light' : 'dark');
+    });
+  })();
+</script>
+</body>
+</html>
