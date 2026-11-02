@@ -11,6 +11,7 @@ import { existsSync, readdirSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { homedir, platform } from 'os';
 import { fileURLToPath } from 'url';
+import { isImageRunning } from './app-running.mjs';
 
 // Relative paths (private/, release-private/) assume the repo root — normalize cwd
 // so `node scripts/install-local.mjs` works from anywhere, not just via npm.
@@ -33,8 +34,9 @@ const run = (cmd) => execSync(cmd, { stdio: 'inherit' });
 // Installing is only allowed when the app is not running, or when the person who
 // owns this machine has explicitly approved the install IN THE CURRENT CONVERSATION.
 // After that OK, re-run with the env var WCC_INSTALL_OK=1.
-const appUp = spawnSync('tasklist', ['/FI', `IMAGENAME eq ${EXE}`], { encoding: 'utf8' })
-	.stdout?.includes(EXE);
+// isImageRunning reads tasklist's CSV output: the default table truncates the name to
+// 25 characters, which made the first version of this check never fire.
+const appUp = isImageRunning(EXE);
 if (appUp && process.env.WCC_INSTALL_OK !== '1') {
 	console.error(`[install-local] REFUSING: "${EXE}" is running. Installing now would kill every`);
 	console.error('[install-local] live Claude session on the floor. Get an explicit OK from the operator in this');
