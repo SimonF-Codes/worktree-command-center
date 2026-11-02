@@ -3,7 +3,7 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
-## Unreleased
+## 0.13.0 — 2026-11-02
 
 **🆕 A session can open a new tab, already bound to a repo: `new-tab`**
 - **`cos-coord new-tab "<tab>" --repo <target>`** binds a new workspace tab to a registered
@@ -106,6 +106,13 @@ landed on `main`.
 - **The overseer console's buttons and refresh prompt use its current name.** The ⟳ and ×
   tooltips and the "Refresh …?" confirm still said "Kane" after the console was renamed. They
   now follow the console's name, and a rename updates the tooltips right away.
+
+**🧪 The `wcc-worktrees` tests broke CI on the Linux runner**
+- **Two hold-diagnosis tests now run on Windows only.** The sync-engine and missing-parent cases
+  hand the diagnosis drive-letter paths, and Node's POSIX path functions on the ubuntu runner
+  can't parse them, so `main` went red at the `wcc-worktrees` merge. CI-only — the app runs on
+  Windows, and what those cases check is Windows behaviour. They use the same Windows-only guard
+  as the `PATH`-resolution tests.
 
 ## 0.12.0 — 2026-10-14
 
