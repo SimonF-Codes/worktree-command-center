@@ -159,8 +159,8 @@
   /* Narrower than "stage can seat a tile beside the panel": panel stops pinning, opens as a view */
   @media (max-width: 1500px) {
     .body { grid-template-columns: minmax(0, 1fr) minmax(200px, 260px); }
-    .panel { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--border); }
-    .body { grid-template-rows: minmax(0, 1fr) auto; }
+    .panel { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--border); overflow: visible; }
+    .body { grid-template-rows: minmax(340px, 70vh) auto; overflow: auto; }
     .stage { grid-row: 1; }
     .dock { grid-row: 1; }
   }
