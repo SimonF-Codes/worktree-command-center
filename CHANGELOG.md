@@ -3,6 +3,14 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
+## Unreleased
+
+Nothing yet.
+
+> **The next feature release is `1.0.0`, not `0.14.0`.** The V2 Team Floor overhaul changes the
+> shell, the unit of work and the CLI contract, so it ships as a major version. See
+> [docs/ci-cd.md](docs/ci-cd.md#versioning) for what that means for anything merged from here on.
+
 ## 0.13.0 — 2026-11-02
 
 **🆕 A session can open a new tab, already bound to a repo: `new-tab`**
