@@ -3,6 +3,7 @@ import { newDestinationId } from '../terminals/convert-destinations';
 import { promptForChoice, promptForTopic, promptForConfirm } from './prompt-dialog';
 import type { ToastVariant } from './toast-queue';
 import { parseAutoClose, thresholdLabel, AUTO_CLOSE_CHOICES } from '../terminals/auto-close';
+import { parseSidebarEnabled } from './sidebar-model';
 import type { RepoConfig } from '../terminals/terminals-grid';
 import type { NestButton } from '../move-repo';
 import * as fs from 'fs';
@@ -16,6 +17,8 @@ export interface SettingsPanelDeps {
 	onOverseerNameChange?: (name: string) => void;
 	/** Apply a changed auto-close setting live — the raw value just saved as `autoClose`. */
 	onAutoCloseChange?: (raw: unknown) => void;
+	/** Show or hide the V2 sidebar live — the value just saved as `v2.sidebar`. */
+	onSidebarChange?: (enabled: boolean) => void;
 	/** The registered targets and what can be done to one. Read from the APP, never from config:
 	 *  persist() rewrites the whole `repos` key from the app's memory, so the app has to make
 	 *  these edits itself or they are overwritten. Each action resolves once it is finished or
@@ -96,6 +99,7 @@ export class SettingsPanel {
 			})();
 		});
 
+		this.renderSidebar(this.el, cfg0.v2);
 		this.renderAutoClose(this.el, cfg0.autoClose);
 		await this.renderTargets(this.el);
 
@@ -177,6 +181,33 @@ export class SettingsPanel {
 			act('Repoint…', 'The folder was moved by hand: point this target at where it is now', t.repoint);
 			act('Forget', 'Remove this target from the floor. Nothing on disk is touched', t.forget);
 		}
+	}
+
+	/** V2 UI step 2: the read-only sidebar beside the tab strip. Default OFF — off is the app
+	 *  exactly as it was. Saved inside the `v2` block, beside `recordLineage`, which is kept. */
+	private renderSidebar(parent: HTMLElement, v2: unknown): void {
+		const s = parent.createDiv({ cls: 'wcc-settings-section' });
+		s.createDiv({ cls: 'wcc-settings-sub', text: 'Sidebar — every workspace and its sessions, beside the tabs (preview, off by default)' });
+		const row = s.createDiv({ cls: 'wcc-settings-row' });
+		const label = row.createEl('label', { cls: 'wcc-settings-row-label' });
+		const box = label.createEl('input', { attr: { type: 'checkbox' } }) as HTMLInputElement;
+		box.checked = parseSidebarEnabled(v2);
+		label.append(' Show the sidebar');
+		s.createDiv({
+			cls: 'wcc-settings-note',
+			text: 'Read-only: a second view of the same state the tabs and the ⚠ queue show. Click a session to bring its '
+				+ 'tile up. Collapsing a workspace keeps its worst state on the header. The tab strip stays as it is.',
+		});
+		box.addEventListener('change', () => {
+			void (async () => {
+				const on = box.checked;
+				const cfg = await this.deps.getConfig();
+				const prev = cfg.v2 && typeof cfg.v2 === 'object' ? (cfg.v2 as Record<string, unknown>) : {};
+				await this.deps.setConfig({ ...cfg, v2: { ...prev, sidebar: on } });
+				this.deps.onSidebarChange?.(on);
+				this.deps.toast(on ? 'Sidebar on' : 'Sidebar off', 'success');
+			})();
+		});
 	}
 
 	/** Auto-close finished sessions. OFF unless a threshold is chosen here: the memory tracker's

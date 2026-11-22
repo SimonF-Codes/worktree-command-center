@@ -28,6 +28,8 @@ import { ClaudeWarning } from './ui/claude-warning';
 import { PerfMonitor } from './ui/perf-monitor';
 import { AttentionWidget } from './ui/attention-widget';
 import { WorkspaceBar } from './ui/workspace-bar';
+import { Sidebar } from './ui/sidebar';
+import { parseSidebarEnabled } from './ui/sidebar-model';
 import { SettingsPanel } from './ui/settings-panel';
 import { ChangelogPanel } from './ui/changelog-panel';
 import { MemoryPanel } from './ui/memory-panel';
@@ -312,6 +314,7 @@ async function main(): Promise<void> {
 			toast,
 			onOverseerNameChange: (name) => grids.forEach((g) => g.setOverseerName(name)),
 			onAutoCloseChange: (raw) => { autoCloseCfg = parseAutoClose(raw); autoCloser?.apply(); },
+			onSidebarChange: (on) => applySidebar(on),
 			targets: {
 				list: () => repos,
 				move: (r) => moveTargetInteractive(r),
@@ -475,6 +478,28 @@ async function main(): Promise<void> {
 		// Grid container: the active grid mounts its controls + board + stage into here.
 		const gridContainer = terminalRoot.createDiv({ cls: 'wcc-grid-container' });
 
+		// --- V2 UI step 2: the sidebar (Settings → Sidebar, config `v2.sidebar`, default OFF). A read-only
+		// second view of each grid's floorState(), beside the tab strip — which it does not touch. Off,
+		// nothing is created and terminalRoot keeps its plain column layout.
+		const sidebar = new Sidebar({
+			workspaces: () => workspaces,
+			activeId: () => activeId,
+			floor: (id) => {
+				const g = grids.get(id);
+				return g ? { live: g.sessionsAreLive(), sessions: g.floorState() } : null;
+			},
+			onReveal: (id, tileId) => void (async () => {
+				if (id !== activeId) await switchTo(id);
+				if (id === activeId && tileId >= 0) activeGrid.revealTile(tileId); // the overseer row (-1) only switches
+			})(),
+		});
+		function applySidebar(on: boolean): void {
+			terminalRoot.toggleClass('wcc-has-sidebar', on);
+			if (on) sidebar.mount(terminalRoot); else sidebar.unmount();
+		}
+		if (parseSidebarEnabled(cfg.v2)) applySidebar(true);
+		window.addEventListener('beforeunload', () => sidebar.unmount());
+
 		async function switchTo(id: string): Promise<void> {
 			if (id === activeId || !workspaces.some((w) => w.id === id)) return;
 			activeGrid.unmount();
@@ -482,6 +507,7 @@ async function main(): Promise<void> {
 			activeGrid = gridFor(id);
 			await activeGrid.mount(gridContainer);
 			bar.refresh();
+			sidebar.refresh();
 			persist();
 			for (const cb of wsSwitchCbs) { try { cb(id); } catch { /* overlay callback must not break switching */ } }
 		}
