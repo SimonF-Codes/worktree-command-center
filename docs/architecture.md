@@ -25,6 +25,7 @@ from. The external API built on top of this is in [api.md](api.md).
   - `notify-ready.cjs`: the Stop/Notification hook that marks a session ready for input
   - `wcc-client`: the connector client for processes *outside* the app ([api.md](api.md#the-client--wcc-client))
   - `wcc-worktrees`: prune and relayout from the command line ([below](#the-worktrees-cli-wcc-worktrees))
+  - `wcc-team`: `metrics --json`, the Project panel's numbers, run by the app as a child process ([below](#the-team-cli-wcc-team))
 
 The whole folder is copied into the installed app as `resources/pty-sidecar` (see
 `package.json` → `build.extraResources`).
@@ -111,6 +112,21 @@ in this order:
 
 If the detector can't run, the CLI names both Permission-denied causes rather than guessing.
 `who-holds.ps1` is not used. It can't see directory handles.
+
+## The team CLI: `wcc-team`
+
+`wcc-team metrics [--json] [--workspace <id>]` is the **first verb inverted for real** (V2 D11): the
+📊 Project panel does not compute its numbers, it runs this as a **child process** and renders the
+JSON. Git never runs in the renderer's process, and there is no second implementation for the two
+to drift between — `src/core/metrics.ts` is pure and both the CLI and the panel's live sections call
+it. Bundled from `src/cli/wcc-team.ts` into `pty-sidecar/wcc-team.cjs` the same way as
+`wcc-worktrees`, and git-ignored.
+
+It **prints its own wall time and every git call** on stderr, every run (NFR-2), and the panel's
+footer shows the last refresh's cost. Two git calls per distinct repo, all repos at once. It runs on
+demand when the panel opens and at most every five minutes while it stays open. The step-11 profile
+is in [perf/step11-metrics-profile.md](perf/step11-metrics-profile.md). Metric definitions and the
+unavailable rule: [api.md](api.md#wcc-team-metrics--the-project-panels-numbers).
 
 ## The coordination directory
 

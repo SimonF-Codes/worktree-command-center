@@ -5,6 +5,23 @@ landed on `main`.
 
 ## Unreleased
 
+**📊 Workstreams, metrics and the Project panel (V2 Team Floor step 11) — off by default (`v2.projectPanel`)**
+- **Workstreams carry their tasks.** `cos-coord workstream open|assign|close|reopen` and
+  `workstream task add|start|block|done|drop` append to `workstreams.jsonl` in the coordination
+  directory. The CLI owns it; the app only reads it. Works in every workspace, repo or not.
+- **`attention.jsonl`.** The attention classifier's result — which ran every second and was thrown
+  away — is now recorded, as transitions only, so the floor knows how long a session waited on you.
+- **`wcc-team metrics --json`**, beside `wcc-worktrees`: lead time (a labelled git proxy until
+  workstreams land), open work, landed, blocked time, rework, idle-but-alive, isolation cost,
+  highlights and suggestions, plus task progress, task lead time and stale work. It runs as a child
+  process — git never runs in the window's process — and **prints its own wall time and every git
+  call**. A metric that cannot be computed gives its reason instead of a number, never a 0.
+- **The Project panel** (📊, Settings → Sidebar → Project panel): the metrics, open work as a list,
+  task progress per workstream, updates, and **spawn proposals with Accept / Decline** — which act
+  for the proposal's addressee, under the same delegation check its own `cos-coord proposal accept`
+  would face. It pins beside the stage only while one usable terminal still fits next to it;
+  otherwise it opens in the main pane. Off hides 📊; the logs keep being written either way.
+
 **★ Managers and delegation (V2 Team Floor step 10) — off by default (`v2.managers`)**
 - **`spawns:` in a role file makes it a manager.** A parent may spawn a child role only when the
   child is listed in its `spawns:`, sits at or below its rung, and spawns nothing the parent cannot

@@ -5,6 +5,7 @@ import type { ToastVariant } from './toast-queue';
 import { parseAutoClose, thresholdLabel, AUTO_CLOSE_CHOICES } from '../terminals/auto-close';
 import { parseSidebarEnabled, parseTeamView } from './sidebar-model';
 import { parseManagersEnabled } from '../core/delegation';
+import { parseProjectPanelEnabled } from '../core/project-panel';
 import type { RepoConfig } from '../terminals/terminals-grid';
 import type { NestButton } from '../move-repo';
 import * as fs from 'fs';
@@ -24,6 +25,8 @@ export interface SettingsPanelDeps {
 	onTeamViewChange?: (enabled: boolean) => void;
 	/** Turn manager delegation on or off live — the value just saved as `v2.managers`. */
 	onManagersChange?: (enabled: boolean) => void;
+	/** Show or hide 📊 live — the value just saved as `v2.projectPanel`. */
+	onProjectPanelChange?: (enabled: boolean) => void;
 	/** The registered targets and what can be done to one. Read from the APP, never from config:
 	 *  persist() rewrites the whole `repos` key from the app's memory, so the app has to make
 	 *  these edits itself or they are overwritten. Each action resolves once it is finished or
@@ -256,6 +259,30 @@ export class SettingsPanel {
 				await this.deps.setConfig({ ...cfg, v2: { ...prev, managers: on } });
 				this.deps.onManagersChange?.(on);
 				this.deps.toast(on ? 'Managers on — delegation is checked against the role files' : 'Managers off — only the overseer may spawn', 'success');
+			})();
+		});
+
+		// V2 Team Floor step 11: the Project panel. Its own key, default OFF. Off hides 📊 only: the
+		// attention and workstream logs keep being written, so turning it on later has history.
+		const prow = s.createDiv({ cls: 'wcc-settings-row' });
+		const plabel = prow.createEl('label', { cls: 'wcc-settings-row-label' });
+		const pbox = plabel.createEl('input', { attr: { type: 'checkbox' } }) as HTMLInputElement;
+		pbox.checked = parseProjectPanelEnabled(v2);
+		plabel.append(' Project panel — 📊 metrics, open work, tasks and spawn proposals for the active tab');
+		s.createDiv({
+			cls: 'wcc-settings-note',
+			text: 'Computed by wcc-team in a child process when the panel opens, then at most every 5 minutes. A metric that cannot be '
+				+ 'computed shows why instead of a number. Pins beside the stage only while one usable terminal still fits; otherwise it '
+				+ 'opens in the main pane. Off hides 📊; attention.jsonl and workstreams.jsonl keep being written either way.',
+		});
+		pbox.addEventListener('change', () => {
+			void (async () => {
+				const on = pbox.checked;
+				const cfg = await this.deps.getConfig();
+				const prev = cfg.v2 && typeof cfg.v2 === 'object' ? (cfg.v2 as Record<string, unknown>) : {};
+				await this.deps.setConfig({ ...cfg, v2: { ...prev, projectPanel: on } });
+				this.deps.onProjectPanelChange?.(on);
+				this.deps.toast(on ? 'Project panel on — 📊 in the top bar' : 'Project panel off — the logs keep being written', 'success');
 			})();
 		});
 	}

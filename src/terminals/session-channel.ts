@@ -25,10 +25,13 @@ import {
 } from '../core/session-requests';
 import { evaluateAccept, evaluateDecline, evaluatePropose, staleOnEnd, type SpawnProposal } from '../core/proposals';
 import { foldProposals } from '../../pty-sidecar/proposals-core.cjs';
+import { foldCached } from './append-log-cache';
 
-/** Every proposal in a coordination directory, folded. An unreadable file reads as none. */
+/** Every proposal in a coordination directory, folded. An unreadable file reads as none. Re-folded
+ *  only when the file changed (append-log-cache.ts): the panel previews every open proposal on
+ *  every tick, and each preview reads this. The result is shared — read it, never mutate it. */
 export function readProposals(coordDir: string): SpawnProposal[] {
-	try { return foldProposals(fsSync.readFileSync(path.join(coordDir, 'spawn-proposals.jsonl'), 'utf8')); } catch { return []; }
+	return foldCached(path.join(coordDir, 'spawn-proposals.jsonl'), foldProposals);
 }
 
 export interface SpawnedInfo { terminal: string; branch: string; sessionId: string; mode?: string }
@@ -170,6 +173,64 @@ export class SessionChannel {
 		} catch (e) {
 			reply({ status: 'rejected', reason: `the app failed while handling it: ${(e as Error).message}` });
 		}
+	}
+
+	/** The Project panel's Accept / Decline (FR-53's second half): Simon deciding a proposal FOR ITS
+	 *  ADDRESSEE. The decision is evaluated as that session — the requester is the proposal's `to` —
+	 *  so an accept runs evaluateAccept and with it checkDelegation against the ADDRESSEE's role file,
+	 *  exactly as `cos-coord proposal accept` from that session would, and a role the addressee may not
+	 *  spawn is refused with the identical message. Clicking grants nothing the addressee lacks; the
+	 *  record says who clicked (`by: "simon"`). A proposal written while unassigned has no addressee to
+	 *  act for, so the panel cannot accept it — only decline. Serialised with the request chain, so
+	 *  it cannot race a manager deciding the same proposal: the first decision on disk wins. */
+	decideForAddressee(proposalId: string, decision: 'accept' | 'decline', reason?: string): Promise<{ ok: true; message: string } | { ok: false; reason: string }> {
+		const run = async (): Promise<{ ok: true; message: string } | { ok: false; reason: string }> => {
+			const proposals = readProposals(this.deps.coordDir);
+			const p = proposals.find((x) => x.id === proposalId);
+			if (!p) return { ok: false, reason: `no proposal "${proposalId}"` };
+			const now = this.now();
+			const by = { by: 'simon', byName: `Simon (for ${p.to ? this.nameOf(p.to) : 'nobody — unassigned'})` };
+			if (decision === 'decline') {
+				if (!reason?.trim()) return { ok: false, reason: 'a decline needs a reason — the proposer reads it, and a declined proposal is not re-proposed' };
+				if (p.to === null) {
+					if (p.state !== 'open') return { ok: false, reason: `proposal ${p.id} is already ${p.state}` };
+				} else {
+					const d = evaluateDecline({ v: 1, id: `panel-${now}`, sentMs: now, kind: 'proposal-decline', proposal: p.id, reason }, this.addresseeCtx(p.to), proposals);
+					if (!d.ok) return d;
+				}
+				this.appendProposalEvent({ ev: 'decline', ts: now, id: p.id, ...by, reason });
+				this.log({ from: 'simon', kind: 'proposal-decline', ok: true, proposal: p.id, for: p.to, reason });
+				return { ok: true, message: `Declined ${p.role} — "${p.task}". ${p.from.name} can read why.` };
+			}
+			if (p.to === null) return { ok: false, reason: `proposal ${p.id} was written while ${p.from.name} was unassigned, so there is no addressee to accept it for — a manager takes it with: cos-coord proposal accept ${p.id}` };
+			const plan = evaluateAccept({ v: 1, id: `panel-${now}`, sentMs: now, kind: 'proposal-accept', proposal: p.id, repo: null, base: null }, this.addresseeCtx(p.to), proposals);
+			if (!plan.ok) { this.log({ from: 'simon', kind: 'proposal-accept', ok: false, proposal: p.id, for: p.to, reason: plan.reason }); return plan; }
+			const { proposal, ...spawnPlan } = plan;
+			const r = await this.deps.spawn(spawnPlan);
+			if (!r.ok) return { ok: false, reason: r.reason }; // still open: nothing was spawned
+			this.appendProposalEvent({ ev: 'accept', ts: this.now(), id: proposal.id, ...by, spawned: r.spawned.sessionId });
+			this.log({ from: 'simon', kind: 'proposal-accept', ok: true, proposal: proposal.id, for: p.to, role: spawnPlan.childRole, child: r.spawned.sessionId });
+			return { ok: true, message: `Accepted — ${r.spawned.terminal} started on ${r.spawned.branch}, under ${this.nameOf(p.to)}` };
+		};
+		const result = this.chain.then(run, run);
+		this.chain = result.then(() => undefined, () => undefined);
+		return result.catch((e: unknown) => ({ ok: false as const, reason: `the app failed while deciding it: ${(e as Error).message}` }));
+	}
+
+	/** What Accept would do right now, without doing it: the same evaluation, no spawn. For the
+	 *  panel, which shows a refusal in place of an enabled button. */
+	previewAccept(proposalId: string): { ok: true } | { ok: false; reason: string } {
+		const proposals = readProposals(this.deps.coordDir);
+		const p = proposals.find((x) => x.id === proposalId);
+		if (!p) return { ok: false, reason: `no proposal "${proposalId}"` };
+		if (p.to === null) return { ok: false, reason: `written while unassigned — no addressee to accept it for; a manager runs: cos-coord proposal accept ${p.id}` };
+		const now = this.now();
+		const plan = evaluateAccept({ v: 1, id: 'preview', sentMs: now, kind: 'proposal-accept', proposal: p.id, repo: null, base: null }, this.addresseeCtx(p.to), proposals);
+		return plan.ok ? { ok: true } : { ok: false, reason: plan.reason };
+	}
+
+	private addresseeCtx(addressee: string): SessionContext {
+		return { enabled: this.deps.enabled(), requesterId: addressee, sessions: this.deps.floor(), lookup: this.deps.lookup(), repos: this.deps.repos() };
 	}
 
 	private nameOf(sessionId: string): string {

@@ -49,6 +49,10 @@ import { releaseRefusal } from '../../pty-sidecar/claims-core.cjs';
 import { loadRoleAuthority } from './role-loader';
 import { sessionRoleSlug } from './role-library';
 import { appendIsolationRecord } from './isolation-log';
+import { appendAttentionLines, readAttentionLog } from './attention-log';
+import { foldWorkstreams, type Workstream } from '../../pty-sidecar/workstreams-core.cjs';
+import { foldCached } from './append-log-cache';
+import { AttentionRecorder, type AttentionLine, type UnobservedWhy } from '../core/attention-log';
 import { SessionChannel, readProposals, type SpawnedInfo } from './session-channel';
 import type { SpawnProposal } from '../core/proposals';
 import type { RoleLookup } from '../core/delegation';
@@ -237,6 +241,9 @@ export class TerminalsGrid {
 	// notification fires only on a TRANSITION into a new bucket, never repeatedly while it persists.
 	// `undefined` = never seen yet (seeds silently, so a floor restore doesn't burst toasts).
 	private lastAttn = new Map<number, AttentionKind | 'none'>();
+	/** V2 step 11: the same classifier result, recorded — transitions only, keyed by sessionId, into
+	 *  attention.jsonl. Written whatever v2.projectPanel says, so the history accumulates. */
+	private attnRecorder = new AttentionRecorder();
 	private stageWrapEl: HTMLElement | null = null;
 	private floorTimer: number | null = null;
 	private spotlightTimer: number | null = null;
@@ -477,6 +484,9 @@ export class TerminalsGrid {
 
 	/** Tab switch away: detach the stage + drop listeners, but KEEP sessions running. */
 	unmount(): void {
+		// Only a mounted grid is classified, so from here this workspace's sessions are unobserved —
+		// say so, or the reader would count the time away as whatever bucket they were last in.
+		this.recordAttention(this.attnRecorder.unobserveAll(Date.now(), 'unmounted'));
 		if (this.keydown) document.removeEventListener('keydown', this.keydown, true);
 		if (this.keyup) document.removeEventListener('keyup', this.keyup, true);
 		if (this.spotlightTimer !== null) { window.clearInterval(this.spotlightTimer); this.spotlightTimer = null; }
@@ -1490,6 +1500,27 @@ export class TerminalsGrid {
 	/** Every spawn proposal in this workspace's coordination directory, folded (read-only). */
 	spawnProposals(): SpawnProposal[] { return readProposals(this.coordDir); }
 
+	/** This workspace's workstreams, folded from workstreams.jsonl (read-only — the CLI owns it). */
+	workstreams(): Workstream[] {
+		return foldCached(path.join(this.coordDir, 'workstreams.jsonl'), foldWorkstreams);
+	}
+
+	/** The Project panel's Accept / Decline, acting for the proposal's addressee (session-channel.ts). */
+	decideProposal(id: string, decision: 'accept' | 'decline', reason?: string): Promise<{ ok: true; message: string } | { ok: false; reason: string }> {
+		return this.sessionChannel?.decideForAddressee(id, decision, reason) ?? Promise.resolve({ ok: false, reason: 'this workspace\'s request channel is not running' });
+	}
+
+	/** Would Accept pass right now? The same evaluation, no spawn. */
+	previewProposal(id: string): { ok: true } | { ok: false; reason: string } {
+		return this.sessionChannel?.previewAccept(id) ?? { ok: false, reason: 'this workspace\'s request channel is not running' };
+	}
+
+	/** px per cell + chrome from a live terminal, and the stage's current width — the Project panel's
+	 *  pin rule is the same inequality the layout uses (minTileSize), never a pixel breakpoint. */
+	layoutFacts(): { metrics: CellMetrics; stageW: number | null } {
+		return { metrics: this.cellMetrics(), stageW: this.stageEl?.clientWidth ?? null };
+	}
+
 	/** The active role files, as delegation reads them (cached, see delegation-roles.ts). */
 	delegationRoles(): RoleLookup { return delegationLookup(this.deps.roleLibrary?.path); }
 
@@ -2147,6 +2178,8 @@ export class TerminalsGrid {
 	 *  flagged once, not every tick; first sighting seeds silently so a restore doesn't spam. */
 	private updateAttention(): void {
 		const seen = new Set<number>();
+		const seenSessions = new Set<string>();
+		const now = Date.now();
 		// Visible worker tabs: full input / help / done markers.
 		for (const t of this.tiles) {
 			seen.add(t.tileId);
@@ -2155,6 +2188,11 @@ export class TerminalsGrid {
 			const kind = t.isJournal ? null : attentionKind(classifyOne(o, idle));
 			t.setAttention(kind);
 			this.noteAttention(t.tileId, kind, t.name);
+			if (!t.isJournal) {
+				const sid = (t as TerminalTile).sessionId;
+				seenSessions.add(sid);
+				this.recordAttention(this.attnRecorder.observe(sid, t.name, kind ?? 'none', now));
+			}
 		}
 		// Alpha (the overseer console): input / help only — it's never "done" like a worker.
 		if (this.godConsole) {
@@ -2164,12 +2202,30 @@ export class TerminalsGrid {
 			if (kind === 'done') kind = null;
 			this.godBtn?.setAttribute('data-attn', kind ?? '');
 			this.noteAttention(-1, kind, this.overseerName);
+			// The overseer waiting on a prompt is waiting on Simon too.
+			seenSessions.add(this.godConsole.sessionId);
+			this.recordAttention(this.attnRecorder.observe(this.godConsole.sessionId, this.overseerName, kind ?? 'none', now));
 		} else {
 			this.godBtn?.setAttribute('data-attn', '');
 		}
 		// Forget tabs that have gone away, so a reused id can notify again.
 		for (const id of [...this.lastAttn.keys()]) if (!seen.has(id)) this.lastAttn.delete(id);
+		this.recordAttention(this.attnRecorder.forgetMissing(seenSessions, now));
 	}
+
+	/** Append what the recorder decided. Cheap: a transition is rare, and a tick with none writes nothing. */
+	private recordAttention(lines: AttentionLine[]): void {
+		if (lines.length) appendAttentionLines(this.coordDir, lines);
+	}
+
+	/** The app is quitting: close every open interval, so the reader does not count the time the app
+	 *  was closed. A crash skips this, and the reader counts that interval as unknown-length. */
+	flushAttention(why: UnobservedWhy = 'quit'): void {
+		this.recordAttention(this.attnRecorder.unobserveAll(Date.now(), why));
+	}
+
+	/** attention.jsonl, read back. */
+	attentionLog(): AttentionLine[] { return readAttentionLog(this.coordDir); }
 
 	/** Record a tab's current bucket; toast when it CHANGES into a flagging bucket. */
 	private noteAttention(id: number, kind: AttentionKind | null, name: string): void {
