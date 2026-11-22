@@ -20,7 +20,7 @@ export type OutboxMessage =
 	| { kind: 'watch'; target: string; note: string }
 	// workstream / role: `spawn --workstream` / `--role`, null when not given (and in drops from an
 	// older cos-coord). from: the requesting session's COS_SESSION_ID — who spawned this one.
-	| { kind: 'spawn'; repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null; workstream: string | null; role: string | null; from: string | null }
+	| { kind: 'spawn'; repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null; workstream: string | null; role: string | null; from: string | null; taskClass?: string; writes?: string; isolation?: string }
 	| { kind: 'rename'; target: string; name: string }
 	| { kind: 'close'; target: string }
 	| { kind: 'personality' }
@@ -31,29 +31,33 @@ export type OutboxMessage =
 /** What the app files on god-outbox/.receipts/<id>.json for a `spawn`, read by coord-core's
  *  spawnOutcome. `spawned` carries the identity the caller just created. */
 export type SpawnReceipt =
-	| { ok: true; spawned: { terminal: string; branch: string; sessionId: string } }
+	| { ok: true; spawned: { terminal: string; branch: string; sessionId: string; mode?: string } }
 	| { ok: false; reason: string };
 
 /** Pure: the receipt for one spawn attempt — the new session, or why there is none. */
-export function spawnReceipt(spawned: { name: string; branch: string; sessionId: string } | null, failReason: string): SpawnReceipt {
+export function spawnReceipt(spawned: { name: string; branch: string; sessionId: string; mode?: string } | null, failReason: string): SpawnReceipt {
 	return spawned
-		? { ok: true, spawned: { terminal: spawned.name, branch: spawned.branch, sessionId: spawned.sessionId } }
+		? { ok: true, spawned: { terminal: spawned.name, branch: spawned.branch, sessionId: spawned.sessionId, ...(spawned.mode ? { mode: spawned.mode } : {}) } }
 		: { ok: false, reason: failReason };
 }
 
 /** Pure: what a parsed spawn request asks the app to record about the session it creates. */
-export function spawnExtrasOf(msg: Extract<OutboxMessage, { kind: 'spawn' }>): { workstreamId?: string; roleSlug?: string; parentSessionId?: string } {
+export function spawnExtrasOf(msg: Extract<OutboxMessage, { kind: 'spawn' }>): { workstreamId?: string; roleSlug?: string; parentSessionId?: string; taskClass?: string; writes?: string; isolation?: string } {
 	return {
 		...(msg.from ? { parentSessionId: msg.from } : {}),
 		...(msg.workstream ? { workstreamId: msg.workstream } : {}),
 		...(msg.role ? { roleSlug: msg.role } : {}),
+		// Isolation intent, as raw strings: core/isolation.ts resolveIntent validates them.
+		...(msg.taskClass ? { taskClass: msg.taskClass } : {}),
+		...(msg.writes ? { writes: msg.writes } : {}),
+		...(msg.isolation ? { isolation: msg.isolation } : {}),
 	};
 }
 
 /** Parse one god-outbox JSON message into a typed command. An untagged {target,message} is
  *  read as a tell (back-compat). Returns null on malformed / missing fields. */
 export function parseOutboxMessage(text: string): OutboxMessage | null {
-	let o: { kind?: unknown; target?: unknown; message?: unknown; note?: unknown; repo?: unknown; base?: unknown; task?: unknown; model?: unknown; effort?: unknown; name?: unknown; workstream?: unknown; role?: unknown; from?: unknown };
+	let o: { kind?: unknown; target?: unknown; message?: unknown; note?: unknown; repo?: unknown; base?: unknown; task?: unknown; model?: unknown; effort?: unknown; name?: unknown; workstream?: unknown; role?: unknown; from?: unknown; taskClass?: unknown; writes?: unknown; isolation?: unknown };
 	try { o = JSON.parse(text); } catch { return null; }
 	if (!o || typeof o !== 'object') return null;
 	const kind = typeof o.kind === 'string' ? o.kind : 'tell';
@@ -77,8 +81,10 @@ export function parseOutboxMessage(text: string): OutboxMessage | null {
 			const name = typeof o.name === 'string' && o.name.trim() ? o.name.trim() : null;
 			const workstream = typeof o.workstream === 'string' && o.workstream.trim() ? o.workstream.trim() : null;
 			const role = typeof o.role === 'string' && o.role.trim() ? o.role.trim() : null;
+			const str = (v: unknown): string | null => typeof v === 'string' && v.trim() ? v.trim() : null;
+			const taskClass = str(o.taskClass), writes = str(o.writes), isolation = str(o.isolation);
 			const from = typeof o.from === 'string' && o.from.trim() ? o.from.trim() : null;
-			return { kind: 'spawn', repo: o.repo, base, task: o.task, model, effort, name, workstream, role, from };
+			return { kind: 'spawn', repo: o.repo, base, task: o.task, model, effort, name, workstream, role, from, ...(taskClass ? { taskClass } : {}), ...(writes ? { writes } : {}), ...(isolation ? { isolation } : {}) };
 		}
 	} else if (kind === 'rename') {
 		if (typeof o.target === 'string' && typeof o.name === 'string' && o.target.trim() && o.name.trim()) {

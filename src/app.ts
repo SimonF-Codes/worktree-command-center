@@ -5,6 +5,7 @@ import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/termi
 import { parseGodSelfImprove } from './terminals/god';
 import { parseRoleLibrary } from './terminals/role-library';
 import { parseRecordLineage } from './terminals/lineage';
+import { parseIsolationPolicy } from './core/isolation';
 import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, forgetRepo, retargetRepo, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
 import { planMove, describeMovePlan, describeRefusals, remapRepoLinks, samePath, isInside, legacyWorktreeRootFor, nestButton, type PathMove } from './move-repo';
@@ -236,6 +237,9 @@ async function main(): Promise<void> {
 		const roleLibrary = parseRoleLibrary(cfg.roleLibrary);
 		// V2 step 6: `v2.recordLineage`, default on. Off = lineage still written, never read.
 		const recordLineage = parseRecordLineage(cfg.v2);
+		// V2 step 8: config.json `isolation`, default worktree-always (today's behaviour, and the
+		// rollback). `cheap-readonly` lets a spawn that writes nothing skip the worktree.
+		const isolation = parseIsolationPolicy(cfg.isolation);
 
 		const sessionsFile = path.join(userData, '.terminal-sessions.json');
 		// A grid drains its outbox and connectors in its constructor — before the new-tab code
@@ -263,6 +267,7 @@ async function main(): Promise<void> {
 			roleLibrary,
 			connectors,
 			recordLineage,
+			isolation,
 			newTab: async (fields, by) => { await newTabIsReady; return newTabFromSession(fields, by); },
 			sessionEnv: () => sessionEnvProvider({ workspaceId: id }),
 			overseerName: typeof cfg.overseerName === 'string' ? cfg.overseerName : undefined,

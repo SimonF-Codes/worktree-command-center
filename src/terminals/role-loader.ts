@@ -77,3 +77,19 @@ export function loadRolePrompt(libraryPath: string | undefined, slug: string, fa
 		return null;
 	}
 }
+
+/** The `authority:` rung of the role a session will ACTUALLY run on, or undefined when it runs on
+ *  a compiled default (no library, unreadable library, unknown or inactive slug). The compiled
+ *  defaults are operators, so undefined reads as write-capable (core/isolation.ts rungCeilingOf).
+ *  Never throws: an isolation decision must not be able to break a spawn any more than a role
+ *  load can. The rung is the only source of the isolation ceiling — roles carry no `isolation:`
+ *  key (V2 design D16). */
+export function loadRoleAuthority(libraryPath: string | undefined, slug: string): string | undefined {
+	if (!libraryPath) return undefined;
+	try {
+		const found = pickRole(indexRoles(readRoleFiles(libraryPath)), slug);
+		return found.ok ? (found.role.frontmatter['authority'] || undefined) : undefined;
+	} catch {
+		return undefined;
+	}
+}

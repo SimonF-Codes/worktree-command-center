@@ -833,6 +833,11 @@ html, body {
 .wcc-role-rung[data-rung="operator"] { color: var(--color-yellow); border-color: var(--color-yellow); }
 .wcc-role-rung[data-rung="autonomous"] { color: var(--color-red); border-color: var(--color-red); }
 .wcc-role-rung.proposed { border-style: dashed; opacity: .8; }
+/* The mode chip on a session's header: where it works. Monospace so a column of them aligns.
+   Filled, never a state colour; only the lease carries weight (design system: ModeChip). */
+.cos-mode-chip { font-family: var(--font-monospace); font-size: 10.5px; line-height: 1.4; padding: 0 5px; border-radius: 4px; margin-left: 6px; flex: none; background: var(--background-secondary-alt); color: var(--text-muted); }
+.cos-mode-chip[data-variant="worktree"] { background: var(--background-modifier-hover); color: var(--interactive-accent); }
+.cos-mode-chip[data-variant="lease"] { background: var(--background-modifier-error); color: var(--color-yellow); }
 .wcc-role-status { font-size: 10.5px; color: var(--text-muted); }
 .wcc-role-status[data-status="active"]::before { content: '\25CF '; color: var(--color-green); }
 .wcc-role-status[data-status="proposed"]::before { content: '\25CB '; color: var(--text-faint); }
