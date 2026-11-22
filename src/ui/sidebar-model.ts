@@ -8,7 +8,7 @@
 // V2 Team Floor step 7 adds the team view (`v2.teamView`, default off): the same rows, nested by
 // lineage (src/core/team.ts buildTeam) instead of bucketed by state. Off, nothing below changes.
 // Still absent: managers and ★ (step 10), workstreams (step 11).
-import { buildTeam, OVERSEER_ROLE, UNASSIGNED_TEXT, type TeamNode, type TeamSession, type UnassignedNode } from '../core/team';
+import { buildTeam, triageTeam, OVERSEER_ROLE, UNASSIGNED_TEXT, type TeamNode, type TeamSession, type UnassignedNode } from '../core/team';
 
 /** floorState()'s id for the overseer console (terminals-grid.ts floorState: `id: -1`). */
 export const OVERSEER_ID = -1;
@@ -61,7 +61,62 @@ export interface TeamLine {
 
 /** The team view of one workspace: overseer trees pinned first, then UNASSIGNED — always shown
  *  when it has anyone in it, never folded into the trees above. */
-export interface SidebarTeam { tree: TeamLine[]; unassigned: TeamLine[]; }
+export interface SidebarTeam {
+	/** Needs-you pinned mode only: every blocked session (needs you or refused), in declared order,
+	 *  above the tree. The tree below still shows them in place — the strip is a shortcut, not a
+	 *  move. Empty in the other modes. */
+	pinned: PinnedLine[];
+	tree: TeamLine[];
+	unassigned: TeamLine[];
+}
+
+/** A pinned-strip row and where it lives in the tree, so the strip never loses the context. */
+export interface PinnedLine { row: SidebarRow; context: string; }
+
+/** The team view's three orderings (Lineage · Triage · Needs-you pinned). */
+export type TeamSort = 'lineage' | 'triage' | 'pinned';
+export const TEAM_SORTS: ReadonlyArray<{ id: TeamSort; label: string; title: string }> = [
+	{ id: 'lineage', label: 'Lineage', title: 'Declared order — the order sessions were opened. Rows never move.' },
+	{ id: 'triage', label: 'Triage', title: 'Worst state first, within each level. A blocked session pulls its branch up and keeps its parent.' },
+	{ id: 'pinned', label: 'Needs-you pinned', title: 'Declared order, with blocked sessions pinned in a strip above. The tree never moves.' },
+];
+
+/** A stored sort mode, or Lineage for anything else. */
+export function parseTeamSort(v: unknown): TeamSort {
+	return v === 'triage' || v === 'pinned' ? v : 'lineage';
+}
+
+/** How often positions may change. The classifier ticks every second; re-ranking at that rate
+ *  moves a row out from under the pointer as the user reaches for it. Dots still update live —
+ *  only ORDER (and pinned-strip membership) waits for the next re-sort. */
+export const RESORT_MS = 3000;
+
+/** The key a session's frozen state is stored under in a ResortClock snapshot. */
+export const rankKey = (workspaceId: string, tileId: number): string => `${workspaceId}:${tileId}`;
+
+/** Holds the states the order was last computed from, and re-takes them at most every
+ *  `interval` ms. Pure: the caller passes the time. */
+export class ResortClock {
+	private snap: ReadonlyMap<string, DotState> = new Map();
+	private at = Number.NEGATIVE_INFINITY;
+	constructor(private readonly interval: number = RESORT_MS) {}
+
+	/** The states to ORDER by: the last snapshot, unless `interval` has passed since it was taken. */
+	ranks(live: ReadonlyMap<string, DotState>, now: number): ReadonlyMap<string, DotState> {
+		if (now - this.at >= this.interval) { this.snap = new Map(live); this.at = now; }
+		return this.snap;
+	}
+
+	/** Re-sort on the next call — the user changed mode, which is a deliberate reorder. */
+	invalidate(): void { this.at = Number.NEGATIVE_INFINITY; }
+}
+
+/** Every session's live dot, keyed for a ResortClock. */
+export function liveRanks(workspaces: readonly SidebarWorkspaceInput[]): Map<string, DotState> {
+	const m = new Map<string, DotState>();
+	for (const w of workspaces) for (const s of w.sessions) m.set(rankKey(w.id, s.id), dotFor(s.state));
+	return m;
+}
 
 export interface SidebarGroup {
 	id: string;
@@ -103,6 +158,11 @@ export function parseTeamView(v2: unknown): boolean {
 export interface SidebarOptions {
 	/** `v2.teamView`: nest by lineage instead of bucketing by state. */
 	teamView?: boolean;
+	/** The team view's ordering. Default Lineage. */
+	sort?: TeamSort;
+	/** The states to order by (a ResortClock snapshot, keyed by rankKey). A session missing from
+	 *  it — opened since the last re-sort — is ordered by its live state. Default: all live. */
+	ranks?: ReadonlyMap<string, DotState>;
 }
 
 /** Map a classifier state (prompt | menu | errored | idle | running) onto the StateDot four.
@@ -137,9 +197,11 @@ function toRow(s: SidebarSession): SidebarRow {
 
 /** The team view of one workspace's sessions. Every session in `w.sessions` comes out as exactly
  *  one line (buildTeam's invariant); lineage for a tile that is not in `w.sessions` is ignored. */
-export function buildTeamView(w: SidebarWorkspaceInput): SidebarTeam {
+export function buildTeamView(w: SidebarWorkspaceInput, opts: Pick<SidebarOptions, 'sort' | 'ranks'> = {}): SidebarTeam {
+	const sort = opts.sort ?? 'lineage';
 	const rows = new Map<number, SidebarRow>();
 	for (const s of w.sessions) rows.set(s.id, toRow(s));
+	const rankedDot = (tileId: number): DotState => opts.ranks?.get(rankKey(w.id, tileId)) ?? rows.get(tileId)!.dot;
 	const lin = new Map<number, SidebarLineage>();
 	for (const l of w.lineage ?? []) lin.set(l.tileId, l);
 	const sessions: TeamSession[] = w.sessions.map((s) => {
@@ -153,19 +215,27 @@ export function buildTeamView(w: SidebarWorkspaceInput): SidebarTeam {
 			...(l?.parentSessionId ? { parentSessionId: l.parentSessionId } : {}),
 		};
 	});
-	const team = buildTeam(sessions);
-	const flatten = (nodes: readonly TeamNode[], depth: number, out: TeamLine[], reasonOf?: (n: TeamNode) => string): TeamLine[] => {
+	const built = buildTeam(sessions);
+	// Triage reorders siblings by their branch's worst state; the other two keep declared order.
+	const severity = (s: TeamSession): number => SEVERITY[rankedDot(s.key)];
+	const overseers = sort === 'triage' ? triageTeam(built.overseers, severity) : built.overseers;
+	const unassigned = sort === 'triage' ? triageTeam(built.unassigned, severity) : built.unassigned;
+
+	const pinned: PinnedLine[] = [];
+	const flatten = (nodes: readonly TeamNode[], depth: number, out: TeamLine[], context: string, reasonOf?: (n: TeamNode) => string): TeamLine[] => {
 		for (const n of nodes) {
+			const row = rows.get(n.session.key)!;
 			const reason = reasonOf?.(n);
-			out.push({ row: rows.get(n.session.key)!, depth, ...(reason ? { reason } : {}) });
-			flatten(n.children, depth + 1, out);
+			out.push({ row, depth, ...(reason ? { reason } : {}) });
+			if (sort === 'pinned' && BUCKET_OF[rankedDot(n.session.key)] === 'needs') pinned.push({ row, context });
+			flatten(n.children, depth + 1, out, `under ${row.name}`);
 		}
 		return out;
 	};
-	return {
-		tree: flatten(team.overseers, 0, []),
-		unassigned: flatten(team.unassigned, 0, [], (n) => UNASSIGNED_TEXT[(n as UnassignedNode).reason]),
-	};
+	const tree = flatten(overseers, 0, [], 'overseer');
+	const rest = flatten(unassigned, 0, [], 'unassigned', (n) => UNASSIGNED_TEXT[(n as UnassignedNode).reason]);
+	pinned.sort((a, b) => a.row.id - b.row.id);
+	return { pinned, tree, unassigned: rest };
 }
 
 /** Build every workspace's group. `collapsed` holds the ids of collapsed workspaces. */
@@ -200,7 +270,7 @@ export function buildSidebar(workspaces: SidebarWorkspaceInput[], collapsed: Rea
 			collapsed: isCollapsed,
 			overseers: isCollapsed || teamOn ? [] : overseers,
 			sections,
-			team: teamOn && !isCollapsed ? buildTeamView(w) : null,
+			team: teamOn && !isCollapsed ? buildTeamView(w, opts) : null,
 			worst, counts,
 			total: w.sessions.length,
 		};

@@ -115,3 +115,31 @@ export function buildTeam(sessions: readonly TeamSession[]): TeamTree {
 	unassigned.sort(byKey);
 	return { overseers, unassigned };
 }
+
+// ---- Ordering. Presentation only: a sort reorders siblings within one level. It never moves a
+// node to another parent and never flattens the tree — the flattened sort was the rejected
+// prototype (P3), rejected because it destroys the one thing the tree encodes.
+
+/** Lower = worse. The caller maps its own states onto these numbers. */
+export type Severity = number;
+
+/** Triage: at every level, siblings ordered by the worst severity anywhere in their branch,
+ *  ties in declared order (key). So a blocked leaf pulls its whole branch up with it, the leaf
+ *  keeps its parent, and two branches in the same state never swap. Returns new nodes; the
+ *  input tree is not touched. */
+export function triageTeam<T extends TeamNode>(nodes: readonly T[], severity: (s: TeamSession) => Severity): T[] {
+	const memo = new Map<TeamNode, Severity>();
+	const worst = (n: TeamNode): Severity => {
+		let w = memo.get(n);
+		if (w === undefined) {
+			w = severity(n.session);
+			for (const c of n.children) w = Math.min(w, worst(c));
+			memo.set(n, w);
+		}
+		return w;
+	};
+	const sortLevel = <N extends TeamNode>(level: readonly N[]): N[] => [...level]
+		.sort((a, b) => worst(a) - worst(b) || a.session.key - b.session.key)
+		.map((n) => ({ ...n, children: sortLevel(n.children) }));
+	return sortLevel(nodes);
+}

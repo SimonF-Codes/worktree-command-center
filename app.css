@@ -455,6 +455,21 @@ html, body {
 /* Bound to attn-halo, not the hover fill: on the hover fill the ring vanished on exactly the row
    you were reaching for. */
 .wcc-sb-dot.dot-needs { background: var(--color-yellow); box-shadow: 0 0 0 3px var(--attn-halo); }
+/* Team view sort: Lineage · Triage · Needs-you pinned. A segmented control, accent when pressed. */
+.wcc-sb-sort {
+	display: flex; margin: 0 8px 6px; border: 1px solid var(--background-modifier-border); border-radius: 6px; overflow: hidden;
+}
+.wcc-sb-sort button {
+	flex: 1 1 auto; min-width: 0; padding: 2px 4px; border: 0; border-right: 1px solid var(--background-modifier-border);
+	background: transparent; color: var(--text-muted); font: inherit; font-size: 11px; line-height: 16px;
+	white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.wcc-sb-sort button:last-child { border-right: 0; }
+.wcc-sb-sort button:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.wcc-sb-sort button[aria-pressed="true"] { background: var(--interactive-accent); color: var(--text-on-accent); font-weight: 600; }
+.wcc-sb-sort button:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: -2px; }
+/* The pinned strip's header reads as needs-you text, never a filled row (StateDot: no state fills). */
+.wcc-sb-section.wcc-sb-pin { color: var(--color-yellow); }
 /* Team view: why an UNASSIGNED root is unassigned, one quiet line under it, aligned to its name. */
 .wcc-sb-reason {
 	padding: 0 10px 0 calc(37px + var(--sb-depth, 0) * 12px); margin-top: -3px;
@@ -980,6 +995,8 @@ html, body {
 :root[data-theme="olympus"] .wcc-sb-head { text-transform: uppercase; font-weight: 700; color: #0b0b0b; }
 :root[data-theme="olympus"] .wcc-sb-group { border-left-width: 4px; }
 :root[data-theme="olympus"] .wcc-sb-chip { border: 2px solid #0b0b0b; border-radius: 0; color: #0b0b0b; font-weight: 700; }
+:root[data-theme="olympus"] .wcc-sb-sort { border: 2px solid #0b0b0b; border-radius: 0; }
+:root[data-theme="olympus"] .wcc-sb-sort button { border-right: 2px solid #0b0b0b; color: #0b0b0b; font-weight: 700; }
 :root[data-theme="hades"] .wcc-sidebar {
 	background: #0a1929;
 	border-right: 2px solid #2c5179;
@@ -987,5 +1004,7 @@ html, body {
 }
 :root[data-theme="hades"] .wcc-sb-head { text-transform: uppercase; }
 :root[data-theme="hades"] .wcc-sb-chip { border-radius: 0; border-color: #2c5179; }
+:root[data-theme="hades"] .wcc-sb-sort { border-radius: 0; border-color: #2c5179; }
+:root[data-theme="hades"] .wcc-sb-sort button { border-right-color: #2c5179; }
 :root[data-theme="iris"] .wcc-sidebar { border-right: 1px solid #6d3fd1; }
 :root[data-theme="iris"] .wcc-sb-group.active { border-left-color: #ff4fd8; }

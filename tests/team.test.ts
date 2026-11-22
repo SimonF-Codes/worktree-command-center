@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTeam, OVERSEER_ROLE, UNASSIGNED_TEXT, type TeamNode, type TeamSession, type TeamTree } from '../src/core/team';
+import { buildTeam, triageTeam, OVERSEER_ROLE, UNASSIGNED_TEXT, type TeamNode, type TeamSession, type TeamTree } from '../src/core/team';
 
 const ses = (key: number, parent?: string, role = 'worker-terminal'): TeamSession =>
 	({ key, sessionId: `s${key}`, role, ...(parent ? { parentSessionId: parent } : {}) });
@@ -86,5 +86,42 @@ describe('buildTeam — invariants', () => {
 
 	it('handles an empty floor', () => {
 		expect(buildTeam([])).toEqual({ overseers: [], unassigned: [] });
+	});
+});
+
+describe('triageTeam', () => {
+	// Lower = worse: 0 needs you, 1 refused, 2 running, 3 idle.
+	const sev = (m: Record<number, number>) => (s: TeamSession) => m[s.key] ?? 3;
+
+	it('sorts within each level only — a blocked grandchild pulls its branch up and keeps its parent', () => {
+		// overseer → 1 (idle) → 3 (blocked); overseer → 2 (running)
+		const t = buildTeam([alpha(), ses(1, 's-1'), ses(2, 's-1'), ses(3, 's1')]);
+		const sorted = triageTeam(t.overseers, sev({ 2: 2, 3: 0 }));
+		expect(shape(sorted)).toEqual([[-1, [[1, [3]], 2]]]);
+	});
+
+	it('never moves a row to another parent', () => {
+		const t = buildTeam([alpha(), ses(1, 's-1'), ses(2, 's-1'), ses(3, 's2'), ses(4, 's1')]);
+		const sorted = triageTeam(t.overseers, sev({ 3: 0, 4: 2 }));
+		const parentOf = (ns: readonly TeamNode[], p: number | null, out = new Map<number, number | null>()) => {
+			for (const n of ns) { out.set(n.session.key, p); parentOf(n.children, n.session.key, out); }
+			return out;
+		};
+		expect(parentOf(sorted, null)).toEqual(parentOf(t.overseers, null));
+		expect(shape(sorted)).toEqual([[-1, [[2, [3]], [1, [4]]]]]);
+	});
+
+	it('is stable: equal branches keep declared order, whatever the input order', () => {
+		const t = buildTeam([ses(5), ses(2), ses(9), ses(1)]);
+		expect(shape(triageTeam(t.unassigned, () => 2))).toEqual([1, 2, 5, 9]);
+		expect(shape(triageTeam(t.unassigned, sev({ 9: 0, 5: 0 })))).toEqual([5, 9, 1, 2]);
+	});
+
+	it('keeps the unassigned reason on the sorted copies and leaves the input alone', () => {
+		const t = buildTeam([ses(1), ses(2, 'gone')]);
+		const before = JSON.stringify(t);
+		const sorted = triageTeam(t.unassigned, sev({ 2: 0 }));
+		expect(sorted.map((u) => [u.session.key, u.reason])).toEqual([[2, 'parent-closed'], [1, 'no-parent']]);
+		expect(JSON.stringify(t)).toBe(before);
 	});
 });

@@ -1,4 +1,4 @@
-import { buildSidebar, sidebarSignature, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine } from './sidebar-model';
+import { buildSidebar, liveRanks, parseTeamSort, ResortClock, sidebarSignature, TEAM_SORTS, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from './sidebar-model';
 
 export interface SidebarDeps {
 	/** The workspaces, in tab order — the same list the tab strip draws. */
@@ -16,6 +16,8 @@ export interface SidebarDeps {
 /** How often the view re-reads floorState(). It renders; it does not classify — the same
  *  cadence the ⚠ widget polls attentionItems() at. */
 const REFRESH_MS = 1500;
+/** The viewer's chosen team-view ordering — a per-viewer convenience, so browser storage. */
+const SORT_KEY = 'wcc-team-sort';
 const DOT_TITLE: Record<DotState, string> = { needs: 'Needs you', refused: 'Wants help — looks errored', running: 'Running', idle: 'Done — idle' };
 
 /** V2 UI step 2: a read-only sidebar beside the tab strip. A second VIEW of floorState(), never a
@@ -26,8 +28,13 @@ export class Sidebar {
 	private timer: number | null = null;
 	private lastSig = '';
 	private readonly collapsed = new Set<string>();
+	private sort: TeamSort = 'lineage';
+	/** Order changes wait for this; dots do not. */
+	private readonly clock = new ResortClock();
 
-	constructor(private deps: SidebarDeps) {}
+	constructor(private deps: SidebarDeps) {
+		try { this.sort = parseTeamSort(window.localStorage.getItem(SORT_KEY)); } catch { /* no storage: Lineage */ }
+	}
 
 	get isMounted(): boolean { return this.el !== null; }
 
@@ -55,17 +62,20 @@ export class Sidebar {
 				live: f?.live ?? false, sessions: f?.sessions ?? [], lineage: f?.lineage,
 			};
 		});
-		const groups = buildSidebar(inputs, this.collapsed, { teamView: this.deps.teamView?.() ?? false });
-		const sig = sidebarSignature(groups);
+		const teamView = this.deps.teamView?.() ?? false;
+		const ranks = teamView && this.sort !== 'lineage' ? this.clock.ranks(liveRanks(inputs), Date.now()) : undefined;
+		const groups = buildSidebar(inputs, this.collapsed, { teamView, sort: this.sort, ranks });
+		const sig = `${teamView ? this.sort : 'flat'}|${sidebarSignature(groups)}`;
 		if (sig === this.lastSig) return; // nothing shown changed → leave the DOM (and hover) alone
 		this.lastSig = sig;
-		this.render(groups);
+		this.render(groups, teamView);
 	}
 
-	private render(groups: SidebarGroup[]): void {
+	private render(groups: SidebarGroup[], teamView: boolean): void {
 		const el = this.el!;
 		const scroll = el.scrollTop;
 		el.empty();
+		if (teamView) this.sortControl(el);
 		for (const g of groups) this.renderGroup(el, g);
 		el.scrollTop = scroll;
 	}
@@ -95,6 +105,13 @@ export class Sidebar {
 
 		if (g.repo) box.createDiv({ cls: 'wcc-sb-repo', text: `repo: ${g.repo}`, attr: { title: g.repo } });
 		if (g.team) {
+			if (g.team.pinned.length) {
+				box.createDiv({ cls: 'wcc-sb-section wcc-sb-pin', text: `Needs you · ${g.team.pinned.length}` });
+				for (const p of g.team.pinned) {
+					this.row(box, g, p.row);
+					box.createDiv({ cls: 'wcc-sb-reason', text: `↳ ${p.context}` });
+				}
+			}
 			for (const l of g.team.tree) this.teamLine(box, g, l);
 			if (g.team.unassigned.length) {
 				box.createDiv({ cls: 'wcc-sb-section', text: `Unassigned · ${g.team.unassigned.length}`, attr: { title: 'Sessions with no live parent to sit under — shown, never hidden' } });
@@ -111,6 +128,22 @@ export class Sidebar {
 				cls: 'wcc-sb-empty',
 				text: g.live ? 'No sessions' : 'Not opened yet',
 				attr: g.live ? {} : { title: 'Its saved sessions are restored the first time you switch to this workspace' },
+			});
+		}
+	}
+
+	/** Lineage · Triage · Needs-you pinned. Choosing a mode re-sorts at once — that reorder is
+	 *  the user's own; only the ones the attention tick would cause wait for the clock. */
+	private sortControl(parent: HTMLElement): void {
+		const seg = parent.createDiv({ cls: 'wcc-sb-sort', attr: { role: 'group', 'aria-label': 'Sort order' } });
+		for (const m of TEAM_SORTS) {
+			const b = seg.createEl('button', { text: m.label, attr: { type: 'button', title: m.title, 'aria-pressed': String(m.id === this.sort) } });
+			b.addEventListener('click', () => {
+				if (m.id === this.sort) return;
+				this.sort = m.id;
+				try { window.localStorage.setItem(SORT_KEY, m.id); } catch { /* no storage: this launch only */ }
+				this.clock.invalidate();
+				this.refresh();
 			});
 		}
 	}
