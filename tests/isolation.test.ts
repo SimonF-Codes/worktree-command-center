@@ -231,10 +231,12 @@ describe('rungCeilingOf — from the role file authority:', () => {
 });
 
 describe('parseIsolationPolicy — config.json `isolation`, default worktree-always', () => {
-	it('only cheap-readonly switches it on', () => {
+	it('cheap-readonly and cheapest-safe switch it on; anything else is the default', () => {
 		expect(parseIsolationPolicy('cheap-readonly')).toBe('cheap-readonly');
 		expect(parseIsolationPolicy(' Cheap-Readonly ')).toBe('cheap-readonly');
-		for (const v of [undefined, null, '', 'worktree-always', 'cheapest-safe', 42, {}]) expect(parseIsolationPolicy(v)).toBe('worktree-always');
+		expect(parseIsolationPolicy('cheapest-safe')).toBe('cheapest-safe');
+		expect(parseIsolationPolicy(' Cheapest-Safe ')).toBe('cheapest-safe');
+		for (const v of [undefined, null, '', 'worktree-always', 'cheapest', 'shared-write', 42, {}]) expect(parseIsolationPolicy(v)).toBe('worktree-always');
 	});
 });
 

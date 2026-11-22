@@ -1,17 +1,24 @@
-// Isolation modes: where a new session works, and what it may write (V2 ladder step 8, "isolation A").
-// Pure: no fs, no window, no git. Same inputs, same answer. The grid gathers the inputs, calls
-// decideIsolation, then executes the answer (gather → plan → execute, like planClose/planMove).
+// Isolation modes: where a new session works, and what it may write (V2 ladder steps 8 and 9,
+// "isolation A" and "B"). Pure: no fs, no window, no git. Same inputs, same answer. The grid
+// gathers the inputs (the claims among them), calls decideIsolation, then executes the answer
+// (gather → plan → execute, like planClose/planMove).
 //
-// What this step grants, and what it deliberately does not:
-// - `shared-readonly` and `scratch` take no lock, so they add no collision risk. They are granted
-//   under the `cheap-readonly` setting.
-// - `shared-write` stays in the Mode union and is NEVER granted here. It needs the `_claims/`
-//   write lease and the Edit/Write hook (step 9); without them it would be an unguarded write
-//   into a shared checkout. An explicit request for it is refused, naming a holder and a path.
+// What each setting grants:
 // - `worktree-always` (the default) answers `worktree` for every write-capable spawn — exactly
-//   today's behaviour, so the step is inert until the setting is switched. It is also the rollback.
+//   the behaviour before step 8. It is also the rollback.
+// - `cheap-readonly` (step 8) adds `shared-readonly` and `scratch`. They take no lock, so they add
+//   no collision risk; since step 9 the write hook enforces them.
+// - `cheapest-safe` (step 9) adds `shared-write`: a small fix, a config edit, a release — and an
+//   investigation or doc that turns out to write the repo — may write an existing checkout while
+//   holding its exclusive write lease (`write:<checkout id>` in `_claims/`). A held checkout makes
+//   it a worktree instead (FR-12); only `release` and an explicit request can be refused, and a
+//   refusal names the holder and the path (FR-17). Feature work always gets a worktree.
+//   Rolling back to `cheap-readonly` needs no cleanup: leases expire on their own within the TTL.
 // - The rung ceiling applies under EVERY policy, before the policy is consulted: an observer or
-//   proposer gets shared-readonly or scratch, never a worktree, and a repo write is refused.
+//   proposer gets shared-readonly or scratch, never a worktree or a lease, and a repo write is refused.
+//
+// Q9 is decided, leniently: a worktree session's claim is on its own path, so it does not block
+// shared-write in the primary. Only a claim on THIS checkout's id counts (liveClaimOn).
 
 import { lockStatus } from '../terminals/coordination';
 // The write hook's own pure logic, imported rather than mirrored: the id a claim is keyed on and the
@@ -21,8 +28,8 @@ import * as claimsCore from '../../pty-sidecar/claims-core.cjs';
 export type Mode = 'worktree' | 'shared-readonly' | 'shared-write' | 'scratch';
 export type TaskClass = 'feature' | 'small-fix' | 'config' | 'investigate' | 'doc' | 'release';
 export type Writes = 'none' | 'repo' | 'outside';
-/** `cheapest-safe` (which can grant shared-write) is step 9 and is not accepted here. */
-export type IsolationPolicy = 'worktree-always' | 'cheap-readonly';
+/** config.json `isolation`. Only `cheapest-safe` can grant shared-write. */
+export type IsolationPolicy = 'worktree-always' | 'cheap-readonly' | 'cheapest-safe';
 export type RungCeiling = 'readonly' | 'write';
 
 export const MODES: readonly Mode[] = ['worktree', 'shared-readonly', 'shared-write', 'scratch'];
@@ -40,8 +47,7 @@ export interface IsolationIntent {
 	requested?: Mode;
 }
 
-/** A write lease on a checkout (design §2 "Claims"). The store that holds these is step 9; at
- *  this step the array is always empty, but the liveness rule is already the real one. */
+/** A write lease on a checkout (design §2 "Claims"), as read from `_claims/` (claims-store.cjs). */
 export interface Claim { resource: string; sessionId: string; holder: string; path: string; ts: number; ttlMs: number }
 
 export interface IsolationContext {
@@ -75,30 +81,49 @@ export function liveClaimOn(checkoutId: string, claims: readonly Claim[], now: n
 }
 
 const granted = (mode: Mode, reason: string): IsolationDecision => ({ ok: true, mode, acquire: [], reason });
+const sharedWrite = (i: IsolationIntent, reason: string): IsolationDecision => ({ ok: true, mode: 'shared-write', acquire: [writeResource(i.checkout.id)], reason });
+
+/** Task classes that may write an existing checkout under a lease (cheapest-safe). `feature` never
+ *  does: it needs its own branch and a reviewable diff. The write hook's escalation rule
+ *  (claims-core canEscalate) is held to the same answer by a test. */
+const LEASE_CLASSES: readonly TaskClass[] = ['small-fix', 'config', 'investigate', 'doc', 'release'];
 
 /** Decide where a session works. See the module header for what each policy grants.
  *
  *  Properties the tests hold this to:
  *  1. It never refuses when a worktree would do — the only refusals are an explicit
- *     `requested: 'shared-write'` and a repo write by a read-only role.
+ *     `requested: 'shared-write'`, a `release` on a held checkout, and a repo write by a
+ *     read-only role. Every refusal names a holder and a path (FR-17).
  *  2. It never widens a role — under EVERY policy a read-only rung gets shared-readonly or
  *     scratch whatever the brief asks for, and a repo write is refused naming the role and path.
- *  3. A stale claim counts as free (claimIsLive). */
+ *  3. A stale claim counts as free (claimIsLive).
+ *  4. shared-write is granted only under `cheapest-safe`, only on a checkout no live claim holds
+ *     (FR-18), and always with `acquire: [write:<id>]` — the spawn path takes that lease before
+ *     the session exists, and falls back to this function's answer again if it loses the race. */
 export function decideIsolation(i: IsolationIntent, c: IsolationContext): IsolationDecision {
 	const where = i.checkout.path;
 
-	// shared-write is not grantable at this step under ANY policy: there is no lease store and no
-	// write hook yet. Name whoever holds the checkout if someone does; otherwise the holder is the
-	// setting itself — that is what is withholding it, and what someone would change.
+	const live = liveClaimOn(i.checkout.id, c.claims, c.now);
+
+	// An explicit shared-write request: granted only where it is safe, refused otherwise — an
+	// explicit request is not quietly turned into something else. The holder named is whatever is
+	// withholding it: a role, the setting, or the session that has the lease.
 	if (i.requested === 'shared-write') {
-		const live = liveClaimOn(i.checkout.id, c.claims, c.now);
+		if (c.rungCeiling === 'readonly') {
+			const role = c.role || 'this role';
+			return { ok: false, reason: `shared-write refused — ${role} is a read-only rung and cannot write a repository`, holder: role, path: where };
+		}
+		// A live holder is named before the setting: "someone has it" is the more useful answer.
 		if (live) return { ok: false, reason: `shared-write refused — ${live.path} is held by ${live.holder}`, holder: live.holder, path: live.path };
-		return {
-			ok: false,
-			reason: 'shared-write is not available yet — it needs the write lease and write hook (V2 step 9); spawn without --isolation shared-write to get a worktree',
-			holder: `isolation setting "${c.policy}"`,
-			path: where,
-		};
+		if (c.policy !== 'cheapest-safe') {
+			return {
+				ok: false,
+				reason: `shared-write refused — the isolation setting is "${c.policy}", and only "cheapest-safe" grants it; spawn without --isolation shared-write to get a worktree`,
+				holder: `isolation setting "${c.policy}"`,
+				path: where,
+			};
+		}
+		return sharedWrite(i, 'shared-write requested explicitly — takes the write lease on this checkout');
 	}
 
 	// The rung ceiling comes BEFORE the policy: it can only narrow, and it narrows under every
@@ -117,7 +142,18 @@ export function decideIsolation(i: IsolationIntent, c: IsolationContext): Isolat
 	// before this step.
 	if (c.policy === 'worktree-always') return granted('worktree', 'isolation: worktree-always — every session gets its own worktree');
 
-	// cheap-readonly, a write-capable rung. A repo write always gets a worktree at this step.
+	// cheapest-safe, a write-capable rung, a repo write: a lease where it is safe and cheap.
+	if (c.policy === 'cheapest-safe' && i.writes === 'repo' && i.requested !== 'worktree') {
+		if (!LEASE_CLASSES.includes(i.taskClass)) return granted('worktree', `${i.taskClass} work gets its own branch and worktree`);
+		if (live) {
+			// A release must see the real checkout and its tags; a worktree of it cannot stand in.
+			if (i.taskClass === 'release') return { ok: false, reason: `release refused — ${live.path} is held by ${live.holder}; a release must run in the real checkout`, holder: live.holder, path: live.path };
+			return granted('worktree', `${live.path} is held by ${live.holder} — a worktree instead (FR-12)`);
+		}
+		return sharedWrite(i, `${i.taskClass}: writes this checkout under its exclusive write lease`);
+	}
+
+	// cheap-readonly (or cheapest-safe asked for a worktree), a write-capable rung: a repo write gets a worktree.
 	if (i.writes === 'repo') {
 		const note = i.requested === 'shared-readonly' || i.requested === 'scratch' ? ` (requested ${i.requested}, but the task declares repo writes)` : '';
 		return granted('worktree', `repo writes get their own worktree${note}`);
@@ -125,6 +161,26 @@ export function decideIsolation(i: IsolationIntent, c: IsolationContext): Isolat
 	if (i.requested === 'worktree') return granted('worktree', 'worktree requested explicitly');
 	if (i.writes === 'outside') return granted('scratch', 'writes nothing in the repo — scratch, outside any registered target');
 	return granted('shared-readonly', 'writes nothing — reads the existing checkout, no worktree');
+}
+
+/** One spawn's isolation inputs and the decision made from them (the grid's planIsolation). */
+export interface IsolationPlan { intent: IsolationIntent; ctx: IsolationContext; decision: IsolationDecision }
+
+/** A stored claim (claims-store.cjs) as decideIsolation reads it. */
+export function claimOf(c: { resource: string; sessionId: string; holder: string; path: string; ts: number; ttlMs: number }): Claim {
+	return { resource: c.resource, sessionId: c.sessionId, holder: c.holder, path: c.path, ts: c.ts, ttlMs: c.ttlMs };
+}
+
+/** A shared-write grant whose lease was taken by someone else between planning and the take:
+ *  decide again with the winner's claim. That is a worktree (FR-12) or, for a release or an
+ *  explicit request, a refusal naming the winner. Never shared-write again — the take already
+ *  failed, and an answer that would retry it could loop. `winner` null (its file could not be
+ *  read): refuse, naming the path, since nobody can be named. */
+export function redecideAfterLostRace(plan: IsolationPlan, winner: Claim | null, path: string): IsolationDecision {
+	if (!winner) return { ok: false, reason: `the write lease on ${path} could not be taken, and its holder could not be read`, holder: 'unknown holder', path };
+	const d = decideIsolation(plan.intent, { ...plan.ctx, claims: [...plan.ctx.claims, claimOf(winner)] });
+	if (d.ok && d.mode === 'shared-write') return { ok: true, mode: 'worktree', acquire: [], reason: `${path} was taken while this spawn was planned — a worktree instead (FR-12)` };
+	return d;
 }
 
 // ---- Intent: filling in what the brief did not declare.
@@ -172,10 +228,12 @@ export function rungCeilingOf(authority: string | undefined): RungCeiling {
 
 // ---- The setting: config.json `isolation`, default `worktree-always`.
 
-/** Only the exact value `cheap-readonly` switches the step on. Anything else — missing, junk, or
- *  `cheapest-safe` (step 9, not built) — reads as the default, today's behaviour. */
+/** Only an exact `cheap-readonly` or `cheapest-safe` changes anything. Anything else — missing or
+ *  junk — reads as the default, `worktree-always`: an unreadable setting never widens. */
 export function parseIsolationPolicy(v: unknown): IsolationPolicy {
-	return typeof v === 'string' && v.trim().toLowerCase() === 'cheap-readonly' ? 'cheap-readonly' : DEFAULT_POLICY;
+	if (typeof v !== 'string') return DEFAULT_POLICY;
+	const s = v.trim().toLowerCase();
+	return s === 'cheap-readonly' || s === 'cheapest-safe' ? s : DEFAULT_POLICY;
 }
 
 // ---- The mode chip (design system: components/ModeChip).
@@ -329,6 +387,16 @@ export function isolationInstruction(mode: Mode | undefined, opts: { escalates?:
 			+ 'Read only: do not create, edit or delete any file in it — the write hook denies file-tool writes here. '
 			+ SHELL_WRITES + ' '
 			+ 'If the task turns out to need a write, stop and say so — it must be respawned with its own worktree.';
+	}
+	if (mode === 'shared-write') {
+		return 'shared-write — this working directory is a SHARED checkout (the repository\'s own, not a worktree of yours), and this session '
+			+ 'holds its exclusive write lease: no other session can write here while you hold it. Other sessions may be reading it, so '
+			+ 'never git checkout / switch / stash / reset / rebase here. The lease lives while you keep writing — after 10 minutes without a '
+			+ 'file-tool write it lapses, and if a write is then denied, another session has it: stop and say so. Make the change, commit it '
+			+ '(that commit is the one shell write you are here to make), and finish. The lease is released when the session ends, and only '
+			+ 'from a clean checkout; `cos-coord lease release` gives it up early. '
+			+ 'The write hook sees only the file tools (Edit, Write, NotebookEdit): any other shell command that writes — a redirect, a formatter, '
+			+ 'an install, a build that emits output — is not caught by it, and is forbidden here all the same.';
 	}
 	if (mode === 'scratch') {
 		return 'scratch — this working directory is a scratch folder outside every registered repository. '
