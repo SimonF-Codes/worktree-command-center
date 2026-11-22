@@ -120,8 +120,9 @@ Each workspace has one:
 <userData>/.coordination/<workspaceId>/
 ```
 
-Every session in that workspace gets its path as `COS_COORD_DIR`, plus its own `COS_TERMINAL_ID`
-and `COS_TERMINAL_NAME`. Everything sessions and the app say to each other goes through files
+Every session in that workspace gets its path as `COS_COORD_DIR`, plus its own `COS_TERMINAL_ID`,
+`COS_TERMINAL_NAME` and `COS_SESSION_ID` (stable across restarts; attribution only, see
+[api.md](api.md#environment)). Everything sessions and the app say to each other goes through files
 here:
 
 | path | written by | what it is |

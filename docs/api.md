@@ -638,3 +638,91 @@ COS_COORD_DIR="$(dirname "$COS_COORD_DIR")/$ws" cos-coord spawn Recipe-Site --ta
 
 `cos-coord spawn` without that override would open the terminal in **Kane's own** tab. Every
 tab's coordination directory sits next to the others under `.coordination/`.
+
+## `cos-coord` inside the app: environment and verbs
+
+This section is the in-app channel's own reference: what a session the app opened is given, and
+what each `cos-coord` verb it may run sends and answers. The connector channel above is for
+processes **outside** the app.
+
+### Environment
+
+Each spawn path sets exactly the `COS_*` it means, in its own environment block. None is ever
+inherited from the app's environment: `src/terminals/session-env.ts` strips every `COS_*`, since
+worker tiles once inherited `COS_ROLE=god` and ran with god authority.
+
+| variable | set for | value | used for |
+| --- | --- | --- | --- |
+| `COS_COORD_DIR` | every session | the workspace's coordination directory | where every request, lock and note goes |
+| `COS_TERMINAL_ID` | every session | a tile id (`0` for the primary Kane, `-N` for a duplicate). **Reissued every launch** | lock ownership within one run |
+| `COS_TERMINAL_NAME` | every session | the tile's display name | board and chat attribution |
+| `COS_ROLE` | Kane consoles only | `god` | the gate on `tell`, `watch`, `spawn`, `rename`, `close`, `personality`, `new-tab` |
+| `COS_SESSION_ID` | every terminal and Kane console | the session's `sessionId`: a uuid minted once and **stable across restarts** | the `from` on every outbox request. **Attribution only**: nothing checks it for authority |
+| `COS_COORD_TELL_WAIT_MS` / `_CLOSE_WAIT_MS` / `_SPAWN_WAIT_MS` / `_NEW_TAB_WAIT_MS` | (caller's override) | milliseconds | how long the verb blocks for the app's receipt. Default 45 s (new-tab: its own) |
+
+### Verb register
+
+Every request lands in `god-outbox/` as one JSON file and carries `ts`, `kind` and `from` (the
+sender's `COS_SESSION_ID`, or `null`). Verbs that block read `god-outbox/.receipts/<id>.json`.
+
+| verb | blocks for a receipt | request fields beyond `ts`/`kind`/`from` | exit codes |
+| --- | --- | --- | --- |
+| `tell <target> "<message>"` | yes | `target`, `message` | 0 delivered · 2 not delivered (reason on stderr) |
+| `watch <target> --note "…"` | no | `target`, `note` | 0 |
+| `spawn <repo> --task "…"` | **yes** | `repo`, `base`, `task`, `model`, `effort`, `name`, `workstream`, `role` (each `null` when not given) | 0 spawned · 2 refused, or never picked up and withdrawn · 3 taken but not confirmed |
+| `rename <target> --to "…"` | no | `target`, `name` | 0 |
+| `close <target>` | yes | `target` | 0 closed · 2 refused or not confirmed |
+| `personality` | no | — | 0 |
+| `new-tab "<tab>" …` | yes | see [new-tab](#new-tab-a-workspace-tab-bound-to-a-repo) | see its [exit codes](#exit-codes-both-clis) |
+
+### `spawn`
+
+```sh
+cos-coord spawn "<repo>" --task "<first instruction>" [--base <branch>] [--model <alias-or-id>]
+  [--effort <level>] [--name "<terminal name>"] [--role <slug>] [--workstream <id>]
+```
+
+- `--role <slug>`: the role file the new session runs on, by its `role:` slug. Without it a
+  worktree session is a `worker-terminal` and a folder session a `folder-terminal`. The slug is
+  **not validated** at spawn: an unknown or non-`active` one falls back to the compiled default,
+  and the app logs why (`[roles] …`). Which roles a session may start is a later step.
+- `--workstream <id>`: the workstream the session serves. Stored on the session record, and
+  otherwise unused for now.
+
+It **confirms before returning**. Success prints the new terminal, its branch and its session id:
+
+```
+coord: spawned "wt-main-7" on wt/main-7 — session 3f0c…e21a
+```
+
+The receipt the app files (`god.ts` `SpawnReceipt`):
+
+```jsonc
+{ "ok": true, "spawned": { "terminal": "wt-main-7", "branch": "wt/main-7", "sessionId": "3f0c…e21a" } }
+{ "ok": false, "reason": "unknown repo \"ghost\". Known: app, api" }
+```
+
+With no receipt inside the window, the CLI tries to take the request back. If it can, the app
+never had it: exit 2, `WITHDRAWN`, nothing will spawn. If the app already claimed it: exit 3,
+`NOT confirmed`, and it may still appear, so check `floor/INDEX.md` before retrying. An app older
+than the CLI files no spawn receipt, so its spawns always end in exit 3.
+
+### Session identity and lineage
+
+The app persists these on each session's record in `<userData>/.terminal-sessions.json`:
+
+| field | written | meaning |
+| --- | --- | --- |
+| `sessionId` | once, when the session is created. A record from an older build gets one on its first load | stable identity, never re-minted on restore. Tile ids are not stable, and folder sessions share paths |
+| `parentSessionId` | at spawn, from the request's `from` | who spawned this session |
+| `workstreamId` | at spawn, from `--workstream` | the group of work it serves |
+| `roleSlug` | at spawn, from `--role` (or a caller starting a named agent) | its role file |
+
+`config.json` `v2.recordLineage` (default **on**; only an explicit `false` turns it off): with
+it off, `parentSessionId` and `workstreamId` are **still written** but every reader treats them
+as absent. Turning it off needs no migration, and turning it back on finds the lineage intact.
+`sessionId` is identity, not lineage, so the setting never gates it.
+
+```json
+{ "v2": { "recordLineage": false } }
+```
