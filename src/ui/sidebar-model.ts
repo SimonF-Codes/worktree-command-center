@@ -319,3 +319,16 @@ export function canCloseWorkspace(workspaceCount: number): boolean {
 export function recentlyClosedLabel(closedCount: number): string | null {
 	return closedCount > 0 ? `↩ Recently closed (${closedCount})` : null;
 }
+
+/** config.json `v2.hideTabs`. Default OFF, same rule as `v2.sidebar`: only an explicit `true`. */
+export function parseHideTabs(v2: unknown): boolean {
+	if (!v2 || typeof v2 !== 'object') return false;
+	return (v2 as { hideTabs?: unknown }).hideTabs === true;
+}
+
+/** Whether the tab strip is hidden. `hideTabs` does nothing while the sidebar is off: hiding the
+ *  tabs with no sidebar up would leave no way to change workspace at all. This is the only place
+ *  that decision is made — the app hides the strip from its result and nothing else. */
+export function tabsHidden(opts: { sidebar: boolean; hideTabs: boolean }): boolean {
+	return opts.sidebar && opts.hideTabs;
+}

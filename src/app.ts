@@ -33,7 +33,7 @@ import { PerfMonitor } from './ui/perf-monitor';
 import { AttentionWidget } from './ui/attention-widget';
 import { WorkspaceBar } from './ui/workspace-bar';
 import { Sidebar } from './ui/sidebar';
-import { parseSidebarEnabled, parseTeamView } from './ui/sidebar-model';
+import { parseHideTabs, parseSidebarEnabled, parseTeamView, tabsHidden } from './ui/sidebar-model';
 import { SettingsPanel } from './ui/settings-panel';
 import { ChangelogPanel } from './ui/changelog-panel';
 import { MemoryPanel } from './ui/memory-panel';
@@ -340,6 +340,7 @@ async function main(): Promise<void> {
 			onOverseerNameChange: (name) => grids.forEach((g) => g.setOverseerName(name)),
 			onAutoCloseChange: (raw) => { autoCloseCfg = parseAutoClose(raw); autoCloser?.apply(); },
 			onSidebarChange: (on) => applySidebar(on),
+			onHideTabsChange: (on) => applyHideTabs(on),
 			onTeamViewChange: (on) => { teamView = on; sidebar.refresh(); },
 			// Applied live: the grids' request channels and the sidebar both read `managers` on every use.
 			onManagersChange: (on) => { managers = on; sidebar.refresh(); },
@@ -537,9 +538,23 @@ async function main(): Promise<void> {
 			})(),
 			onOpenManager: (id, tileId) => void openManager(id, tileId),
 		});
+		// `v2.hideTabs` (default off), applied live: the sidebar replaces the tab strip. It only ever
+		// takes effect through tabsHidden(), which keeps the strip while the sidebar is off — with
+		// neither up there would be no way to change workspace.
+		let sidebarOn = false;
+		let hideTabs = parseHideTabs(cfg.v2);
+		function applyTabs(): void {
+			terminalRoot.toggleClass('wcc-tabs-hidden', tabsHidden({ sidebar: sidebarOn, hideTabs }));
+		}
 		function applySidebar(on: boolean): void {
+			sidebarOn = on;
 			terminalRoot.toggleClass('wcc-has-sidebar', on);
 			if (on) sidebar.mount(terminalRoot); else sidebar.unmount();
+			applyTabs();
+		}
+		function applyHideTabs(on: boolean): void {
+			hideTabs = on;
+			applyTabs();
 		}
 		if (parseSidebarEnabled(cfg.v2)) applySidebar(true);
 		window.addEventListener('beforeunload', () => sidebar.unmount());

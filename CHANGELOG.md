@@ -3,6 +3,18 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
+## Unreleased
+
+**📋 The sidebar replaces the tab strip — off by default (`v2.hideTabs`)**
+- **A workspace header switches to that workspace**, as a tab click does (Enter/Space too). The
+  caret is now its own button and the only thing that collapses; a collapsed workspace still keeps
+  its worst state on the header.
+- **Collapse all / Expand all**, one control at the top of the sidebar.
+- **Every tab-strip control has a home in the sidebar:** × close on a workspace header (on hover
+  or focus, never on the last one), and **+ add** and **↩ Recently closed** at its foot.
+- **Settings → Sidebar → Hide the tab strip.** Applied live. It does nothing while the sidebar is
+  off — the strip always stays then, so there is always a way to change workspace.
+
 ## 1.0.0 — 2026-11-22
 
 The V2 Team Floor overhaul. A workspace tab stops being a bag of worktrees and becomes a team with

@@ -405,6 +405,10 @@ html, body {
 .wcc-has-sidebar > .wcc-tabs { grid-column: 2; grid-row: 3; }
 .wcc-has-sidebar > .wcc-grid-container { grid-column: 2; grid-row: 4; min-width: 0; }
 .wcc-has-sidebar > .wcc-sidebar { grid-column: 1; grid-row: 3 / span 2; }
+/* `v2.hideTabs`: the sidebar replaces the tab strip. The app only sets wcc-tabs-hidden while the
+   sidebar is on (tabsHidden in sidebar-model.ts); the selector requires both as well, so the strip
+   can never vanish with no sidebar beside it. Row 3 is then empty and collapses to nothing. */
+.wcc-has-sidebar.wcc-tabs-hidden > .wcc-tabs { display: none; }
 
 .wcc-sidebar {
 	min-height: 0;
