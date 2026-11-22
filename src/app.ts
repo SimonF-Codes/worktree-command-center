@@ -769,18 +769,26 @@ async function main(): Promise<void> {
 		projectBtn.addEventListener('click', () => { if (projectPanel.isOpen) closeProject(); else openProject(); });
 		// A pinned column that would now leave the stage narrower than one usable terminal unpins.
 		// Re-checked whenever the grid container changes size: a window resize, the sidebar, a font change.
-		new ResizeObserver(() => {
-			if (!projectPanel.isOpen || projectPanel.mode !== 'column' || projectWhere() === 'column') return;
+		// Not while the terminal surface is hidden (Roles or the Manager view took the window): the
+		// container collapses to 0 px then, which is not a reason to unpin.
+		const unpinIfTooNarrow = (): void => {
+			if (!terminalShown || !projectPanel.isOpen || projectPanel.mode !== 'column' || projectWhere() === 'column') return;
 			closeProject();
 			toast('Project panel unpinned — beside it the stage would be narrower than one usable terminal. 📊 opens it in the main pane.', 'info');
-		}).observe(gridContainer);
+		};
+		new ResizeObserver(unpinIfTooNarrow).observe(gridContainer);
 		wsSwitchCbs.push((id) => {
 			if (!projectPanel.isOpen) return;
+			unpinIfTooNarrow(); // another tab's stage (its font, its overseer dock) may not fit beside it
 			const last = metricsRunner.latest(id);
 			if (!last || Date.now() - (last.finishedAt ?? 0) > METRICS_REFRESH_MS) runProjectMetrics();
 			else projectPanel.refresh();
 		});
-		window.addEventListener('beforeunload', () => closeProject());
+		// On quit, just stop: closeProject() from the pane would remount the grid during unload.
+		window.addEventListener('beforeunload', () => {
+			if (projectTimer !== null) { window.clearInterval(projectTimer); projectTimer = null; }
+			projectPanel.close();
+		});
 
 		// --- tabs born linked to a repo (tab-repo.ts) ---
 		// Where the last new repo went, so the next one is proposed beside it. Written by its own
