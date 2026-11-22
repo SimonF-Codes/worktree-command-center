@@ -10,11 +10,20 @@ import { randomUUID } from 'crypto';
 /** A fresh session id. The only place one is ever created. */
 export function mintSessionId(): string { return randomUUID(); }
 
+/** Where a session came from. Both optional: a session the user started from the toolbar has
+ *  no parent, and one spawned outside any workstream has no workstream. */
+export interface SessionLineage {
+	/** The spawning session's sessionId — the request's `from`. The edge a team tree is built from. */
+	parentSessionId?: string;
+	/** `spawn --workstream <id>`: the group of work this session serves. Stored only, at this step. */
+	workstreamId?: string;
+}
+
 /** The identity fields a session record carries. */
-export interface SessionIdentity { sessionId: string }
+export interface SessionIdentity extends SessionLineage { sessionId: string }
 
 /** The shape these helpers need from a persisted record. */
-export interface IdentityRecord { kind?: string; sessionId?: unknown }
+export interface IdentityRecord { kind?: string; sessionId?: unknown; parentSessionId?: unknown; workstreamId?: unknown }
 
 function usableId(v: unknown): v is string { return typeof v === 'string' && v.trim() !== ''; }
 
@@ -39,15 +48,24 @@ export function ensureSessionIds<T extends IdentityRecord>(recs: readonly T[], m
  *  that somehow still has none (ensureSessionIds was skipped) gets one here rather than none,
  *  and the next persist writes it. */
 export function restoreIdentity(rec: IdentityRecord, mint: () => string = mintSessionId): SessionIdentity {
-	return { sessionId: usableId(rec.sessionId) ? rec.sessionId : mint() };
+	return { sessionId: usableId(rec.sessionId) ? rec.sessionId : mint(), ...cleanLineage(rec) };
 }
 
 /** The identity a NEW session runs with — the one place a spawn mints. */
-export function newIdentity(mint: () => string = mintSessionId): SessionIdentity {
-	return { sessionId: mint() };
+export function newIdentity(lineage: SessionLineage = {}, mint: () => string = mintSessionId): SessionIdentity {
+	return { sessionId: mint(), ...cleanLineage(lineage) };
 }
 
-/** The identity fields as they are written into a session record. */
+/** The identity fields as they are written into a session record: absent lineage is left out
+ *  rather than written as null, so a record with none looks exactly as it did before. */
 export function identityFields(id: SessionIdentity): SessionIdentity {
-	return { sessionId: id.sessionId };
+	return { sessionId: id.sessionId, ...cleanLineage(id) };
+}
+
+/** Only the usable lineage values; blanks and junk are dropped. */
+function cleanLineage(src: { parentSessionId?: unknown; workstreamId?: unknown }): SessionLineage {
+	return {
+		...(usableId(src.parentSessionId) ? { parentSessionId: src.parentSessionId.trim() } : {}),
+		...(usableId(src.workstreamId) ? { workstreamId: src.workstreamId.trim() } : {}),
+	};
 }

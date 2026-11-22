@@ -115,7 +115,10 @@ function dropOutbox(dir, obj) {
 }
 function tell(dir, target, message) { return dropOutbox(dir, { kind: 'tell', target, message }); }
 function watch(dir, target, note) { return dropOutbox(dir, { kind: 'watch', target, note }); }
-function spawn(dir, repo, base, task, model, effort, name) { return dropOutbox(dir, { kind: 'spawn', repo, base: base || null, task, model: model || null, effort: effort || null, name: name || null }); }
+// extra: { workstream } — fields added after the positional ones, null when unset.
+function spawn(dir, repo, base, task, model, effort, name, extra = {}) {
+  return dropOutbox(dir, { kind: 'spawn', repo, base: base || null, task, model: model || null, effort: effort || null, name: name || null, workstream: extra.workstream || null });
+}
 function rename(dir, target, to) { return dropOutbox(dir, { kind: 'rename', target, name: to }); }
 function personality(dir) { return dropOutbox(dir, { kind: 'personality' }); }
 function close(dir, target) { return dropOutbox(dir, { kind: 'close', target }); }

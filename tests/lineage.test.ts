@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { ensureSessionIds, restoreIdentity, newIdentity, identityFields, mintSessionId } from '../src/terminals/lineage';
 import { godRecords, godIndexOf } from '../src/terminals/god-sessions';
+import { execFileSync } from 'node:child_process';
+import * as os from 'node:os';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { parseOutboxMessage, spawnExtrasOf } from '../src/terminals/god';
+import { sanitizeSessionEnv } from '../src/terminals/session-env';
 
 /** A counter-backed mint, so a test can see exactly how many ids were created. */
 function countingMint(): { mint: () => string; count: () => number } {
@@ -25,7 +31,7 @@ function restartOnce<T extends { kind?: string; sessionId?: unknown }>(recs: T[]
 describe('sessionId (E6)', () => {
 	it('a record round-trips save → restore with the SAME sessionId, across several restarts', () => {
 		const { mint, count } = countingMint();
-		const spawned = { ...terminalRec(), ...identityFields(newIdentity(mint)) };
+		const spawned = { ...terminalRec(), ...identityFields(newIdentity({}, mint)) };
 		expect(spawned.sessionId).toBe('sess-1');
 		let recs = [spawned];
 		for (let i = 0; i < 3; i++) recs = restartOnce(recs, mint);
@@ -83,5 +89,49 @@ describe('sessionId (E6)', () => {
 		const a = mintSessionId(), b = mintSessionId();
 		expect(a).toMatch(/^[0-9a-f-]{36}$/);
 		expect(a).not.toBe(b);
+	});
+});
+
+// ---- The spawn chain, end to end minus the window: cos-coord argv → god-outbox file →
+// parseOutboxMessage → the extras the grid hands spawnFromName → the record the tile writes.
+
+const CLI = path.join(__dirname, '..', 'pty-sidecar', 'coord-cli.cjs');
+
+/** Run `cos-coord spawn …` as Kane and return the one outbox message it dropped, parsed. */
+function spawnViaCli(args: string[], extraEnv: Record<string, string> = {}) {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lineage-'));
+	const env = { ...sanitizeSessionEnv(process.env), COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Kane', COS_ROLE: 'god', ...extraEnv };
+	execFileSync('node', [CLI, 'spawn', ...args], { env, encoding: 'utf8' });
+	const files = fs.readdirSync(path.join(dir, 'god-outbox')).filter((f) => f.endsWith('.json'));
+	expect(files).toHaveLength(1);
+	const raw = fs.readFileSync(path.join(dir, 'god-outbox', files[0]!), 'utf8');
+	const msg = parseOutboxMessage(raw);
+	if (!msg || msg.kind !== 'spawn') throw new Error(`not a spawn: ${raw}`);
+	return { raw: JSON.parse(raw) as Record<string, unknown>, msg };
+}
+
+describe('spawn --workstream', () => {
+	it('reaches the spawned session\'s record, and survives a restore', () => {
+		const { raw, msg } = spawnViaCli(['app', '--task', 'do X', '--workstream', 'ws-12']);
+		expect(raw.workstream).toBe('ws-12');
+		const extras = spawnExtrasOf(msg);
+		expect(extras).toEqual({ workstreamId: 'ws-12' });
+		const rec = JSON.parse(JSON.stringify(identityFields(newIdentity(extras))));
+		expect(restoreIdentity(rec)).toMatchObject({ workstreamId: 'ws-12' });
+	});
+
+	it('omitted, it is null in the request and absent from the record', () => {
+		const { raw, msg } = spawnViaCli(['app', '--task', 'do X']);
+		expect(raw.workstream).toBeNull();
+		expect(identityFields(newIdentity(spawnExtrasOf(msg)))).not.toHaveProperty('workstreamId');
+	});
+});
+
+describe('lineage fields on the record', () => {
+	it('parentSessionId and workstreamId round-trip; blanks are dropped, not written', () => {
+		const id = newIdentity({ parentSessionId: 'kane-1', workstreamId: 'ws-1' }, () => 's-1');
+		const back = restoreIdentity(JSON.parse(JSON.stringify(identityFields(id))));
+		expect(back).toEqual({ sessionId: 's-1', parentSessionId: 'kane-1', workstreamId: 'ws-1' });
+		expect(identityFields(newIdentity({ parentSessionId: ' ', workstreamId: '' }, () => 's-2'))).toEqual({ sessionId: 's-2' });
 	});
 });

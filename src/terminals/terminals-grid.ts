@@ -24,7 +24,7 @@ import { SPAWN_MODELS } from './spawn-models';
 import { normalizeToolbarState, type ToolbarState } from './toolbar-state';
 import { GodConsole } from './god-console';
 import { godIndexOf, godRecords, highestGodIndex, PRIMARY_GOD_INDEX } from './god-sessions';
-import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, resolveTellTarget, remapWatchers, planClose, closeResultText, EFFORT_LEVELS, type OutboxMessage, type CloseCandidate, type GodSelfImprove } from './god';
+import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, spawnExtrasOf, resolveTellTarget, remapWatchers, planClose, closeResultText, EFFORT_LEVELS, type OutboxMessage, type CloseCandidate, type GodSelfImprove } from './god';
 import { buildFloorState, renderFloorState, FLOOR_STATE_FILE } from './floor-state';
 import { evaluateConnectorRequest, receiptFilename, isReceiptStale, type ConnectorConfig, type ConnectorReceipt } from './connectors';
 import { parseNewTabFields, newTabSummary, type NewTabFields, type NewTabOutcome } from '../new-tab';
@@ -42,7 +42,7 @@ import { vaultNoteFilename, vaultNoteContent, type ConvertDestination, type Vaul
 import type { StageTile } from './stage-tile';
 import type { SessionClaim } from './session-memory';
 import type { SessionFacts } from './auto-close';
-import { ensureSessionIds, newIdentity, restoreIdentity, type SessionIdentity } from './lineage';
+import { ensureSessionIds, newIdentity, restoreIdentity, type SessionIdentity, type SessionLineage } from './lineage';
 
 /** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
  *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
@@ -108,7 +108,12 @@ export interface GridDeps {
 export interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string;
 	/** Stable session identity (lineage.ts). Absent only in records an older build wrote — restore
 	 *  mints one for those, once, and the healing persist writes it. */
-	sessionId?: string; }
+	sessionId?: string;
+	/** Lineage (lineage.ts SessionLineage): who spawned this session, and for which workstream. */
+	parentSessionId?: string; workstreamId?: string; }
+
+/** What a spawn carries beyond the task itself — who asked, and for what. */
+export interface SpawnExtras extends SessionLineage { roleSlug?: string }
 
 // Effort options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
 const SPAWN_EFFORTS: { label: string; value: string }[] = [
@@ -611,7 +616,7 @@ export class TerminalsGrid {
 	/** Spawn core for a FOLDER target: no `git worktree add`, no branch — the tile's working
 	 *  directory IS the folder. Mirrors spawnWorktree's tile/persist/layout tail so both kinds of
 	 *  terminal behave identically once they exist. */
-	private async spawnFolder(repo: RepoConfig, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string }): Promise<TerminalTile | null> {
+	private async spawnFolder(repo: RepoConfig, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage }): Promise<TerminalTile | null> {
 		try {
 			await fs.access(repo.path); // a moved/unmounted folder should say so, not spawn into nothing
 		} catch {
@@ -620,7 +625,7 @@ export class TerminalsGrid {
 		}
 		const model = opts.model ?? (this.modelSel?.value || undefined);
 		const effort = opts.effort ?? (this.effortSel?.value || undefined);
-		const tile = this.makeTile({ worktreePath: repo.path, branch: '' }, repo.name, repo.path, '', false, opts.name, model, effort, true, opts.roleSlug, newIdentity());
+		const tile = this.makeTile({ worktreePath: repo.path, branch: '' }, repo.name, repo.path, '', false, opts.name, model, effort, true, opts.roleSlug, newIdentity(opts.lineage));
 		if (opts.task) this.pendingTask.set(tile.tileId, opts.task);
 		if (this.stageEl) tile.render(this.stageEl);
 		this.tiles.push(tile);
@@ -631,7 +636,7 @@ export class TerminalsGrid {
 
 	/** Shared spawn core: create a worktree + tile, render, persist, layout. Optionally queue an
 	 *  initial task to send once the new session is first ready. Returns the tile (or null). */
-	private async spawnWorktree(repo: RepoConfig, base: string, opts: { task?: string; model?: string; effort?: string; name?: string }): Promise<TerminalTile | null> {
+	private async spawnWorktree(repo: RepoConfig, base: string, opts: { task?: string; model?: string; effort?: string; name?: string; lineage?: SessionLineage }): Promise<TerminalTile | null> {
 		try {
 			const branches = await listBranches(repo.path);
 			const branch = this.pendingNewBranch ?? nextWorktreeBranch(branches, base);
@@ -640,7 +645,7 @@ export class TerminalsGrid {
 			// Explicit opts win; otherwise inherit the toolbar dropdowns ('' = CLI default = no flag).
 			const model = opts.model ?? (this.modelSel?.value || undefined);
 			const effort = opts.effort ?? (this.effortSel?.value || undefined);
-			const tile = this.makeTile(worktree, repo.name, repo.path, base, false, opts.name, model, effort, undefined, undefined, newIdentity());
+			const tile = this.makeTile(worktree, repo.name, repo.path, base, false, opts.name, model, effort, undefined, undefined, newIdentity(opts.lineage));
 			if (opts.task) this.pendingTask.set(tile.tileId, opts.task);
 			if (this.stageEl) tile.render(this.stageEl);
 			this.tiles.push(tile);
@@ -655,14 +660,14 @@ export class TerminalsGrid {
 
 	/** Kane asked to spawn a terminal: resolve the repo by name, validate the effort, default the
 	 *  base branch, start it on the given task. Invalid effort → error note, no spawn. */
-	private async spawnFromKane(repoName: string, base: string | null, task: string, model: string | null = null, effort: string | null = null, name: string | null = null): Promise<void> {
+	private async spawnFromKane(repoName: string, base: string | null, task: string, model: string | null = null, effort: string | null = null, name: string | null = null, extras: SpawnExtras = {}): Promise<void> {
 		const known = this.repos.some((r) => r.name === repoName || r.name.toLowerCase() === repoName.toLowerCase());
 		if (!known) { this.writeGodInbox(`cannot spawn — unknown repo "${repoName}". Known: ${this.repos.map((r) => r.name).join(', ') || '(none)'}`); return; }
 		if (effort !== null && !(EFFORT_LEVELS as readonly string[]).includes(effort)) {
 			this.writeGodInbox(`cannot spawn — invalid --effort "${effort}". Valid: ${EFFORT_LEVELS.join(', ')}`);
 			return;
 		}
-		await this.spawnFromName(repoName, base, task, model ?? undefined, effort ?? undefined, name ?? undefined);
+		await this.spawnFromName(repoName, base, task, model ?? undefined, effort ?? undefined, name ?? undefined, extras);
 	}
 
 	/** Spawn a new journal tile, center it, and persist. */
@@ -1093,13 +1098,14 @@ export class TerminalsGrid {
 	/** Spawn a worktree terminal for a repo by name, on a base, with a kickoff task. Model/effort
 	 *  override the toolbar dropdowns when given (spawnWorktree applies the fallback); name
 	 *  overrides the default branch-derived terminal name. */
-	async spawnFromName(repoName: string, base: string | null, task: string, model?: string, effort?: string, name?: string): Promise<TerminalTile | null> {
+	async spawnFromName(repoName: string, base: string | null, task: string, model?: string, effort?: string, name?: string, extras: SpawnExtras = {}): Promise<TerminalTile | null> {
+		const lineage: SessionLineage = { parentSessionId: extras.parentSessionId, workstreamId: extras.workstreamId };
 		const repo = this.repos.find((r) => r.name === repoName)
 			?? this.repos.find((r) => r.name.toLowerCase() === repoName.toLowerCase());
 		if (!repo) return null;
-		if (repo.folder) return this.spawnFolder(repo, { task, model, effort, name }); // --base is meaningless here
+		if (repo.folder) return this.spawnFolder(repo, { task, model, effort, name, lineage }); // --base is meaningless here
 		const baseBranch = base ?? (defaultBranch(await listBranches(repo.path)) ?? 'main');
-		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name });
+		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name, lineage });
 	}
 
 	/** Spawn a terminal on a NAMED role, in a folder that need not be one of the floor's repos.
@@ -1438,7 +1444,7 @@ export class TerminalsGrid {
 		} else if (msg.kind === 'new-tab') {
 			void this.newTabFromKane(msg.request, id);
 		} else {
-			void this.spawnFromKane(msg.repo, msg.base, msg.task, msg.model, msg.effort, msg.name);
+			void this.spawnFromKane(msg.repo, msg.base, msg.task, msg.model, msg.effort, msg.name, spawnExtrasOf(msg));
 		}
 	}
 

@@ -18,7 +18,8 @@ export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracod
 export type OutboxMessage =
 	| { kind: 'tell'; target: string; message: string }
 	| { kind: 'watch'; target: string; note: string }
-	| { kind: 'spawn'; repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null }
+	// workstream: `spawn --workstream`, null when not given (and in drops from an older cos-coord).
+	| { kind: 'spawn'; repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null; workstream: string | null }
 	| { kind: 'rename'; target: string; name: string }
 	| { kind: 'close'; target: string }
 	| { kind: 'personality' }
@@ -26,10 +27,15 @@ export type OutboxMessage =
 	// field comes back on the receipt `cos-coord new-tab` blocks on rather than as a silent drop.
 	| { kind: 'new-tab'; request: Record<string, unknown> };
 
+/** Pure: what a parsed spawn request asks the app to record about the session it creates. */
+export function spawnExtrasOf(msg: Extract<OutboxMessage, { kind: 'spawn' }>): { workstreamId?: string } {
+	return msg.workstream ? { workstreamId: msg.workstream } : {};
+}
+
 /** Parse one god-outbox JSON message into a typed command. An untagged {target,message} is
  *  read as a tell (back-compat). Returns null on malformed / missing fields. */
 export function parseOutboxMessage(text: string): OutboxMessage | null {
-	let o: { kind?: unknown; target?: unknown; message?: unknown; note?: unknown; repo?: unknown; base?: unknown; task?: unknown; model?: unknown; effort?: unknown; name?: unknown };
+	let o: { kind?: unknown; target?: unknown; message?: unknown; note?: unknown; repo?: unknown; base?: unknown; task?: unknown; model?: unknown; effort?: unknown; name?: unknown; workstream?: unknown };
 	try { o = JSON.parse(text); } catch { return null; }
 	if (!o || typeof o !== 'object') return null;
 	const kind = typeof o.kind === 'string' ? o.kind : 'tell';
@@ -51,7 +57,8 @@ export function parseOutboxMessage(text: string): OutboxMessage | null {
 			const model = typeof o.model === 'string' && o.model.trim() ? o.model.trim() : null;
 			const effort = typeof o.effort === 'string' && o.effort.trim() ? o.effort.trim().toLowerCase() : null;
 			const name = typeof o.name === 'string' && o.name.trim() ? o.name.trim() : null;
-			return { kind: 'spawn', repo: o.repo, base, task: o.task, model, effort, name };
+			const workstream = typeof o.workstream === 'string' && o.workstream.trim() ? o.workstream.trim() : null;
+			return { kind: 'spawn', repo: o.repo, base, task: o.task, model, effort, name, workstream };
 		}
 	} else if (kind === 'rename') {
 		if (typeof o.target === 'string' && typeof o.name === 'string' && o.target.trim() && o.name.trim()) {
