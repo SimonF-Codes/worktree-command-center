@@ -46,6 +46,39 @@ describe('coord-store', () => {
     expect(core.parseBoardLine(board[board.length - 1]).status).toBe('DONE');
   });
 
+  it('a stale-break acting on an OLD read never unlinks a lock someone has since taken fresh', () => {
+    // The race the guard closes: B read holder 1's stale lock; meanwhile A broke it and created a
+    // fresh one. B's break must re-read under the guard and leave A's lock alone.
+    store.acquire(dir, 'r', holder(1), { ttlMs: 1000, waitMs: 0, now: 1000 });
+    const staleSeen = store.readHolder(dir, 'r');
+    expect(store.acquire(dir, 'r', holder(2), { ttlMs: 60000, waitMs: 0, now: 5000 }).ok).toBe(true); // A took it
+    // B now breaks with its stale view in hand: the re-read under the guard sees A's lock, not 1's.
+    expect(store.breakStale(path.join(dir, 'locks', 'r.json'), staleSeen, 5000)).toBe(false);
+    expect(store.readLocks(dir)[0].holderId).toBe(2);
+    // ...and B's own acquire, reading afresh, is refused by A's live lock.
+    const r = store.acquire(dir, 'r', holder(3), { ttlMs: 60000, waitMs: 0, now: 5000 });
+    expect(r.ok).toBe(false);
+    expect(r.holder.holderId).toBe(2);
+  });
+
+  it('the guard serialises: a held guard makes release wait, and a dead one is broken', () => {
+    store.acquire(dir, 'r', holder(1), { ttlMs: 60000, waitMs: 0, now: 1000 });
+    const guard = path.join(dir, 'locks', 'r.json.guard');
+    fs.writeFileSync(guard, 'dead');
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(guard, old, old); // a process died inside the guard a minute ago
+    expect(store.release(dir, 'r', 1)).toBe(true);
+    expect(fs.existsSync(guard)).toBe(false);
+    expect(store.readLocks(dir)).toHaveLength(0);
+  });
+
+  it('readLocks ignores guard and temp files', () => {
+    store.acquire(dir, 'r', holder(1), { waitMs: 0, now: 1 });
+    fs.writeFileSync(path.join(dir, 'locks', 'r.json.guard'), '1');
+    fs.writeFileSync(path.join(dir, 'locks', 'r.json.123-abc.tmp'), '{');
+    expect(store.readLocks(dir)).toHaveLength(1);
+  });
+
   it('different resources never contend', () => {
     expect(store.acquire(dir, 'a', holder(1), { waitMs: 0, now: 1 }).ok).toBe(true);
     expect(store.acquire(dir, 'b', holder(2), { waitMs: 0, now: 1 }).ok).toBe(true);
