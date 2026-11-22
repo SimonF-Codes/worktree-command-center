@@ -3,7 +3,17 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
-## Unreleased
+## 1.0.0 — 2026-11-22
+
+The V2 Team Floor overhaul. A workspace tab stops being a bag of worktrees and becomes a team with
+a project: sessions nested under the role that spawned them, isolation cheaper than a worktree,
+metrics that name their own source, and a CLI the UI sits on top of.
+
+**Everything new is off by default.** Each step ships behind its own setting and reverts by flipping
+that setting back, so a fresh install of 1.0.0 behaves like 0.13.0 until you turn something on. The
+one exception is `v2.recordLineage`, which defaults on and only writes fields that nothing reads
+unless the team view is enabled.
+
 
 **📊 Workstreams, metrics and the Project panel (V2 Team Floor step 11) — off by default (`v2.projectPanel`)**
 - **Workstreams carry their tasks.** `cos-coord workstream open|assign|close|reopen` and
@@ -69,6 +79,53 @@ landed on `main`.
 > **The next feature release is `1.0.0`, not `0.14.0`.** The V2 Team Floor overhaul changes the
 > shell, the unit of work and the CLI contract, so it ships as a major version. See
 > [docs/ci-cd.md](docs/ci-cd.md#versioning) for what that means for anything merged from here on.
+
+**🌳 The team view, with three sort modes (V2 Team Floor step 7) — off by default (`v2.teamView`)**
+Sessions nest under the session that spawned them, built from a persisted parent edge rather than
+from the layout. A session whose parent died, or that was made by hand, appears under **Unassigned
+with the reason it could not be placed** — a tree that silently drops rows it cannot place is worse
+than a flat list, because it looks complete. Three orderings over the same tree: **Lineage** (the
+order things were opened, never moves), **Triage** (worst state first, sorted *within* each level,
+so a blocked session pulls its branch up and still keeps its parent), and **Needs-you pinned** (a
+strip above a tree that holds completely still).
+
+**🔐 Isolation modes (V2 Team Floor step 8) — `isolation: worktree-always` by default**
+A pure `decideIsolation()` decides where a session works: its own worktree, a shared checkout
+read-only, a scratch area outside every repo, or — from step 9 — a shared checkout under a write
+lease. The authority rung sets a ceiling that is applied *before* the policy, so a role that cannot
+land code cannot be granted a repo write under any setting. Every session row carries its mode as a
+chip, and every decision is recorded in `isolation.jsonl`, because the app's own `git worktree add`
+does not pass through the coordination hook and `board.md` therefore undercounts.
+
+**🆔 Session identity and lineage (V2 Team Floor step 6) — on by default (`v2.recordLineage`)**
+Every session gets a stable `sessionId`, minted once and reused across restores — tile ids are
+reissued on every restore, so anything keyed to one breaks on restart. Sessions also record the
+session that spawned them and the workstream they serve. `cos-coord spawn` gains `--role` and
+`--workstream`, so a spawned session can run on a role other than worker-terminal, and **it now
+waits for a receipt and reports the terminal it created** instead of exiting zero and leaving the
+caller to guess.
+
+**📋 A sidebar beside the tabs (V2 UI step 2) — off by default (`v2.sidebar`)**
+Every workspace visible at once, each with its sessions beneath it, built as a second view of state
+the app already produces rather than a second source of truth. A collapsed group still rolls up its
+worst state, so collapsing never hides that something needs you.
+
+**⬆️ Taken from the fork**
+`npm run install-local` refuses to run while the app is running — it force-kills every Worktree
+Command Center process, and the app is the parent of every live session on the floor. Journal tiles
+autosave on an idle timer and flush on close instead of discarding. Links and right-click pastes no
+longer fire twice under mouse-tracking TUIs, and plain dragging selects text again.
+
+**🗂 The floor report's vault destination is no longer hardcoded**
+It joined `Personal/Code` onto the vault root unconditionally, so every workspace's report landed in
+the Personal partition whatever it described. Harmless while every workspace is personal, and a
+boundary breach the moment one is not.
+
+**🧪 The suite is honest again**
+Fifteen test files drive real git in temp directories, and under a full parallel run one
+`git worktree add` can exceed vitest's five-second default. Three separate false failures in one
+day, each in a different file, each passing on its own. Timeouts are now 60s globally: a timeout
+exists to catch a hang, and a hung pure-logic test is just as hung at 60s as at 5s.
 
 ## 0.13.0 — 2026-11-02
 

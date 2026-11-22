@@ -48,6 +48,11 @@ console.log(existsSync('private/index.ts')
 	? '[install-local] private/ overlay present — compiling it in'
 	: '[install-local] no private/ overlay — building the public app');
 
+// The suite runs BEFORE the build, so a red test costs a minute rather than the floor: this
+// script's whole hazard is that it replaces the app every live session is a child of. A released
+// installer is already gated — release.yml's windows-installer needs `validate`, which runs the
+// suite — but `install-local` never goes near that path, and it is the one a person runs by hand.
+run('npm test');
 run('npm run build');
 run(`npx electron-builder --win --config.directories.output=${OUT}`);
 
