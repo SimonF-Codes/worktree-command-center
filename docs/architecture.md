@@ -141,7 +141,10 @@ here:
 | `journals/` | the app | journal tile entries |
 
 The parent `<userData>/.coordination/` also holds `floor-report.json` / `.md`, a cross-workspace
-report (`src/terminals/floor-report.ts`), and `.god/`, Kane's own home directories.
+report (`src/terminals/floor-report.ts`), `.god/`, Kane's own home directories, and `_claims/`, the
+machine-wide write leases on shared checkouts (one `write-<sha1>.json` per checkout root; V2 step 9,
+[api.md](api.md#write-claims-the-lease-and-the-write-hook)). It is machine-wide because a checkout
+is shared across tabs while `locks/` is per workspace.
 
 **The floor feed** (snapshots, `INDEX.md`, `state.json`) is one timer and one pass, so the markdown
 and the JSON always describe the same moment. It runs while the workspace has an overseer console

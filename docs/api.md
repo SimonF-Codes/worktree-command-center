@@ -657,7 +657,11 @@ worker tiles once inherited `COS_ROLE=god` and ran with god authority.
 | `COS_TERMINAL_ID` | every session | a tile id (`0` for the primary Kane, `-N` for a duplicate). **Reissued every launch** | lock ownership within one run |
 | `COS_TERMINAL_NAME` | every session | the tile's display name | board and chat attribution |
 | `COS_ROLE` | Kane consoles only | `god` | the gate on `tell`, `watch`, `spawn`, `rename`, `close`, `personality`, `new-tab` |
-| `COS_SESSION_ID` | every terminal and Kane console | the session's `sessionId`: a uuid minted once and **stable across restarts** | the `from` on every outbox request. **Attribution only**: nothing checks it for authority |
+| `COS_SESSION_ID` | every terminal and Kane console | the session's `sessionId`: a uuid minted once and **stable across restarts** | the `from` on every outbox request (attribution only), and the **owner of a write lease** — see [Write claims](#write-claims-the-lease-and-the-write-hook) |
+| `COS_ISOLATION` | sessions with an isolation mode (repo spawns since step 8) | `worktree`, `shared-readonly`, `shared-write` or `scratch` | the write hook's **failure policy** (open for `worktree`, closed otherwise) and its rules |
+| `COS_CHECKOUT` | the same | the checkout the write gate is about: the session's worktree, or the shared checkout | the lease's checkout root |
+| `COS_CLAIMS_DIR` | the same | `<userData>/.coordination/_claims` | the machine-wide lease store |
+| `COS_ISOLATION_POLICY`, `COS_RUNG`, `COS_TASK_CLASS` | the same (rung and class only when known) | the setting, the rung ceiling and the task class | whether a `shared-readonly` session's first write may escalate |
 | `COS_COORD_TELL_WAIT_MS` / `_CLOSE_WAIT_MS` / `_SPAWN_WAIT_MS` / `_NEW_TAB_WAIT_MS` | (caller's override) | milliseconds | how long the verb blocks for the app's receipt. Default 45 s (new-tab: its own) |
 
 ### Verb register
@@ -673,6 +677,8 @@ sender's `COS_SESSION_ID`, or `null`). Verbs that block read `god-outbox/.receip
 | `rename <target> --to "…"` | no | `target`, `name` | 0 |
 | `close <target>` | yes | `target` | 0 closed · 2 refused or not confirmed |
 | `personality` | no | — | 0 |
+| `lease` | no | (no request: reads `_claims/`) | 0 |
+| `lease release` | no | (no request: releases this session's lease) | 0 released · 2 refused — dirty checkout, no lease held, or not an app session |
 | `new-tab "<tab>" …` | yes | see [new-tab](#new-tab-a-workspace-tab-bound-to-a-repo) | see its [exit codes](#exit-codes-both-clis) |
 
 ### `spawn`
@@ -691,9 +697,9 @@ cos-coord spawn "<repo>" --task "<first instruction>" [--base <branch>] [--model
   otherwise unused for now.
 - `--class`, `--writes`, `--isolation`: the session's isolation intent — see
   [Isolation modes](#isolation-modes). Passed through as given; junk reads as absent. They change
-  nothing unless `config.json` `isolation` is `cheap-readonly`, except that `--isolation
-  shared-write` is always refused (exit 2), and an `observer`/`proposer` role is held to its rung
-  ceiling under every policy (below).
+  nothing under the default `worktree-always` setting, except that an `observer`/`proposer` role
+  is held to its rung ceiling under every policy (below). `--isolation shared-write` is refused
+  (exit 2) under every setting but `cheapest-safe`.
 
 It **confirms before returning**. Success prints the new terminal, its branch and its session id:
 
@@ -744,14 +750,25 @@ Folder targets are not decided: they run in the folder, as always.
 | `worktree` | `wt` | its own branch and worktree | always — every repo write |
 | `shared-readonly` | `ro` | the repo's existing checkout; writes nothing | under `cheap-readonly`, and for a read-only rung always |
 | `scratch` | `scr` | `<coordDir>/scratch/<sessionId>`, outside every target | under `cheap-readonly`, and for a read-only rung always |
-| `shared-write` | `rw🔒` | the existing checkout, holding a write lease | **never** — needs the step-9 lease store and write hook |
+| `shared-write` | `rw🔒` | the existing checkout, holding its exclusive write lease | under `cheapest-safe` only, never to a read-only rung |
 
 `config.json` `isolation`: `"worktree-always"` (the default, and the rollback: every spawn gets
-a worktree, exactly as before, unless its role is a read-only rung) or `"cheap-readonly"`. Any other value reads as the default.
+a worktree, exactly as before, unless its role is a read-only rung), `"cheap-readonly"`, or
+`"cheapest-safe"`. Any other value reads as the default. It is read when the app starts.
 
 ```json
-{ "isolation": "cheap-readonly" }
+{ "isolation": "cheapest-safe" }
 ```
+
+Under `cheapest-safe`, a repo write by `small-fix`, `config`, `investigate`, `doc` or `release`
+work gets `shared-write` on the repo's own checkout, and the app takes the checkout's write lease
+**before the session exists**. `feature` work always gets a worktree. A checkout someone else
+holds makes it a worktree instead (FR-12); only a `release` and an explicit `--isolation
+shared-write` are refused, naming the holder and the path. If another session takes the lease
+between the decision and the take, the spawn is decided again and gets a worktree (or, for a
+release, the refusal). A worktree session's claim is on its own path, so it never blocks
+`shared-write` in the primary (Q9). **Rolling back** to `cheap-readonly` needs no cleanup: no new
+lease is granted, and the existing ones expire on their own within their 10-minute TTL.
 
 The intent: `--class` is one of `feature` (default), `small-fix`, `config`, `investigate`,
 `doc`, `release`. `--writes` defaults from the class — `investigate` → `none`, `doc` →
@@ -765,12 +782,83 @@ for it, and an explicit `--writes repo` is **refused**, naming the role and the 
 carry no `isolation:` key. A refusal is a spawn receipt with `ok: false` whose reason names a
 holder and a path.
 
-A `ro`/`scr` session is told its mode in its prompt (a Session facts line). Nothing **enforces**
-it yet — the Edit/Write hook is step 9 — and its record carries `folder: true`, so closing it
-never removes the checkout or deletes a branch.
+A `ro`/`scr`/`rw` session is told its mode in its prompt (a Session facts line), and since step 9
+the write hook **enforces the file-tool half** of it — see [Write claims](#write-claims-the-lease-and-the-write-hook),
+including what it cannot see. Its record carries `folder: true`, so closing it never removes the
+checkout or deletes a branch.
 
 Every decision is appended to `<coordDir>/isolation.jsonl`, one JSON object per line: `ts`,
 `repo`, `checkout`, `taskClass`, `writes`, `requested`, `policy`, `rungCeiling`, `role`,
 `ok`, then `mode` or `holder` + `path`, `reason`, and once known `sessionId` and `cwd` (or
 `failed` when the grant could not be carried out). It exists because the app's own `git worktree
 add` does not pass through the coordination hook, so `board.md` undercounts worktree creation.
+
+
+### Write claims: the lease and the write hook
+
+V2 step 9. Two parts, one store.
+
+**The store** is `<userData>/.coordination/_claims/` — **machine-wide**, beside the per-workspace
+coordination directories, because a checkout is shared across tabs while `locks/` is per
+workspace. One file per **checkout root**, `write-<sha1(checkout id)>.json`, created with the same
+exclusive `wx` write every coordination lock uses (`pty-sidecar/claims-store.cjs`, built on
+`coord-store.cjs` `acquireAt`). Never per path: two path-prefix claims are two files, and both
+creates would succeed. The payload:
+
+```jsonc
+{ "v": 1, "resource": "write:c:/dev/app", "checkoutId": "c:/dev/app", "path": "C:\\dev\\app",
+  "sessionId": "3f0c…e21a", "holderId": "3f0c…e21a", "holder": "fix-auth", "mode": "shared-write",
+  "reason": "small-fix", "pid": 1234, "ts": 1763800000000, "ttlMs": 600000 }
+```
+
+A claim is a **lease**: the holder's PostToolUse hook re-stamps `ts` after every file-tool write.
+A session that stops writing — dead, or just quiet — goes stale 10 minutes after its last write,
+by the same rule as every lock (`lockStatus`), and a stale lease is free to take. Every unlink and
+in-place rewrite of a lock or claim happens under a short `wx` guard that re-reads first, so a
+stale takeover can never delete a lease someone has just taken fresh.
+
+**The hook** is `coord-hook.cjs --write`, on `Edit|Write|MultiEdit|NotebookEdit` (PreToolUse; and
+`--write --renew` on PostToolUse). For each write it reads every claim and decides
+(`claims-core.cjs` `decideWrite`):
+
+| the session | writing | answer |
+| --- | --- | --- |
+| any | inside a checkout another session holds a **live** lease on | **deny**, naming the holder and the path |
+| `shared-write` | its checkout | take or renew its lease, then allow |
+| `shared-readonly`, under `cheapest-safe`, write rung, not `feature` | its checkout | **escalate**: take the lease if free (allow), else deny naming the holder |
+| `shared-readonly`, otherwise | its checkout | **deny** — stop, and be respawned in a worktree |
+| `scratch` | the checkout it came from | **deny** |
+| `shared-*` / `scratch` | a nested worktree (`.claude-worktrees/`) of its checkout | **deny** — another session's worktree |
+| `shared-*` / `scratch` | outside its checkout | allow |
+| `worktree` / no mode | its own checkout | allow |
+
+Every denial says what to do: stop, do not work around it with a shell command, and ask to be
+respawned in a worktree (or wait for the lease).
+
+**Two failure policies, chosen in one place.** `coord-hook.cjs` `failurePolicyFor(COS_ISOLATION)`:
+a `worktree` session (or one with no mode) is **fail-open** — a broken store allows its write, as
+the Bash and Task hooks always have. A `shared-readonly`, `shared-write` or `scratch` session (or
+an unrecognised mode) is **fail-closed**: an unreadable or missing store, a corrupt claim file, a
+bad environment, a module that will not load or any thrown error **denies** the write. For those
+sessions the hook is the only guard on a real checkout. The hook never creates `_claims/`; the
+app does, at start.
+
+**Release.** A session's leases are released when its tile closes — **only from a clean checkout**
+(`git status --porcelain` empty). A dirty one keeps its lease, the app says so, and the lease then
+expires by its TTL. `cos-coord lease release` gives a lease up early under the same rule, and exits
+2 when it releases nothing. `cos-coord lease` (and `status`) lists every lease on the machine.
+
+**Moves.** A live lease inside a repo refuses its Move and its relayout (`live-lease`), as a live
+terminal does; an unreadable store refuses too. Stale leases are re-pointed with the rest of the
+move (`remapPath`, the same rewrite the sessions file gets).
+
+> [!warning] This is a cooperative guarantee, not a sandbox
+> The hook sees **Claude's file tools** — Edit, Write, MultiEdit, NotebookEdit — which are nearly
+> all of a session's edits. It **cannot** see a write that is not a file tool: a shell redirect
+> (`echo x > file`), a formatter, an install, a build script, a `git checkout`. Nothing at the OS
+> level stops a session from writing a shared checkout. Three mitigations, all partial: the
+> session's role text forbids shell writes in the shared modes; a release is refused while the
+> checkout is dirty, which is where a write the hook missed gets noticed; and the git hook still
+> guards `push` and `worktree add`. Like the rest of the coordination layer, it holds between
+> sessions that follow it. **Do not treat a shared checkout as protected from a session that
+> ignores its instructions.**
