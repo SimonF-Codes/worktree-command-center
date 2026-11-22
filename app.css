@@ -442,6 +442,17 @@ html, body {
 }
 .wcc-sb-tool:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
 .wcc-sb-tool:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: -1px; }
+/* The tab strip's × close, on the workspace header. Shown on hover or keyboard focus; opacity
+   rather than visibility so it stays in the tab order and :focus-within can reveal it. */
+.wcc-sb-close {
+	flex: 0 0 auto; padding: 0 3px; background: transparent; border: 0; border-radius: 3px;
+	color: var(--text-faint); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; opacity: 0;
+}
+.wcc-sb-head:hover .wcc-sb-close, .wcc-sb-head:focus-within .wcc-sb-close { opacity: 1; }
+.wcc-sb-close:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.wcc-sb-close:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: 0; }
+/* The tab strip's + add and ↩ Recently closed, at the foot of the sidebar. */
+.wcc-sb-foot { display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 8px 0; margin-top: 4px; border-top: 1px solid var(--background-modifier-border); }
 .wcc-sb-ws { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wcc-sb-counts { flex: 0 0 auto; display: flex; gap: 6px; font-size: 11px; font-weight: 400; color: var(--text-faint); font-family: var(--font-monospace); }
 .wcc-sb-count.needs { color: var(--text-normal); }

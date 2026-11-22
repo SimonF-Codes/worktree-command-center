@@ -1,5 +1,5 @@
 import type { RoleLookup } from '../core/delegation';
-import { applyCollapseAll, buildSidebar, collapseAllAction, liveRanks, parseTeamSort, ResortClock, sidebarSignature, TEAM_SORTS, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from './sidebar-model';
+import { applyCollapseAll, buildSidebar, canCloseWorkspace, collapseAllAction, liveRanks, recentlyClosedLabel, parseTeamSort, ResortClock, sidebarSignature, TEAM_SORTS, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from './sidebar-model';
 
 export interface SidebarDeps {
 	/** The workspaces, in tab order — the same list the tab strip draws. */
@@ -7,6 +7,14 @@ export interface SidebarDeps {
 	activeId: () => string;
 	/** A workspace header was clicked: switch to it — what a tab click does. */
 	onSwitch: (workspaceId: string) => void;
+	/** The × on a workspace header (shown on hover/focus, never on the last workspace). */
+	onClose: (workspaceId: string) => void;
+	/** The footer's + add — what the tab strip's + add does. */
+	onAdd: () => void;
+	/** How many closed workspaces sit in the archive; the footer's Recently closed hides at zero. */
+	closedCount: () => number;
+	/** Open the Recently closed picker. */
+	onRecentlyClosed: () => void;
 	/** One workspace's floor: its grid's floorState() and whether its sessions are restored yet.
 	 *  Null when the workspace has no grid. */
 	floor: (workspaceId: string) => { live: boolean; sessions: SidebarSession[]; lineage?: SidebarLineage[]; proposals?: Record<string, number> } | null;
@@ -75,23 +83,41 @@ export class Sidebar {
 		const ranks = teamView && this.sort !== 'lineage' ? this.clock.ranks(liveRanks(inputs), Date.now()) : undefined;
 		const delegation = teamView ? this.deps.delegation?.() : undefined;
 		const groups = buildSidebar(inputs, this.collapsed, { teamView, sort: this.sort, ranks, delegation });
-		const sig = `${teamView ? this.sort : 'flat'}|${sidebarSignature(groups)}`;
+		const closed = this.deps.closedCount();
+		const sig = `${teamView ? this.sort : 'flat'}|${closed}|${sidebarSignature(groups)}`;
 		if (sig === this.lastSig) return; // nothing shown changed → leave the DOM (and hover) alone
 		this.lastSig = sig;
-		this.render(groups, teamView);
+		this.render(groups, teamView, closed);
 	}
 
-	private render(groups: SidebarGroup[], teamView: boolean): void {
+	private render(groups: SidebarGroup[], teamView: boolean, closed: number): void {
 		const el = this.el!;
 		const scroll = el.scrollTop;
 		el.empty();
 		this.tools(el, groups);
 		if (teamView) this.sortControl(el);
-		for (const g of groups) this.renderGroup(el, g);
+		const closable = canCloseWorkspace(groups.length);
+		for (const g of groups) this.renderGroup(el, g, closable);
+		this.footer(el, closed);
 		el.scrollTop = scroll;
 	}
 
-	private renderGroup(parent: HTMLElement, g: SidebarGroup): void {
+	/** The tab strip's + add and ↩ Recently closed, so the sidebar can stand in for it. */
+	private footer(parent: HTMLElement, closed: number): void {
+		const foot = parent.createDiv({ cls: 'wcc-sb-foot' });
+		const add = foot.createEl('button', { cls: 'wcc-sb-tool', text: '+ add', attr: { type: 'button', title: 'Add a workspace' } });
+		add.addEventListener('click', () => this.deps.onAdd());
+		const label = recentlyClosedLabel(closed);
+		if (label) {
+			const recent = foot.createEl('button', {
+				cls: 'wcc-sb-tool', text: label,
+				attr: { type: 'button', title: 'Reopen a closed workspace — its terminals come back saved, not started' },
+			});
+			recent.addEventListener('click', () => this.deps.onRecentlyClosed());
+		}
+	}
+
+	private renderGroup(parent: HTMLElement, g: SidebarGroup, closable: boolean): void {
 		const box = parent.createDiv({ cls: 'wcc-sb-group' });
 		box.toggleClass('active', g.active);
 		const head = box.createDiv({ cls: 'wcc-sb-head', attr: { role: 'button', tabindex: '0', title: `Switch to ${g.name}` } });
@@ -114,6 +140,13 @@ export class Sidebar {
 			const c = head.createSpan({ cls: 'wcc-sb-counts' });
 			if (g.counts.needs) c.createSpan({ cls: 'wcc-sb-count needs', text: `⏳${g.counts.needs}` });
 			if (g.counts.done) c.createSpan({ cls: 'wcc-sb-count', text: `✓${g.counts.done}` });
+		}
+		if (closable) {
+			const x = head.createEl('button', {
+				cls: 'wcc-sb-close', text: '×',
+				attr: { type: 'button', 'aria-label': `Close ${g.name}`, title: `Close ${g.name}` },
+			});
+			this.ownButton(x, () => this.deps.onClose(g.id));
 		}
 		const go = (): void => this.deps.onSwitch(g.id);
 		head.addEventListener('click', go);

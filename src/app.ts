@@ -517,6 +517,10 @@ async function main(): Promise<void> {
 			workspaces: () => workspaces,
 			activeId: () => activeId,
 			onSwitch: (id) => void switchTo(id),
+			onClose: (id) => void onClose(id),
+			onAdd: () => void onAdd(),
+			closedCount: () => closedWorkspaces.length,
+			onRecentlyClosed: () => void onRecentlyClosed(),
 			floor: (id) => {
 				const g = grids.get(id);
 				if (!g) return null;
@@ -933,7 +937,7 @@ async function main(): Promise<void> {
 			}
 			gridFor(r.id);
 			persist();
-			bar.refresh();
+			bar.refresh(); sidebar.refresh();
 			return r.id;
 		}
 
@@ -1041,7 +1045,7 @@ async function main(): Promise<void> {
 			// The toolbar state rides on the tombstone, so pruning the live map still just drops a
 			// dead id rather than throwing the selection away.
 			workspaceToolbars = pruneToolbars(workspaceToolbars, workspaces.map((w) => w.id));
-			if (id === activeId) { void switchTo(target); } else { persist(); bar.refresh(); }
+			if (id === activeId) { void switchTo(target); } else { persist(); bar.refresh(); sidebar.refresh(); }
 			// The near-range half of restore: an Undo right where the misclick happened. Hovering
 			// holds the toast open, and clicking Undo twice is a no-op (takeClosedWorkspace).
 			toast(`Closed "${entry.name}"`, 'info', {
@@ -1070,7 +1074,7 @@ async function main(): Promise<void> {
 			if (entry.toolbar) workspaceToolbars = setToolbarState(workspaceToolbars, id, entry.toolbar);
 			gridFor(id);
 			persist();
-			bar.refresh();
+			bar.refresh(); sidebar.refresh();
 			toast(movedTiles
 				? `Restored "${entry.name}" — its terminals are saved, not started. Open the tab to resume them.`
 				: `Restored "${entry.name}" — it had no saved terminals.`, 'success');
@@ -1203,7 +1207,7 @@ async function main(): Promise<void> {
 			const onDisk = await TerminalsGrid.remapSessionPaths(sessionsFile, map, caseInsensitive);
 			persist();
 			await configWriter.idle();
-			bar.refresh();
+			bar.refresh(); sidebar.refresh();
 			const back = await window.wcc.getConfig().catch(() => ({}));
 			const saved: RepoConfig[] = Array.isArray(back.repos) ? back.repos : [];
 			if (!saved.some((r) => samePath(r.path, toPath, caseInsensitive)) || (retargets && saved.some((r) => samePath(r.path, fromPath, caseInsensitive)))) {
@@ -1344,7 +1348,7 @@ async function main(): Promise<void> {
 			repos = forgetRepo(repos, r.path);
 			grids.forEach((g, id) => g.setRepos(reposForWorkspace(repos, id)));
 			persist();
-			bar.refresh();
+			bar.refresh(); sidebar.refresh();
 			statusSpan.textContent = `${repos.length} targets`;
 			toast(`Forgot ${r.name}`, 'success');
 		}

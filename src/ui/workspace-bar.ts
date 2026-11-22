@@ -1,4 +1,5 @@
 import type { Workspace } from '../terminals/workspace-store';
+import { canCloseWorkspace, recentlyClosedLabel } from './sidebar-model';
 
 export interface WorkspaceBarDeps {
 	list: () => Workspace[];
@@ -37,7 +38,7 @@ export class WorkspaceBar {
 			const title = this.deps.title?.(w);
 			if (title) tab.setAttribute('title', title);
 			tab.addEventListener('click', () => this.deps.onSwitch(w.id));
-			if (list.length > 1) {
+			if (canCloseWorkspace(list.length)) {
 				const x = tab.createEl('button', { cls: 'wcc-tab-close', text: '×', attr: { title: `Close ${w.name}` } });
 				x.addEventListener('click', (e) => { e.stopPropagation(); this.deps.onClose(w.id); });
 			}
@@ -45,10 +46,10 @@ export class WorkspaceBar {
 		const add = this.el.createEl('button', { cls: 'wcc-tab-add', text: '+ add' });
 		add.addEventListener('click', () => this.deps.onAdd());
 
-		const closed = this.deps.closedCount();
-		if (closed > 0) {
+		const recentLabel = recentlyClosedLabel(this.deps.closedCount());
+		if (recentLabel) {
 			const recent = this.el.createEl('button', {
-				cls: 'wcc-tab-add wcc-tab-recent', text: `↩ Recently closed (${closed})`,
+				cls: 'wcc-tab-add wcc-tab-recent', text: recentLabel,
 				attr: { title: 'Reopen a closed workspace — its terminals come back saved, not started' },
 			});
 			recent.addEventListener('click', () => this.deps.onRecentlyClosed());

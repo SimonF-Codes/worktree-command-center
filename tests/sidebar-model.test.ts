@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyCollapseAll, buildSidebar, collapseAllAction, dotFor, liveRanks, parseSidebarEnabled, parseTeamSort, parseTeamView, rankKey, ResortClock, RESORT_MS, sidebarSignature, OVERSEER_ID, TEAM_SORTS, type DotState, type SidebarLineage, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from '../src/ui/sidebar-model';
+import { applyCollapseAll, buildSidebar, canCloseWorkspace, collapseAllAction, recentlyClosedLabel, dotFor, liveRanks, parseSidebarEnabled, parseTeamSort, parseTeamView, rankKey, ResortClock, RESORT_MS, sidebarSignature, OVERSEER_ID, TEAM_SORTS, type DotState, type SidebarLineage, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from '../src/ui/sidebar-model';
 
 const s = (id: number, state: string, over: Partial<SidebarSession> = {}): SidebarSession =>
 	({ id, name: `t${id}`, branch: `wt/${id}`, state, remoteOn: false, ...over });
@@ -356,5 +356,17 @@ describe('collapse all / expand all', () => {
 		const groups = buildSidebar([ws('a', [s(1, 'prompt')]), ws('b', [s(2, 'running')])], applyCollapseAll(['a', 'b'], new Set()));
 		expect(groups.map((g) => g.collapsed)).toEqual([true, true]);
 		expect(groups.map((g) => g.worst)).toEqual(['needs', 'running']);
+	});
+});
+
+describe('the tab strip affordances the sidebar also offers', () => {
+	it('allows closing a workspace only while it is not the last one', () => {
+		expect(canCloseWorkspace(0)).toBe(false);
+		expect(canCloseWorkspace(1)).toBe(false);
+		expect(canCloseWorkspace(2)).toBe(true);
+	});
+	it('shows Recently closed only when something was closed', () => {
+		expect(recentlyClosedLabel(0)).toBeNull();
+		expect(recentlyClosedLabel(3)).toBe('↩ Recently closed (3)');
 	});
 });

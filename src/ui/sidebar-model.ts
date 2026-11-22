@@ -308,3 +308,14 @@ export function collapseAllAction(groupIds: readonly string[], collapsed: Readon
 export function applyCollapseAll(groupIds: readonly string[], collapsed: ReadonlySet<string>): Set<string> {
 	return collapseAllAction(groupIds, collapsed) === 'collapse' ? new Set(groupIds) : new Set();
 }
+
+/** The tab strip's rules for its own affordances, shared with the sidebar so the two can never
+ *  disagree. A workspace can be closed only while it is not the last one. */
+export function canCloseWorkspace(workspaceCount: number): boolean {
+	return workspaceCount > 1;
+}
+
+/** The Recently closed button's label, or null to hide it — it hides at zero. */
+export function recentlyClosedLabel(closedCount: number): string | null {
+	return closedCount > 0 ? `↩ Recently closed (${closedCount})` : null;
+}
