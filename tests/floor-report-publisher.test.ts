@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as path from 'path';
 import {
 	FloorReportPublisher, writeReportPair, vaultReportTarget, vaultWriteDue, writeVaultReport, VAULT_WRITE_MIN_INTERVAL_MS,
+	isVaultPartition, DEFAULT_REPORT_PARTITION,
 	type PublishFs, type VaultFs,
 } from '../src/terminals/floor-report-publisher';
 import { buildFloorReport, renderFloorReport, type FloorReport } from '../src/terminals/floor-report';
@@ -97,6 +98,39 @@ describe('vaultReportTarget', () => {
 		expect(vaultReportTarget('C:/roles')).toBeNull();
 		expect(vaultReportTarget('C:/Vault/agents')).toBeNull();
 		expect(vaultReportTarget('C:/Vault/_meta/agents/extra')).toBeNull();
+	});
+
+	// B1: the partition was hardcoded to Personal/Code, so every workspace's report landed in the
+	// Personal partition whatever it described. Nothing leaked while every workspace was personal.
+	// The moment a work-scoped one exists, its report crosses a boundary the vault's own roles are
+	// each forbidden to cross — so the destination is now the caller's to state, and the default
+	// keeps today's behaviour exactly.
+	it('puts the report where the caller says, and defaults to the old hardcoded partition', () => {
+		expect(vaultReportTarget(LIB)!.dir).toBe(vaultReportTarget(LIB, DEFAULT_REPORT_PARTITION)!.dir);
+		expect(vaultReportTarget(LIB, 'Work/Code')!.dir).toBe(path.join('C:/Users/me/OneDrive/Documents/Vault', 'Work', 'Code'));
+		expect(vaultReportTarget(LIB, 'Work')!.markdown).toBe(path.join('C:/Users/me/OneDrive/Documents/Vault', 'Work', 'Floor Report.md'));
+		expect(vaultReportTarget(LIB, ' /Work/Code/ ')!.dir).toBe(path.join('C:/Users/me/OneDrive/Documents/Vault', 'Work', 'Code'));
+		expect(vaultReportTarget(LIB, 'Work\\Code')!.dir).toBe(path.join('C:/Users/me/OneDrive/Documents/Vault', 'Work', 'Code'));
+	});
+
+	it('refuses a partition that would escape the vault root rather than writing outside it', () => {
+		for (const bad of ['..', '../Elsewhere', 'Work/../../Elsewhere', '.', './Work', 'C:/Elsewhere', '', '   ', '//', 'Work//Code']) {
+			expect(vaultReportTarget(LIB, bad)).toBeNull();
+		}
+	});
+});
+
+describe('isVaultPartition', () => {
+	it('accepts a relative folder under the vault, at any depth', () => {
+		for (const ok of ['Personal/Code', 'Work', 'Work/Code', 'a/b/c', ' Work/Code ', 'Work\\Code', '/Work/Code/']) {
+			expect(isVaultPartition(ok)).toBe(true);
+		}
+	});
+
+	it('rejects anything absolute, climbing, or empty', () => {
+		for (const bad of ['', '   ', '..', '.', '../x', 'x/../..', 'x/./y', 'C:/x', 'c:\\x', 'x//y']) {
+			expect(isVaultPartition(bad)).toBe(false);
+		}
 	});
 });
 
