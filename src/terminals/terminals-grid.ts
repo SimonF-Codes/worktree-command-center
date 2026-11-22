@@ -49,7 +49,9 @@ import { releaseRefusal } from '../../pty-sidecar/claims-core.cjs';
 import { loadRoleAuthority } from './role-loader';
 import { sessionRoleSlug } from './role-library';
 import { appendIsolationRecord } from './isolation-log';
-import { SessionChannel, type SpawnedInfo } from './session-channel';
+import { SessionChannel, readProposals, type SpawnedInfo } from './session-channel';
+import type { SpawnProposal } from '../core/proposals';
+import type { RoleLookup } from '../core/delegation';
 import { delegationLookup } from './delegation-roles';
 import type { FloorSession, SpawnPlan } from '../core/session-requests';
 
@@ -1483,6 +1485,19 @@ export class TerminalsGrid {
 		});
 		if (this.godConsole) out.unshift({ key: -1, sessionId: this.godConsole.sessionId, role: 'alpha', name: this.overseerName });
 		return out;
+	}
+
+	/** Every spawn proposal in this workspace's coordination directory, folded (read-only). */
+	spawnProposals(): SpawnProposal[] { return readProposals(this.coordDir); }
+
+	/** The active role files, as delegation reads them (cached, see delegation-roles.ts). */
+	delegationRoles(): RoleLookup { return delegationLookup(this.deps.roleLibrary?.path); }
+
+	/** The sessionId behind a tile id (-1 = the overseer console), for opening a Manager view. */
+	sessionIdOfTile(tileId: number): string | undefined {
+		if (tileId === -1) return this.godConsole?.sessionId;
+		const t = this.allSessions().find((x) => x.tileId === tileId && !x.isJournal) as TerminalTile | undefined;
+		return t?.sessionId;
 	}
 
 	private armSessionChannel(): void {

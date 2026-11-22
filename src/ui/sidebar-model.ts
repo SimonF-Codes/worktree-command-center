@@ -32,6 +32,9 @@ export interface SidebarWorkspaceInput {
 	/** The grid's sessionLineage() — identity, role and parent edge per tile. Read only with the
 	 *  team view on. A session with no entry here is still shown, as unassigned. */
 	lineage?: SidebarLineage[];
+	/** `v2.managers` on: open spawn proposals per addressee sessionId (manager-model
+	 *  openProposalCounts) — FR-53's count on the parent's row. Read with the team view only. */
+	proposals?: Readonly<Record<string, number>>;
 }
 
 /** The subset of a sessionLineage() row the team view reads. */
@@ -51,6 +54,8 @@ export interface SidebarRow {
 	overseer: boolean;
 	/** ★ — the session's role file declares `spawns:` (team view with `v2.managers` on only). */
 	manager: boolean;
+	/** Open spawn proposals addressed to this session (◆N). 0 outside the team view. */
+	proposals: number;
 }
 
 export interface SidebarSection { bucket: Bucket; title: string; rows: SidebarRow[]; }
@@ -200,6 +205,7 @@ function toRow(s: SidebarSession): SidebarRow {
 		chips: s.remoteOn ? ['remote'] : [],
 		overseer: s.id === OVERSEER_ID,
 		manager: false,
+		proposals: 0,
 	};
 }
 
@@ -232,7 +238,9 @@ export function buildTeamView(w: SidebarWorkspaceInput, opts: Pick<SidebarOption
 	const pinned: PinnedLine[] = [];
 	const flatten = (nodes: readonly TeamNode[], depth: number, out: TeamLine[], context: string, reasonOf?: (n: TeamNode) => string): TeamLine[] => {
 		for (const n of nodes) {
-			const row = n.manager ? { ...rows.get(n.session.key)!, manager: true } : rows.get(n.session.key)!;
+			const base = rows.get(n.session.key)!;
+			const open = w.proposals?.[n.session.sessionId] ?? 0;
+			const row = n.manager || open ? { ...base, manager: n.manager === true, proposals: open } : base;
 			const reason = reasonOf?.(n);
 			out.push({ row, depth, ...(reason ? { reason } : {}) });
 			if (sort === 'pinned' && BUCKET_OF[rankedDot(n.session.key)] === 'needs') pinned.push({ row, context });
