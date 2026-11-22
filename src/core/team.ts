@@ -13,13 +13,17 @@
 // UNASSIGNED is a first-class group: every session handed in comes back out exactly once. A tree
 // that silently drops the rows it cannot place looks complete and is not.
 //
-// Step 10 (`v2.managers`, passed in as `delegation`): every edge below a non-overseer parent is
-// checked by core/delegation.ts checkDelegation against the two sessions' ROLE FILES. An edge the
-// parent could not have made confers nothing — the child lands in UNASSIGNED with the refusal as
-// its reason. The ★ manager mark comes from `spawns:` alone: a manager with no children keeps it,
-// and a session with children it was not permitted to spawn never gets one. Edges FROM the
-// overseer are not checked: it spawns through its own channel, which this step leaves exactly as
-// it was (Alpha's role file has no `spawns:` yet, and giving it one is the Custodian's call).
+// Step 10 (`v2.managers`, passed in as `delegation`): every edge is checked by core/delegation.ts
+// checkDelegation against the two sessions' ROLE FILES — edges from the overseer included, against
+// Alpha's role file like anyone else's. An edge the parent could not have made confers nothing —
+// the child lands in UNASSIGNED with the refusal as its reason. The ★ manager mark comes from
+// `spawns:` alone: a manager with no children keeps it, and a session with children it was not
+// permitted to spawn never gets one.
+//
+// The overseer still SPAWNS through its own channel, unchecked (cos-coord spawn from a console
+// opens whatever role it names); what is checked here is whether the edge confers a place under
+// it. So a session the overseer opened on a role outside its `spawns:` still runs, and shows in
+// UNASSIGNED saying why. An overseer whose role file declares no `spawns:` places no children.
 //
 // Deliberately absent (step 11): workstreams — so a dead parent's children land in UNASSIGNED here
 // rather than under a vacant workstream.
@@ -113,7 +117,7 @@ export function buildTeam(sessions: readonly TeamSession[], opts: TeamOptions = 
 		if (isOverseer(s)) { overseers.push(n); continue; }
 		const p = parentOf(s);
 		// An invalid edge confers nothing: the child is unassigned, with the refusal as the reason.
-		const edge = p && lookup && !isOverseer(p) ? checkDelegationBySlug(lookup, p.role, s.role) : null;
+		const edge = p && lookup ? checkDelegationBySlug(lookup, p.role, s.role) : null;
 		if (edge && !edge.ok) { unassigned.push(Object.assign(n, { reason: 'outside-delegation' as const, detail: edge.reason })); continue; }
 		if (p) { nodes.get(p)!.children.push(n); unplaced.add(s); continue; }
 		const reason: UnassignedReason = !s.parentSessionId ? 'no-parent'

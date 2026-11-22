@@ -7,7 +7,8 @@ import { buildManagerView, openProposalCounts, DECIDED_SHOWN, type ManagerFloorS
 import { buildSidebar, OVERSEER_ID, type SidebarSession } from '../src/ui/sidebar-model';
 
 const lookup = lookupFrom([
-	{ slug: 'alpha', authority: 'operator', spawns: [] },
+	// The overseer's edges are checked too (team.ts), so its spawns: covers what sits under it here.
+	{ slug: 'alpha', authority: 'operator', spawns: ['team-lead', 'worker-terminal', 'researcher'] },
 	{ slug: 'team-lead', authority: 'operator', spawns: ['worker-terminal', 'researcher'] },
 	{ slug: 'worker-terminal', authority: 'operator', spawns: [] },
 	{ slug: 'researcher', authority: 'proposer', spawns: [] },
@@ -73,7 +74,8 @@ describe('FR-53: the open-proposal count on the addressee\'s sidebar row', () =>
 		const ss: SidebarSession[] = [{ id: OVERSEER_ID, name: 'Alpha', branch: '', state: 'running', remoteOn: false }, { id: 1, name: 'Lead', branch: '', state: 'idle', remoteOn: false }];
 		const lineage = [{ tileId: OVERSEER_ID, sessionId: 'kane', role: 'alpha' }, { tileId: 1, sessionId: 'lead', role: 'team-lead', parentSessionId: 'kane' }];
 		const [g] = buildSidebar([{ id: 'w', name: 'w', active: true, live: true, sessions: ss, lineage, proposals: { lead: 2 } }], new Set(), { teamView: true, delegation: lookup });
-		expect(g!.team!.tree.map((l) => [l.row.name, l.row.manager, l.row.proposals])).toEqual([['Alpha', false, 0], ['Lead', true, 2]]);
+		// Alpha's ★ is its role file's spawns:, like anyone's; the ◆ count is Lead's alone.
+		expect(g!.team!.tree.map((l) => [l.row.name, l.row.manager, l.row.proposals])).toEqual([['Alpha', true, 0], ['Lead', true, 2]]);
 	});
 });
 
