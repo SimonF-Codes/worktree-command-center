@@ -1,5 +1,5 @@
 'use strict';
-// cos-coord <status|acquire|release|note> — agents call this from Bash.
+// cos-coord <status|acquire|release|note|workstream|…> — agents call this from Bash.
 // Fail-open: unexpected errors exit 0 (allow). A timed-out acquire exits 1
 // (the lock is working — the && chain should stop). watch/rename/close/personality/new-tab
 // are GOD-only: called without COS_ROLE=god they exit 2 (a refusal is a failure, not a silent
@@ -136,6 +136,37 @@ function lease(dir, resource) {
   process.exit(0);
 }
 
+// `cos-coord workstream …` — append one event to <coordDir>/workstreams.jsonl (or list them). The
+// read, the plan and the append happen under the store's guard, so two concurrent `open`s cannot
+// both mint ws-4: ids are numbered from what is on disk at the moment of writing.
+function workstream(dir, argv) {
+  const fs = require('fs');
+  const wsCore = require('./workstreams-core.cjs');
+  const i = argv.indexOf('--dir');
+  if (i >= 0) { dir = argv[i + 1]; argv = [...argv.slice(0, i), ...argv.slice(i + 2)]; }
+  if (!dir) { console.error('coord: workstream needs COS_COORD_DIR (run it from a session the app opened) or --dir <coordination dir>'); process.exit(2); }
+  const file = path.join(dir, 'workstreams.jsonl');
+  const read = () => { try { return fs.readFileSync(file, 'utf8'); } catch { return ''; } };
+  if (argv[0] === 'list') {
+    const now = Date.now();
+    const all = wsCore.foldWorkstreams(read());
+    const shown = argv.includes('--all') ? all : all.filter((w) => w.state === 'open');
+    if (argv.includes('--json')) { console.log(JSON.stringify(shown, null, 2)); process.exit(0); }
+    console.log(shown.length ? shown.map((w) => wsCore.formatWorkstream(w, now)).join('\n') : `coord: no ${argv.includes('--all') ? '' : 'open '}workstreams in this workspace`);
+    process.exit(0);
+  }
+  const actor = env('COS_SESSION_ID', '') || env('COS_TERMINAL_NAME', '') || null;
+  fs.mkdirSync(dir, { recursive: true });
+  const r = store.withGuard(file, () => {
+    const p = wsCore.planWorkstreamCommand(argv, wsCore.foldWorkstreams(read()), actor, Date.now());
+    if (p.ok) fs.appendFileSync(file, JSON.stringify(p.event) + '\n', 'utf8');
+    return p;
+  });
+  if (!r.ok) { console.error(`coord: workstream refused — ${r.reason}`); process.exit(2); }
+  console.log(`coord: ${r.say}`);
+  process.exit(0);
+}
+
 function main() {
   const dir = env('COS_COORD_DIR');
   const terminal = env('COS_TERMINAL_NAME', `pid${process.pid}`);
@@ -149,6 +180,11 @@ function main() {
   // the fail-open exit below, for the same reason.
   if (process.argv[2] === 'lease') {
     try { return lease(dir, process.argv[3]); } catch (e) { console.error(`coord: lease ${process.argv[3] || ''} failed — ${e.message}`); process.exit(2); }
+  }
+  // Workstreams and their tasks (V2 step 11). The CLI owns workstreams.jsonl and the app only reads
+  // it. Not fail-open, for the same reason as lease: a write either happened or it did not.
+  if (process.argv[2] === 'workstream') {
+    try { return workstream(dir, process.argv.slice(3)); } catch (e) { console.error(`coord: workstream failed — ${e.message}`); process.exit(2); }
   }
   if (!dir) { process.exit(0); } // coordination not configured → allow
   const [cmd, resource, ...rest] = process.argv.slice(2);
@@ -338,7 +374,7 @@ function main() {
     process.exit(0);
   }
 
-  console.error('usage: cos-coord <status|lease [release]|acquire|release|note|chat|tell|watch|spawn|assign|propose-spawn|proposal accept|proposal decline|proposals|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--class <task-class>] [--writes <none|repo|outside>] [--isolation <mode>] [--to "…"] [--why "…"] [--repo <repo>] [--reason "…"]');
+  console.error('usage: cos-coord <status|lease [release]|workstream|acquire|release|note|chat|tell|watch|spawn|assign|propose-spawn|proposal accept|proposal decline|proposals|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--class <task-class>] [--writes <none|repo|outside>] [--isolation <mode>] [--to "…"] [--why "…"] [--repo <repo>] [--reason "…"]');
   process.exit(0);
 }
 

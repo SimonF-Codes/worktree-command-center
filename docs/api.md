@@ -820,6 +820,42 @@ its `spawns:` and its proposals that grants nothing.
 { "v2": { "managers": true } }
 ```
 
+### Workstreams and tasks
+
+V2 step 11. A **workstream** is the floor's unit of work, and it **carries its tasks inline** — one
+unit, one place; a workstream with no tasks behaves exactly as one with them. It needs no repo, so
+the six task measures (progress, task lead time, workstream age, blocked time, stale work, landed)
+work in every workspace. The **CLI owns the store and the app only reads it**: `cos-coord` appends
+to `<coordDir>/workstreams.jsonl`, which `persist()` never rewrites (D2), and a correction is a new
+line, never an edit. It is written whatever `v2.projectPanel` says, so turning the panel on later
+has history to show.
+
+| verb | what it appends | refused (exit 2) when |
+| --- | --- | --- |
+| `workstream open "<title>" [--note <vault path>]` | `open`, id `ws-<n>` numbered from what is on disk | no title |
+| `workstream assign <ws> [<sessionId> \| none]` | `assign` — default: the calling session | unknown id; already that owner |
+| `workstream close <ws> [--dropped --reason "…"] [--commit <sha>] [--branch <b>]` | `close`, outcome `landed` (default) or `dropped` | not open; `--dropped` without a reason |
+| `workstream reopen <ws> --reason "…"` | `reopen` — counted as **rework** | still open; no reason |
+| `workstream task add <ws> "<title>" [--owner <id>] [--note <path>]` | a task `t<n>`, state `todo` | unknown workstream |
+| `workstream task start\|block\|done\|drop <ws> <task> [--reason "…"]` | `doing` · `blocked` · `done` · `dropped`. Starting an unowned task makes the caller its owner | unknown task; already in that state |
+| `workstream list [--all] [--json]` | nothing (read-only) | — |
+
+Every write needs `COS_COORD_DIR` (any session the app opened has it) or `--dir <coordination dir>`,
+and **is not fail-open**: exit 0 means the line is on disk, exit 2 means nothing was written and
+stderr says why. The read, the id and the append happen under one guard, so two concurrent `open`s
+never mint the same id. `by` is the caller's `COS_SESSION_ID` (else its terminal name).
+
+```jsonl
+{"v":1,"ev":"open","ts":0,"id":"ws-3","title":"Lease claims","by":"<sessionId>"}
+{"v":1,"ev":"task","op":"add","ts":0,"id":"ws-3","task":"t1","title":"Write the store","by":"…"}
+{"v":1,"ev":"task","op":"start","ts":0,"id":"ws-3","task":"t1","by":"…"}
+{"v":1,"ev":"close","ts":0,"id":"ws-3","outcome":"landed","commit":"9b53b34","by":"…"}
+{"v":1,"ev":"reopen","ts":0,"id":"ws-3","reason":"revert 4a1c2e0","by":"simon"}
+```
+
+The fold — and the `Workstream` / `Task` types — is `pty-sidecar/workstreams-core.cjs`, shared by
+`cos-coord`, the app and `wcc-team metrics`, so all three read one answer.
+
 ### Isolation modes
 
 Where a new session in a **repo** target works is decided by `decideIsolation()`
