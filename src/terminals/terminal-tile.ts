@@ -25,7 +25,8 @@ import type { StageTile } from './stage-tile';
 import type { AttentionKind } from './attention';
 import { NoticeGate } from './notice-gate';
 import { identityFields, type SessionIdentity } from './lineage';
-import { isolationInstruction, modeChip, sessionMode, type Mode } from '../core/isolation';
+import { isolationInstruction, modeChip, sessionMode, writeGateEnv, canEscalate, DEFAULT_POLICY, type Mode, type TaskClass, type RungCeiling, type IsolationPolicy } from '../core/isolation';
+import { claimsDirOf } from '../../pty-sidecar/claims-store.cjs';
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -60,6 +61,14 @@ export interface TerminalTileOpts {
 	 *  session is ALSO `folder: true`: its directory is not a worktree we made, so close must never
 	 *  remove it or delete a branch. Persisted, so a restored session keeps its mode. */
 	isolation?: Mode;
+	/** The isolation setting now (config.json `isolation`) — read by the write hook, so it is the
+	 *  CURRENT setting on every start, not a value baked in at spawn. Not persisted. */
+	isolationPolicy?: IsolationPolicy;
+	/** The spawn's task class and rung ceiling, as decideIsolation saw them: what a
+	 *  shared-readonly session's write hook needs to decide an escalation (FR-16). Persisted, so a
+	 *  restored session escalates by the same rule. Absent (a record from before step 9) = never. */
+	taskClass?: TaskClass;
+	rungCeiling?: RungCeiling;
 	/** Who this session is: minted once at spawn, read back from the record on every restore
 	 *  (lineage.ts). Never derived from the tile id or the worktree path — see E6. */
 	identity: SessionIdentity;
@@ -743,7 +752,7 @@ export class TerminalTile implements StageTile {
 	 *  did not already carry. */
 	private sessionPrompt(): string {
 		const wt = this.opts.worktree;
-		const isolation = isolationInstruction(this.opts.isolation);
+		const isolation = isolationInstruction(this.opts.isolation, { escalates: canEscalate(this.opts.isolationPolicy ?? DEFAULT_POLICY, this.opts.rungCeiling, this.opts.taskClass) });
 		const facts: SessionFact[] = this.opts.folder
 			? [{ label: 'folder', value: this.opts.repoName }, { label: 'working directory', value: wt.worktreePath }]
 			: [{ label: 'repo', value: this.opts.repoName }, { label: 'branch', value: wt.branch }, { label: 'worktree', value: wt.worktreePath }];
@@ -768,7 +777,7 @@ export class TerminalTile implements StageTile {
 	}
 
 	/** Serializable record for persistence. */
-	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; folder?: boolean; model?: string; effort?: string; roleSlug?: string; isolation?: Mode } & SessionIdentity {
+	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; folder?: boolean; model?: string; effort?: string; roleSlug?: string; isolation?: Mode; taskClass?: TaskClass; rungCeiling?: RungCeiling } & SessionIdentity {
 		return {
 			...identityFields(this.opts.identity),
 			worktreePath: this.opts.worktree.worktreePath,
@@ -784,7 +793,15 @@ export class TerminalTile implements StageTile {
 			// same transcript, different instructions, and nothing on screen saying so.
 			...(this.opts.roleSlug ? { roleSlug: this.opts.roleSlug } : {}),
 			...(this.opts.isolation ? { isolation: this.opts.isolation } : {}),
+			...(this.opts.taskClass ? { taskClass: this.opts.taskClass } : {}),
+			...(this.opts.rungCeiling ? { rungCeiling: this.opts.rungCeiling } : {}),
 		};
+	}
+
+	/** The checkout this session's write gate (and any lease it takes) is about: its own worktree,
+	 *  or — for a shared or scratch session — the target's checkout. */
+	get gateCheckout(): string {
+		return this.opts.isolation && this.opts.isolation !== 'worktree' ? this.opts.repoPath : this.opts.worktree.worktreePath;
 	}
 
 	/** Coalesce resize bursts into a single fit + pty-resize (see FitThrottle). */
@@ -848,6 +865,15 @@ export class TerminalTile implements StageTile {
 			// Identity for message attribution ONLY (the outbox's `from`) — never an authority check.
 			// Set here, per spawn path, like every COS_*: session-env strips any inherited one.
 			COS_SESSION_ID: this.opts.identity.sessionId,
+			// The write gate (coord-hook.cjs --write): the mode selects its failure policy, so these are
+			// set exactly when the session has a mode (core/isolation.ts writeGateEnv).
+			...writeGateEnv(this.opts.isolation, {
+				checkout: this.gateCheckout,
+				claimsDir: claimsDirOf(this.opts.coordDir),
+				policy: this.opts.isolationPolicy ?? DEFAULT_POLICY,
+				rungCeiling: this.opts.rungCeiling,
+				taskClass: this.opts.taskClass,
+			}),
 			PATH: sidecarDir + path.delimiter + (process.env.PATH ?? ''),
 		};
 		const probe = new ResumeProbe(4096); // the last bytes — used to detect the --continue "no conversation" exit

@@ -14,6 +14,9 @@
 //   proposer gets shared-readonly or scratch, never a worktree, and a repo write is refused.
 
 import { lockStatus } from '../terminals/coordination';
+// The write hook's own pure logic, imported rather than mirrored: the id a claim is keyed on and the
+// escalation rule must be the SAME code in the app and in the hook, not two copies kept in step.
+import * as claimsCore from '../../pty-sidecar/claims-core.cjs';
 
 export type Mode = 'worktree' | 'shared-readonly' | 'shared-write' | 'scratch';
 export type TaskClass = 'feature' | 'small-fix' | 'config' | 'investigate' | 'doc' | 'release';
@@ -202,6 +205,11 @@ export function sessionMode(recorded: Mode | undefined, folder: boolean | undefi
 /** A persisted mode string → a Mode, or undefined (an older record, or junk). */
 export function parseMode(v: unknown): Mode | undefined { return pick(v, MODES); }
 
+/** A persisted task class / rung ceiling → the value, or undefined (an older record, or junk —
+ *  which the write hook reads as "never escalate"). */
+export function parseTaskClass(v: unknown): TaskClass | undefined { return pick(v, TASK_CLASSES); }
+export function parseRungCeiling(v: unknown): RungCeiling | undefined { return pick(v, ['readonly', 'write'] as const); }
+
 // ---- isolation.jsonl: one append-only decision record per spawn.
 //
 // Needed rather than derived: the app's own `git worktree add` does not pass through the
@@ -256,23 +264,77 @@ export function isolationRecord(
 /** One JSONL line, newline-terminated, safe to append. */
 export function formatIsolationLine(r: IsolationRecord): string { return JSON.stringify(r) + '\n'; }
 
+// ---- The write gate (V2 step 9): what a session's hook is told, through its environment.
+
+/** A checkout's claim id — the hook's own function (claims-core checkoutId), so a claim the app
+ *  takes and a write the hook tests can never disagree on which checkout is meant. */
+export function checkoutIdOf(p: string): string { return claimsCore.checkoutId(p); }
+
+export interface WriteGateFacts {
+	/** The checkout the session's gate (and any lease) is about: its own worktree, or the shared
+	 *  checkout it reads / writes / came from (scratch). */
+	checkout: string;
+	/** The machine-wide claim store (claims-store claimsDirOf). */
+	claimsDir: string;
+	policy: IsolationPolicy;
+	/** Recorded at spawn, for a shared-readonly session's escalation. Absent = no escalation. */
+	rungCeiling?: RungCeiling;
+	taskClass?: TaskClass;
+}
+
+/** The COS_* variables `coord-hook.cjs --write` reads. Empty for a session with no mode (a plain
+ *  folder target, a record from before step 8): its hook then runs under the OPEN failure policy
+ *  and checks only for someone else's lease. The mode is what selects the policy
+ *  (coord-hook.cjs failurePolicyFor), so it is set exactly when the session has one. */
+export function writeGateEnv(mode: Mode | undefined, f: WriteGateFacts): Record<string, string> {
+	if (!mode) return {};
+	return {
+		COS_ISOLATION: mode,
+		COS_CHECKOUT: f.checkout,
+		COS_CLAIMS_DIR: f.claimsDir,
+		COS_ISOLATION_POLICY: f.policy,
+		...(f.rungCeiling ? { COS_RUNG: f.rungCeiling } : {}),
+		...(f.taskClass ? { COS_TASK_CLASS: f.taskClass } : {}),
+	};
+}
+
+/** Would this shared-readonly session's first write be granted the lease (when the checkout is
+ *  free)? The hook's own rule (claims-core canEscalate), so the prompt and the gate agree. */
+export function canEscalate(policy: IsolationPolicy, rungCeiling: RungCeiling | undefined, taskClass: TaskClass | undefined): boolean {
+	return claimsCore.canEscalate(policy, rungCeiling, taskClass);
+}
+
 // ---- What a non-worktree session is told about its mode.
 
-/** The instruction a shared-readonly or scratch session carries in its prompt. Undefined for the
- *  worktree modes, whose role text (Worker Terminal) already says where to write. Nothing at this
- *  step ENFORCES these — the write hook is step 9 — so the text is the whole guarantee for now,
- *  and it says so plainly rather than implying a guard exists. */
-export function isolationInstruction(mode: Mode | undefined): string | undefined {
+/** Said to every shared or scratch session: the one hole in the write gate, named. */
+const SHELL_WRITES = 'The write hook sees only the file tools (Edit, Write, NotebookEdit). A shell command that writes — '
+	+ 'a redirect, a formatter, an install, a build that emits output, git commit / checkout / stash / reset — '
+	+ 'is not caught by it, and is forbidden here all the same.';
+
+/** The instruction a shared or scratch session carries in its prompt. Undefined for a worktree,
+ *  whose role text (Worker Terminal) already says where to write. Since step 9 the write hook
+ *  ENFORCES the file-tool half of this; the shell half is still only this text, and the text says
+ *  so rather than implying a sandbox. */
+export function isolationInstruction(mode: Mode | undefined, opts: { escalates?: boolean } = {}): string | undefined {
 	if (mode === 'shared-readonly') {
-		return 'shared-readonly — this working directory is a SHARED checkout that other sessions use, not a worktree of your own. '
-			+ 'Read only: do not create, edit or delete any file in it, and do not run commands that write into it '
-			+ '(builds that emit output, formatters, installs, git commit / checkout / stash / reset). '
+		const head = 'shared-readonly — this working directory is a SHARED checkout that other sessions use, not a worktree of your own. ';
+		if (opts.escalates) {
+			return head
+				+ 'You start read-only. Your first file-tool write asks for this checkout\'s exclusive write lease: if no other session holds it, '
+				+ 'you get it and keep it while you keep writing, and nobody else can write here meanwhile. Commit your change before you finish — '
+				+ 'a lease is released only from a clean checkout. If a write is denied, stop and say so; do not retry it another way. '
+				+ SHELL_WRITES;
+		}
+		return head
+			+ 'Read only: do not create, edit or delete any file in it — the write hook denies file-tool writes here. '
+			+ SHELL_WRITES + ' '
 			+ 'If the task turns out to need a write, stop and say so — it must be respawned with its own worktree.';
 	}
 	if (mode === 'scratch') {
 		return 'scratch — this working directory is a scratch folder outside every registered repository. '
-			+ 'Write here, or to a vault path your brief names. Do not write inside any repository; '
-			+ 'if the task needs a repository change, stop and say so — it must be respawned with its own worktree.';
+			+ 'Write here, or to a vault path your brief names. Do not write inside any repository — the write hook denies file-tool writes '
+			+ 'inside the one this session came from. ' + SHELL_WRITES + ' '
+			+ 'If the task needs a repository change, stop and say so — it must be respawned with its own worktree.';
 	}
 	return undefined;
 }
