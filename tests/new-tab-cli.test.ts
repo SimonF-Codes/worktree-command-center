@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseNewTabFields, REMOTE_CHOICES, type NewTabResult } from '../src/new-tab';
@@ -9,6 +8,7 @@ import { GITIGNORE_KINDS } from '../src/new-repo-params';
 import { parseOutboxMessage } from '../src/terminals/god';
 import { evaluateConnectorRequest, receiptFilename } from '../src/terminals/connectors';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
+import { makeTempDir } from './temp-dir';
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -21,7 +21,7 @@ const BASE_ENV: NodeJS.ProcessEnv = Object.fromEntries(
 );
 
 let dir: string;
-beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'newtab-cli-')); });
+beforeEach(() => { dir = makeTempDir('newtab-cli-'); });
 
 function run(cli: string, args: string[], env: Record<string, string>, cwd?: string): Promise<{ code: number; out: string; err: string }> {
 	return new Promise((resolve) => {

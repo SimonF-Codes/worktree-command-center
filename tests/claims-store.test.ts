@@ -2,9 +2,9 @@
 // `wx` acquire as every coordination lock, with the stable sessionId, the mode, and a lease.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'node:module';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { makeTempDir } from './temp-dir';
 const require = createRequire(import.meta.url);
 const claims = require('../pty-sidecar/claims-store.cjs');
 const cc = require('../pty-sidecar/claims-core.cjs');
@@ -16,7 +16,7 @@ let board: string;
 const checkout = 'C:/dev/app';
 const who = (sessionId: string, holder = `t-${sessionId}`) => ({ sessionId, holder, mode: 'shared-write', reason: 'fix' });
 beforeEach(() => {
-	root = fs.mkdtempSync(path.join(os.tmpdir(), 'claims-'));
+	root = makeTempDir('claims-');
 	dir = claims.ensureClaimsDir(path.join(root, '_claims'));
 	board = path.join(root, 'ws-1');
 });

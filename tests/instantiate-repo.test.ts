@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathKind, instantiateRepo, probeGitIdentity } from '../src/instantiate-repo';
 import { createGitRepo } from '../src/create-repo';
 import { defaultNewRepoParams } from '../src/new-repo-params';
 import { NO_IDENTITY_REASON, isMissingIdentity } from '../src/new-tab';
+import { makeTempDir } from './temp-dir';
 
 // Every git these tests start reads only what is set here: no global or system config, so the
 // machine's own identity can neither rescue nor break a case.
@@ -31,7 +31,7 @@ function isolateGit(identity: boolean): void {
 beforeEach(() => {
 	saved = Object.fromEntries(GIT_KEYS.map((k) => [k, process.env[k]]));
 	for (const k of GIT_KEYS) delete process.env[k];
-	tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'newtab-'));
+	tmp = makeTempDir('newtab-');
 });
 afterEach(() => {
 	for (const k of GIT_KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }

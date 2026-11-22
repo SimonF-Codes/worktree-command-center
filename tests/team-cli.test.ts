@@ -1,14 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { main, parseTeamArgs, projectRepo, vaultRootOf, logBullets, projectKey, type TeamMetricsOutput } from '../src/cli/team-cli';
 import type { RepoConfig } from '../src/terminals/terminals-grid';
+import { makeTempDir } from './temp-dir';
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ } });
-const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'team-')); dirs.push(d); return d; };
+const tmp = () => { const d = makeTempDir('team-'); dirs.push(d); return d; };
 
 function git(cwd: string, ...args: string[]): string {
 	return execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { createWorktree, ensureClaudeSettingsIgnored, ensureWorktreesExcluded, worktreePathFor } from '../src/terminals/worktree-manager';
+import { makeTempDir } from './temp-dir';
 
 // Real git: worktrees are created INSIDE the repo, so the repo's own checkout must never see them.
 // The exclude rule goes to .git/info/exclude (local, never committed) — no tracked file changes.
@@ -22,7 +22,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 
 let root: string, repo: string;
 beforeEach(() => {
-	root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-nested-wt-')));
+	root = makeTempDir('wcc-nested-wt-');
 	repo = path.join(root, 'repo');
 	fs.mkdirSync(repo);
 	git(repo, 'init', '-q', '-b', 'main');

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { gatherPruneFacts, executePrune, readSavedTerminals, explainRemoveFailure } from '../src/prune-worktrees-io';
 import { findLinks } from '../src/terminals/worktree-manager';
 import { planPrune, describePrunePlan } from '../src/prune-worktrees';
 import { projectDirName } from '../src/terminals/resume-target';
+import { makeTempDir } from './temp-dir';
 
 // Real git work: on a loaded machine the 5s/10s defaults fail these on a hook timeout while they
 // pass every time in isolation. Per-file on purpose — only the IO suites need the headroom.
@@ -34,7 +34,7 @@ let root: string, repo: string, projects: string, sessions: string;
 const W = (n: string): string => path.join(repo, '.claude-worktrees', n);
 
 beforeEach(() => {
-	root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-prune-')));
+	root = makeTempDir('wcc-prune-');
 	repo = path.join(root, 'Repo');
 	projects = path.join(root, 'projects');
 	sessions = path.join(root, 'sessions.json');

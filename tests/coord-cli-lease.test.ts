@@ -3,10 +3,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
+import { makeTempDir } from './temp-dir';
 const require = createRequire(import.meta.url);
 const claims = require('../pty-sidecar/claims-store.cjs');
 
@@ -15,7 +15,7 @@ let root: string, coordDir: string, claimsDir: string, repo: string;
 
 function git(...args: string[]) { execFileSync('git', args, { cwd: repo, stdio: 'ignore' }); }
 beforeEach(() => {
-	root = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-cli-'));
+	root = makeTempDir('lease-cli-');
 	coordDir = path.join(root, '.coordination', 'ws-1');
 	fs.mkdirSync(coordDir, { recursive: true });
 	claimsDir = claims.ensureClaimsDir(claims.claimsDirOf(coordDir));

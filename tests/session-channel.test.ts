@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { SessionChannel, type SessionChannelDeps } from '../src/terminals/session-channel';
 import { lookupFrom } from '../src/core/delegation';
 import type { FloorSession, SpawnPlan } from '../src/core/session-requests';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
+import { makeTempDir } from './temp-dir';
 
 const lookup = lookupFrom([
 	{ slug: 'alpha', authority: 'operator', spawns: [] },
@@ -35,7 +35,7 @@ function channel(over: Partial<SessionChannelDeps> = {}): SessionChannel {
 	});
 }
 beforeEach(() => {
-	dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sesschan-'));
+	dir = makeTempDir('sesschan-');
 	spawned = []; told = []; assigned = []; enabled = true;
 });
 

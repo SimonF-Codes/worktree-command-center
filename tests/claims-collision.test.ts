@@ -8,10 +8,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { decideIsolation, resolveIntent, claimOf, checkoutIdOf, redecideAfterLostRace, type IsolationContext } from '../src/core/isolation';
+import { makeTempDir } from './temp-dir';
 const require = createRequire(import.meta.url);
 const claims = require('../pty-sidecar/claims-store.cjs');
 const cc = require('../pty-sidecar/claims-core.cjs');
@@ -23,7 +23,7 @@ const STORE = path.join(__dirname, '..', 'pty-sidecar', 'claims-store.cjs');
 
 let root: string, coordDir: string, claimsDir: string, checkout: string, scriptDir: string;
 beforeEach(() => {
-	root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'collision-')));
+	root = makeTempDir('collision-');
 	coordDir = path.join(root, '.coordination', 'ws-1');
 	fs.mkdirSync(coordDir, { recursive: true });
 	claimsDir = claims.ensureClaimsDir(claims.claimsDirOf(coordDir));

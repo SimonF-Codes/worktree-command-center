@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { loadRolePrompt } from '../src/terminals/role-loader';
+import { makeTempDir } from './temp-dir';
 
 /** A throwaway role library on disk. The wrapper is thin but it is the half that has to survive
  *  a missing folder and an unreadable file, which is exactly what cannot be tested purely. */
@@ -15,7 +15,7 @@ function write(name: string, text: string): void {
 }
 
 beforeEach(() => {
-	dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-roles-'));
+	dir = makeTempDir('wcc-roles-');
 	logs = []; warns = [];
 	vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { logs.push(a.join(' ')); });
 	vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warns.push(a.join(' ')); });

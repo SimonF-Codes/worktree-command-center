@@ -44,9 +44,9 @@ describe('shouldRemoveWorktree', () => {
 });
 
 import * as fs from 'fs';
-import * as os from 'os';
 import * as nodePath from 'path';
 import { worktreeSettingsJson, WRITE_TOOLS_MATCHER, worktreeSettingsPath, writeWorktreeSettings, terminalSystemPrompt, folderSystemPrompt } from '../src/terminals/worktree-manager';
+import { makeTempDir } from './temp-dir';
 
 describe('terminalSystemPrompt', () => {
 	it('states identity, parallelism, and the cross-repo worktree rule', () => {
@@ -130,7 +130,7 @@ describe('worktreeSettingsPath', () => {
 
 describe('writeWorktreeSettings', () => {
 	it('writes the settings file under the sidecar dir and leaves the worktree untouched', () => {
-		const tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wcc-settings-'));
+		const tmp = makeTempDir('wcc-settings-');
 		const sidecarDir = nodePath.join(tmp, 'pty-sidecar');
 		const worktree = nodePath.join(tmp, 'worktree');
 		fs.mkdirSync(worktree, { recursive: true });
@@ -146,7 +146,7 @@ describe('writeWorktreeSettings', () => {
 	});
 
 	it('is idempotent — rewriting does not accumulate or corrupt', () => {
-		const tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wcc-settings-'));
+		const tmp = makeTempDir('wcc-settings-');
 		const sidecarDir = nodePath.join(tmp, 'pty-sidecar');
 		const first = fs.readFileSync(writeWorktreeSettings(sidecarDir, 'C:/p/n.cjs', 'C:/p/c.cjs'), 'utf8');
 		const second = fs.readFileSync(writeWorktreeSettings(sidecarDir, 'C:/p/n.cjs', 'C:/p/c.cjs'), 'utf8');

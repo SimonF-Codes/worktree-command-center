@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as esbuild from 'esbuild';
@@ -8,6 +7,7 @@ import { main, parseArgs, selectTargets, EXIT, type CliDeps } from '../src/cli/w
 import { appIsRunning, tasklistShows, psShows, imageStem, APP_IMAGE } from '../src/cli/app-guard';
 import { diagnose, errorKind, parseCwdHolderOutput, realDiagnoseDeps, type DiagnoseDeps } from '../src/cli/hold-diagnosis';
 import { projectDirName } from '../src/terminals/resume-target';
+import { makeTempDir } from './temp-dir';
 
 // hold-diagnosis reads Windows paths (drive letters, backslash parents, OneDrive roots); on the
 // ubuntu CI runner Node's posix path functions don't parse them. Same guard as tests/resolve-on-path.test.ts.
@@ -36,7 +36,7 @@ const nested = (wt: string) => path.join(repo, '.claude-worktrees', path.basenam
 const t2 = () => projectDirName(wt2);
 
 beforeEach(() => {
-	root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-worktrees-cli-')));
+	root = makeTempDir('wcc-worktrees-cli-');
 	repo = path.join(root, 'dev', 'apartment-planner');
 	oldRoot = path.join(root, 'dev', '.claude-worktrees', 'apartment-planner');
 	wt1 = path.join(oldRoot, 'wt-main-1');
@@ -395,7 +395,7 @@ describe('the four failure modes, told apart', () => {
 describe('the bundle a plain node runs', () => {
 	let bundle: string;
 	beforeAll(async () => {
-		bundle = path.join(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-worktrees-bundle-'))), 'wcc-worktrees.cjs');
+		bundle = path.join(makeTempDir('wcc-worktrees-bundle-'), 'wcc-worktrees.cjs');
 		await esbuild.build({ entryPoints: [path.join(__dirname, '..', 'src', 'cli', 'wcc-worktrees.ts')], outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
 	});
 	afterAll(() => { fs.rmSync(path.dirname(bundle), { recursive: true, force: true }); });

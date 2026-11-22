@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { lookupFrom, MANAGERS_OFF_REASON } from '../src/core/delegation';
 import {
@@ -11,6 +10,7 @@ import { evaluateSessionRequest, parseSessionRequest, type FloorSession, type Se
 import { foldProposals, proposalKey, formatProposal } from '../pty-sidecar/proposals-core.cjs';
 import { SessionChannel, readProposals } from '../src/terminals/session-channel';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
+import { makeTempDir } from './temp-dir';
 
 const lookup = lookupFrom([
 	{ slug: 'alpha', authority: 'operator', spawns: [] },
@@ -159,7 +159,7 @@ function cli(args: string[], sessionId: string): Promise<{ code: number; out: st
 			(e, out, err) => resolve({ code: e ? ((e as { code?: number }).code ?? 1) : 0, out, err }));
 	});
 }
-beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proposals-')); spawned = []; });
+beforeEach(() => { dir = makeTempDir('proposals-'); spawned = []; });
 
 describe('propose → decline → read the reason, through cos-coord', () => {
 	it('the whole loop, and the re-proposal refusal', async () => {

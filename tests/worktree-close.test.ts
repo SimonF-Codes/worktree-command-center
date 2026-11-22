@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { removeWorktreeAndBranch, branchMergedInto } from '../src/terminals/worktree-manager';
+import { makeTempDir } from './temp-dir';
 
 // The regression: the tile × ran `git branch -D`, a force delete that never looked, and on
 // 2026-10-21 it took apartment-planner's wt/main-2 with three unmerged commits. Closing a tile must
@@ -24,7 +24,7 @@ const BRANCH = 'wt/main-1';
 let root: string, repo: string, wt: string;
 
 beforeEach(() => {
-	root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-wt-close-')));
+	root = makeTempDir('wcc-wt-close-');
 	repo = path.join(root, 'Repo');
 	wt = path.join(repo, '.claude-worktrees', 'wt-main-1');
 	fs.mkdirSync(repo, { recursive: true });

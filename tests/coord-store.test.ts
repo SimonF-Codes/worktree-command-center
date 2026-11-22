@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createRequire } from 'node:module';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { makeTempDir } from './temp-dir';
 const require = createRequire(import.meta.url);
 const store = require('../pty-sidecar/coord-store.cjs');
 const core = require('../pty-sidecar/coord-core.cjs');
 
 let dir: string;
-beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'coord-')); });
+beforeEach(() => { dir = makeTempDir('coord-'); });
 
 const holder = (id: number, name = `t${id}`) => ({ holderId: id, terminal: name });
 
