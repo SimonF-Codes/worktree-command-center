@@ -13,7 +13,7 @@ import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { attachDragSelect } from './drag-select';
 import { FitThrottle } from './fit-throttle';
 import { MIN_TERM_COLS, MIN_TERM_ROWS, type TileCellMetrics } from './bubble-layout';
-import { HiddenOutputBuffer } from './hidden-buffer';
+import { OutputPacer, type OutputMode } from './output-pacer';
 import { isUserInput } from './ready-queue';
 import { activeTerminalPalette, activeTerminalFont, type TerminalPalette } from './theme-store';
 import { ctrlClickActivator, openExternalUrl } from './links';
@@ -143,9 +143,13 @@ export class TerminalTile implements StageTile {
 	// sub-250ms increments (measured as continuous heartbeat 'gap' stalls, 2026-07-22).
 	private minimized = false;
 	private detachedFromStage = false;
-	private currentMode: 'live' | 'visible' | 'suspended' = 'live';
-	private hiddenBuf = new HiddenOutputBuffer();
-	private flushTimer: number | null = null;
+	private pacer = new OutputPacer(
+		{
+			write: (d, parsed) => { if (this.term) this.term.write(d, parsed); else parsed?.(); },
+			nudge: () => this.nudgeRepaint(),
+		},
+		{ setInterval: (fn, ms) => window.setInterval(fn, ms), clearInterval: (id) => window.clearInterval(id) },
+	);
 	readonly isJournal = false;
 
 	constructor(private opts: TerminalTileOpts) {
@@ -449,33 +453,20 @@ export class TerminalTile implements StageTile {
 		this.updateSuspension();
 	}
 
-	private outputMode(): 'live' | 'visible' | 'suspended' {
+	private outputMode(): OutputMode {
 		if (this.minimized || this.detachedFromStage) return 'suspended';
 		return this.centered ? 'live' : 'visible';
 	}
 
-	/** Re-pace output on state edges only. Entering 'live' (centered) drains immediately so
-	 *  the reveal shows the current screen; batching modes install their cadence timer. */
+	/** Re-pace output on state edges only (output-pacer.ts): entering 'live' (centered) drains
+	 *  immediately so the reveal shows the current screen; batching modes install their cadence. */
 	private updateSuspension(): void {
-		const mode = this.outputMode();
-		if (mode === this.currentMode) return;
-		this.currentMode = mode;
-		if (this.flushTimer !== null) { window.clearInterval(this.flushTimer); this.flushTimer = null; }
-		this.flushSuspended(); // mode boundary: drain what the old cadence left pending
-		if (mode !== 'live') this.flushTimer = window.setInterval(() => this.flushSuspended(), mode === 'visible' ? 300 : 2000);
-	}
-
-	/** Drain the pending window into xterm. A dropped window means the tile flooded past the
-	 *  cap — its bytes are stale alternate-screen frames, so instead of parsing a partial tail
-	 *  we ask ConPTY to re-emit the CURRENT screen via a resize nudge. */
-	private flushSuspended(): void {
-		const { data, dropped } = this.hiddenBuf.takeAll();
-		if (dropped) this.nudgeRepaint();
-		else if (data) this.term?.write(data);
+		this.pacer.setMode(this.outputMode());
 	}
 
 	/** Bounce the PTY one row and back: each real resize makes ConPTY re-emit the full screen,
-	 *  restoring an accurate display after dropped output. */
+	 *  restoring an accurate display after dropped output. Only the pacer's cadence flush and mode
+	 *  boundaries call it — never a read. */
 	private nudgeRepaint(): void {
 		const t = this.term;
 		if (!t || !this.bridge) return;
@@ -486,8 +477,7 @@ export class TerminalTile implements StageTile {
 
 	/** Route session output to xterm — or, in a batching mode, into the pending buffer. */
 	private writeOut(d: string): void {
-		if (this.currentMode !== 'live') this.hiddenBuf.push(d);
-		else this.term?.write(d);
+		this.pacer.write(d);
 	}
 
 	/** Re-tint the terminal well live (theme switch — see theme-store). Font weight and the
@@ -582,6 +572,12 @@ export class TerminalTile implements StageTile {
 		await delay(650); // 250 + 650 = 900, matching sendLine's belt-and-braces second Enter
 		this.bridge?.write('\r');
 		await delay(500); // let the TUI redraw before reading the screen
+		// A batching tile holds its output back for up to 2s (suspended) and xterm parses what it
+		// is given asynchronously, so drain AND wait for the parse — reading the buffer straight
+		// away missed the echo about a third of the time on a suspended tile and sent a retry
+		// that typed the message a second time. Bounded: a write callback on a terminal disposed
+		// mid-wait never fires, and this must not hang the caller's retry loop on it.
+		await Promise.race([this.pacer.settled(), delay(1000)]);
 		return looksDelivered(this.recentOutput(), text);
 	}
 
@@ -597,9 +593,18 @@ export class TerminalTile implements StageTile {
 		this.bridge?.write(raw);
 	}
 
-	/** Return the last ≤20 non-blank lines visible in the scrollback buffer.
-	 *  Used by ChatRoom.prompt() to surface the current waiting member's prompt. */
+	/** Return the last ≤20 non-blank lines visible in the scrollback buffer — the screen every
+	 *  state reader on the floor goes by: the spotlight and attention ticks (~1s), the phone feed
+	 *  (2s), the floor snapshots, auto-close, watches, the chat room, and deliverLine's check.
+	 *  Pending batched output is handed to xterm first (never with a repaint nudge — see
+	 *  OutputPacer.read), so a hidden tile is not read a whole cadence stale. xterm parses
+	 *  asynchronously, so bytes drained by this very call show up on the next read; a caller
+	 *  that needs them now awaits `pacer.settled()` first, as deliverLine does. */
 	recentOutput(): string {
+		return this.pacer.read(() => this.readScreen());
+	}
+
+	private readScreen(): string {
 		const t = this.term;
 		if (!t) return '';
 		const buf = t.buffer.active;
@@ -817,8 +822,7 @@ export class TerminalTile implements StageTile {
 
 	/** Tear down the session + DOM WITHOUT touching the worktree (used on page switch). */
 	kill(): void {
-		if (this.flushTimer !== null) { window.clearInterval(this.flushTimer); this.flushTimer = null; }
-		this.hiddenBuf.clear();
+		this.pacer.dispose();
 		this.readyWatcher?.close();
 		this.readyWatcher = null;
 		this.resizeObs?.disconnect();
@@ -892,7 +896,7 @@ export class TerminalTile implements StageTile {
 			// with no whitespace at all. Strip ANSI first, then allow \s* (not a literal space)
 			// between each word so the match survives either rendering.
 			if (fallbackFresh && /no\s*conversation\s*found\s*to\s*continue/i.test(stripAnsi(probe.text))) {
-				this.hiddenBuf.clear();      // stale pre-reset output must not replay after the reset
+				this.pacer.clear();      // stale pre-reset output must not replay after the reset
 				this.term?.reset();          // --continue had nothing to resume → start fresh in place
 				// ...and SAY so, but NOT into the terminal. Writing the notice here looked right and
 				// did nothing: the fresh `claude` starting immediately below repaints the whole
@@ -933,7 +937,7 @@ export class TerminalTile implements StageTile {
 	 *  the new session env at once; the env is re-read inside startSession. */
 	restartInPlace(): void {
 		this.bridge?.kill();
-		this.hiddenBuf.clear(); // old-session output must not replay into the fresh screen
+		this.pacer.clear(); // old-session output must not replay into the fresh screen
 		this.term?.reset();
 		this.setIdle(false);
 		this.gate.reset(); // fresh TUI, empty box — anything queued waits for the next ready marker
