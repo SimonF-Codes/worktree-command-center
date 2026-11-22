@@ -692,7 +692,8 @@ cos-coord spawn "<repo>" --task "<first instruction>" [--base <branch>] [--model
 - `--class`, `--writes`, `--isolation`: the session's isolation intent — see
   [Isolation modes](#isolation-modes). Passed through as given; junk reads as absent. They change
   nothing unless `config.json` `isolation` is `cheap-readonly`, except that `--isolation
-  shared-write` is always refused (exit 2).
+  shared-write` is always refused (exit 2), and an `observer`/`proposer` role is held to its rung
+  ceiling under every policy (below).
 
 It **confirms before returning**. Success prints the new terminal, its branch and its session id:
 
@@ -741,12 +742,12 @@ Folder targets are not decided: they run in the folder, as always.
 | mode | chip | where | granted at this step |
 | --- | --- | --- | --- |
 | `worktree` | `wt` | its own branch and worktree | always — every repo write |
-| `shared-readonly` | `ro` | the repo's existing checkout; writes nothing | under `cheap-readonly` |
-| `scratch` | `scr` | `<coordDir>/scratch/<sessionId>`, outside every target | under `cheap-readonly` |
+| `shared-readonly` | `ro` | the repo's existing checkout; writes nothing | under `cheap-readonly`, and for a read-only rung always |
+| `scratch` | `scr` | `<coordDir>/scratch/<sessionId>`, outside every target | under `cheap-readonly`, and for a read-only rung always |
 | `shared-write` | `rw🔒` | the existing checkout, holding a write lease | **never** — needs the step-9 lease store and write hook |
 
 `config.json` `isolation`: `"worktree-always"` (the default, and the rollback: every spawn gets
-a worktree, exactly as before) or `"cheap-readonly"`. Any other value reads as the default.
+a worktree, exactly as before, unless its role is a read-only rung) or `"cheap-readonly"`. Any other value reads as the default.
 
 ```json
 { "isolation": "cheap-readonly" }
@@ -757,7 +758,8 @@ The intent: `--class` is one of `feature` (default), `small-fix`, `config`, `inv
 `outside`, everything else `repo`. `--isolation` requests a mode; a request for `ro`/`scr` with
 repo writes falls back to a worktree, it is never refused.
 
-The rung ceiling comes from the role file's `authority:`. An `observer` or `proposer` gets
+The rung ceiling comes from the role file's `authority:`, and applies under **every** policy,
+`worktree-always` included — it is evaluated before the setting. An `observer` or `proposer` gets
 `shared-readonly` or `scratch` whatever it asks for; an undeclared `--writes` reads as `none`
 for it, and an explicit `--writes repo` is **refused**, naming the role and the checkout. Roles
 carry no `isolation:` key. A refusal is a spawn receipt with `ok: false` whose reason names a

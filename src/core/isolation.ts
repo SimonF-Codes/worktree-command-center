@@ -8,8 +8,10 @@
 // - `shared-write` stays in the Mode union and is NEVER granted here. It needs the `_claims/`
 //   write lease and the Edit/Write hook (step 9); without them it would be an unguarded write
 //   into a shared checkout. An explicit request for it is refused, naming a holder and a path.
-// - `worktree-always` (the default) answers `worktree` for every spawn — exactly today's
-//   behaviour, so the step is inert until the setting is switched. It is also the rollback.
+// - `worktree-always` (the default) answers `worktree` for every write-capable spawn — exactly
+//   today's behaviour, so the step is inert until the setting is switched. It is also the rollback.
+// - The rung ceiling applies under EVERY policy, before the policy is consulted: an observer or
+//   proposer gets shared-readonly or scratch, never a worktree, and a repo write is refused.
 
 import { lockStatus } from '../terminals/coordination';
 
@@ -76,7 +78,7 @@ const granted = (mode: Mode, reason: string): IsolationDecision => ({ ok: true, 
  *  Properties the tests hold this to:
  *  1. It never refuses when a worktree would do — the only refusals are an explicit
  *     `requested: 'shared-write'` and a repo write by a read-only role.
- *  2. It never widens a role — under `cheap-readonly` a read-only rung gets shared-readonly or
+ *  2. It never widens a role — under EVERY policy a read-only rung gets shared-readonly or
  *     scratch whatever the brief asks for, and a repo write is refused naming the role and path.
  *  3. A stale claim counts as free (claimIsLive). */
 export function decideIsolation(i: IsolationIntent, c: IsolationContext): IsolationDecision {
@@ -96,10 +98,9 @@ export function decideIsolation(i: IsolationIntent, c: IsolationContext): Isolat
 		};
 	}
 
-	// The default and the rollback: every spawn gets its own worktree, as before this step.
-	if (c.policy === 'worktree-always') return granted('worktree', 'isolation: worktree-always — every session gets its own worktree');
-
-	// cheap-readonly. The rung ceiling comes first: it can only narrow.
+	// The rung ceiling comes BEFORE the policy: it can only narrow, and it narrows under every
+	// policy. A worktree is a place to write the repo, so handing one to a read-only rung — even
+	// under worktree-always — would widen the role (design §2: "It never widens a role").
 	if (c.rungCeiling === 'readonly') {
 		const role = c.role || 'this role';
 		if (i.writes === 'repo') {
@@ -109,7 +110,11 @@ export function decideIsolation(i: IsolationIntent, c: IsolationContext): Isolat
 		return granted('shared-readonly', `${role} is read-only: reads the existing checkout, no worktree`);
 	}
 
-	// A write-capable rung. A repo write always gets a worktree at this step.
+	// The default and the rollback for write-capable rungs: every spawn gets its own worktree, as
+	// before this step.
+	if (c.policy === 'worktree-always') return granted('worktree', 'isolation: worktree-always — every session gets its own worktree');
+
+	// cheap-readonly, a write-capable rung. A repo write always gets a worktree at this step.
 	if (i.writes === 'repo') {
 		const note = i.requested === 'shared-readonly' || i.requested === 'scratch' ? ` (requested ${i.requested}, but the task declares repo writes)` : '';
 		return granted('worktree', `repo writes get their own worktree${note}`);

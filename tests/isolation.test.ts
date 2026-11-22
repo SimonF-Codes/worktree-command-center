@@ -31,9 +31,9 @@ describe('decideIsolation — worktree-always (the default and the rollback)', (
 			expect(d).toEqual({ ok: true, mode: 'worktree', acquire: [], reason: expect.any(String) });
 		}
 	});
-	it('is inert: every spawn gets a worktree, whatever it writes, whatever its rung', () => {
+	it('is inert for write-capable rungs: every spawn gets a worktree, whatever it writes', () => {
 		for (const [i, c] of everyCase()) {
-			if (c.policy !== 'worktree-always' || i.requested === 'shared-write') continue;
+			if (c.policy !== 'worktree-always' || c.rungCeiling !== 'write' || i.requested === 'shared-write') continue;
 			const d = decideIsolation(i, c);
 			expect(d.ok && d.mode).toBe('worktree');
 		}
@@ -80,7 +80,7 @@ describe('property 1 — it never refuses when a worktree would do', () => {
 		for (const [i, c] of everyCase()) {
 			const d = decideIsolation(i, c);
 			if (d.ok) continue;
-			const ceilingRefusal = c.policy === 'cheap-readonly' && c.rungCeiling === 'readonly' && i.writes === 'repo';
+			const ceilingRefusal = c.rungCeiling === 'readonly' && i.writes === 'repo';
 			expect(i.requested === 'shared-write' || ceilingRefusal).toBe(true);
 		}
 	});
@@ -124,13 +124,37 @@ describe('property 2 — it never widens a role', () => {
 			}
 		}
 	});
-	it('a read-only rung only ever gets shared-readonly or scratch, whatever it requests', () => {
+	it('a read-only rung only ever gets shared-readonly or scratch, whatever it requests, under every policy', () => {
 		for (const [i, c] of everyCase()) {
-			if (c.policy !== 'cheap-readonly' || c.rungCeiling !== 'readonly') continue;
+			if (c.rungCeiling !== 'readonly') continue;
 			const d = decideIsolation(i, c);
 			if (d.ok) expect(['shared-readonly', 'scratch']).toContain(d.mode);
 		}
 	});
+	for (const policy of POLICIES) {
+		describe(`under policy ${policy}`, () => {
+			const ro = (o: Partial<IsolationIntent>) => decideIsolation(intent(o), ctx({ policy, rungCeiling: 'readonly', role: 'researcher' }));
+			it('a proposer is never granted a worktree with repo writes — for any class or request', () => {
+				for (const taskClass of TASK_CLASSES) for (const requested of REQUESTS) {
+					const d = ro({ taskClass, writes: 'repo', ...(requested ? { requested } : {}) });
+					expect(d.ok).toBe(false);
+					if (!d.ok) expect(d.path).toBe('C:/dev/app');
+					if (!d.ok && requested !== 'shared-write') expect(d.holder).toBe('researcher');
+				}
+			});
+			it('a proposer is never granted a worktree at all', () => {
+				for (const taskClass of TASK_CLASSES) for (const writes of WRITES) for (const requested of REQUESTS) {
+					const d = ro({ taskClass, writes, ...(requested ? { requested } : {}) });
+					if (d.ok) expect(d.mode).not.toBe('worktree');
+				}
+			});
+			it('writes outside → scratch, writes none → shared-readonly', () => {
+				expect(ro({ writes: 'outside' })).toMatchObject({ ok: true, mode: 'scratch' });
+				expect(ro({ writes: 'none' })).toMatchObject({ ok: true, mode: 'shared-readonly' });
+				expect(ro({ writes: 'none', requested: 'worktree' })).toMatchObject({ ok: true, mode: 'shared-readonly' });
+			});
+		});
+	}
 	it('a read-only rung requesting a worktree for a read gets shared-readonly', () => {
 		expect(decideIsolation(intent({ writes: 'none', requested: 'worktree' }), ctx({ rungCeiling: 'readonly' }))).toMatchObject({ ok: true, mode: 'shared-readonly' });
 	});
