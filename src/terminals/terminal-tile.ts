@@ -158,6 +158,12 @@ export class TerminalTile implements StageTile {
 	get sessionId(): string { return this.opts.identity.sessionId; }
 	/** Identity plus lineage, as written. Readers go through lineage.ts readLineage. */
 	get identity(): SessionIdentity { return this.opts.identity; }
+	/** An explicit assign (V2 step 10, session-channel.ts) — checked by checkDelegation before it
+	 *  gets here, and the only thing that ever moves a session to another parent. The sessionId is
+	 *  never touched; the caller persists. */
+	setParentSessionId(parentSessionId: string): void {
+		this.opts.identity = { ...this.opts.identity, parentSessionId };
+	}
 	/** The role slug this session runs on (role-library sessionRoleSlug). For display only —
 	 *  nothing checks it against what a parent may spawn until step 10. */
 	get role(): string { return sessionRoleSlug(this.opts.roleSlug, this.opts.folder); }

@@ -49,6 +49,9 @@ import { releaseRefusal } from '../../pty-sidecar/claims-core.cjs';
 import { loadRoleAuthority } from './role-loader';
 import { sessionRoleSlug } from './role-library';
 import { appendIsolationRecord } from './isolation-log';
+import { SessionChannel, type SpawnedInfo } from './session-channel';
+import { delegationLookup } from './delegation-roles';
+import type { FloorSession, SpawnPlan } from '../core/session-requests';
 
 /** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
  *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
@@ -99,6 +102,10 @@ export interface GridDeps {
 	/** config.json `v2.recordLineage` (lineage.ts parseRecordLineage). Gates READING lineage only —
 	 *  spawn and persist write it either way. Absent reads as on. */
 	recordLineage?: boolean;
+	/** config.json `v2.managers` (core/delegation.ts parseManagersEnabled), read live. Off = the
+	 *  per-session request channel refuses everything, so every non-overseer spawn is refused as
+	 *  before this step. Absent reads as off. */
+	managers?: () => boolean;
 	/** config.json `isolation` (core/isolation.ts parseIsolationPolicy). Absent = worktree-always,
 	 *  today's behaviour: every spawn gets its own worktree. */
 	isolation?: IsolationPolicy;
@@ -233,6 +240,8 @@ export class TerminalsGrid {
 	private spotlightTimer: number | null = null;
 	private godOutboxWatcher: import('fs').FSWatcher | null = null;
 	private connectorsWatcher: import('fs').FSWatcher | null = null;
+	/** V2 step 10: each session's own request directory (session-channel.ts). */
+	private sessionChannel: SessionChannel | null = null;
 	private connectors: ConnectorConfig[] = [];
 	private parentEl: HTMLElement | null = null;
 	private readonly sidecarPath: string;
@@ -285,6 +294,9 @@ export class TerminalsGrid {
 		// of both the overseer console and of whether the connector that dropped a request is
 		// even registered yet (an unregistered drop still needs to be answered with a rejection).
 		this.armConnectors();
+		// V2 step 10: the per-session request channel a manager acts through. Armed from construction
+		// like the two above; with `v2.managers` off it answers every request with a refusal.
+		this.armSessionChannel();
 	}
 
 	/** Journal destinations configured in Settings (app-wide, not scoped to this workspace/group). */
@@ -1459,6 +1471,60 @@ export class TerminalsGrid {
 		} catch { /* connectors unavailable */ }
 	}
 
+	/** Every live session as the request channel sees it: the app's own records, overseer included.
+	 *  The role is the one on the record — never anything the session's environment says. */
+	floorSessions(): FloorSession[] {
+		const on = this.deps.recordLineage ?? true;
+		const out: FloorSession[] = this.allSessions().filter((t) => !t.isJournal).map((t) => {
+			const tt = t as TerminalTile;
+			const parent = readLineage(tt.identity, on).parentSessionId;
+			return { key: tt.tileId, sessionId: tt.sessionId, role: tt.role, name: tt.name, ...(tt.repoName ? { repoName: tt.repoName } : {}), ...(parent ? { parentSessionId: parent } : {}) };
+		});
+		if (this.godConsole) out.unshift({ key: -1, sessionId: this.godConsole.sessionId, role: 'alpha', name: this.overseerName });
+		return out;
+	}
+
+	private armSessionChannel(): void {
+		if (this.sessionChannel) return;
+		this.sessionChannel = new SessionChannel({
+			coordDir: this.coordDir,
+			enabled: () => this.deps.managers?.() ?? false,
+			lookup: () => delegationLookup(this.deps.roleLibrary?.path),
+			floor: () => this.floorSessions(),
+			repos: () => this.repos.map((r) => ({ name: r.name, folder: r.folder })),
+			spawn: (plan) => this.spawnForSession(plan),
+			tell: async (terminal, message) => {
+				const tile = this.allSessions().find((t) => t.name === terminal && !t.isJournal);
+				if (!tile) return { ok: false, reason: `"${terminal}" is no longer a live terminal` };
+				return this.deliverTellQueued(tile as TerminalTile, message);
+			},
+			assign: (targetSessionId, parentSessionId) => {
+				const tile = this.allSessions().find((t) => !t.isJournal && (t as TerminalTile).sessionId === targetSessionId) as TerminalTile | undefined;
+				if (!tile) return false;
+				tile.setParentSessionId(parentSessionId);
+				void this.persist();
+				return true;
+			},
+		});
+		this.sessionChannel.arm();
+	}
+
+	/** A spawn a manager asked for and checkDelegation allowed: the same spawnFromName every other
+	 *  path uses, with the requester recorded as the parent. */
+	private async spawnForSession(plan: SpawnPlan): Promise<{ ok: true; spawned: SpawnedInfo } | { ok: false; reason: string }> {
+		let failReason = `couldn't spawn in "${plan.repo}"`;
+		const tile = await this.spawnFromName(plan.repo, plan.base, plan.task, plan.model ?? undefined, plan.effort ?? undefined, plan.name ?? undefined, {
+			parentSessionId: plan.parentSessionId,
+			...(plan.workstreamId ? { workstreamId: plan.workstreamId } : {}),
+			...(plan.roleSlug ? { roleSlug: plan.roleSlug } : {}),
+			...(plan.taskClass ? { taskClass: plan.taskClass } : {}),
+			...(plan.writes ? { writes: plan.writes } : {}),
+			...(plan.isolation ? { isolation: plan.isolation } : {}),
+		}, (r) => { failReason = r; });
+		if (!tile) return { ok: false, reason: failReason };
+		return { ok: true, spawned: { terminal: tile.name, branch: tile.branch, sessionId: tile.sessionId, ...(tile.isolation ? { mode: tile.isolation } : {}) } };
+	}
+
 	/** Begin writing terminal snapshots while the console is open (the outbox watcher is already
 	 *  armed from construction — this only (re-)confirms it, cheaply, via armOutbox's own guard). */
 	private startFloorFeed(): void {
@@ -2452,6 +2518,7 @@ export class TerminalsGrid {
 		this.stopPulse();
 		this.stopFloorFeed(); // feed now persists across unmount()/hideGod(), so stop it on real teardown
 		this.godConsole?.dispose(); this.godConsole = null;
+		this.sessionChannel?.dispose(); this.sessionChannel = null;
 		for (const k of this.extraKanes) k.console.dispose();
 		this.extraKanes = [];
 		for (const t of this.tiles) t.kill();

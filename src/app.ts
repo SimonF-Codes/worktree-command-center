@@ -240,6 +240,11 @@ async function main(): Promise<void> {
 		const roleLibrary = parseRoleLibrary(cfg.roleLibrary);
 		// V2 step 6: `v2.recordLineage`, default on. Off = lineage still written, never read.
 		const recordLineage = parseRecordLineage(cfg.v2);
+		// V2 Team Floor step 10: `v2.managers` (default off), applied live. On, a session acts through
+		// its own request directory, checked by checkDelegation against role files re-read live
+		// (delegation-roles.ts) — never against a session's environment — and the team view marks ★
+		// from spawns:. Off, every non-overseer spawn is refused, exactly as before.
+		let managers = parseManagersEnabled(cfg.v2);
 		// V2 steps 8-9: config.json `isolation`, default worktree-always (today's behaviour, and the
 		// rollback). `cheap-readonly` lets a spawn that writes nothing skip the worktree;
 		// `cheapest-safe` also lets a small fix write an existing checkout under its write lease.
@@ -272,6 +277,7 @@ async function main(): Promise<void> {
 			roleLibrary,
 			connectors,
 			recordLineage,
+			managers: () => managers,
 			isolation,
 			newTab: async (fields, by) => { await newTabIsReady; return newTabFromSession(fields, by); },
 			sessionEnv: () => sessionEnvProvider({ workspaceId: id }),
@@ -494,10 +500,6 @@ async function main(): Promise<void> {
 		// nothing is created and terminalRoot keeps its plain column layout.
 		// V2 Team Floor step 7: `v2.teamView` (default off) nests each workspace's rows by lineage.
 		let teamView = parseTeamView(cfg.v2);
-		// V2 Team Floor step 10: `v2.managers` (default off). On, the team view marks ★ from each role
-		// file's spawns: and refuses edges a parent could not have made; the role files are re-read
-		// live (delegation-roles.ts), never inferred from a session's environment.
-		let managers = parseManagersEnabled(cfg.v2);
 		const sidebar = new Sidebar({
 			workspaces: () => workspaces,
 			activeId: () => activeId,

@@ -236,9 +236,34 @@ function receiptPath(dir, id) { return path.join(dir, 'god-outbox', '.receipts',
 // `close` files its outcome on the same seam; opts.timeoutReason lets it word the timeout for
 // what it actually is (a close that may still happen), not as a missing delivery.
 function waitForTellReceipt(dir, id, opts = {}) {
+  return waitForReceiptFile(receiptPath(dir, id), opts);
+}
+
+// ---- The per-session request channel (V2 step 10): sessions/<sessionId>/requests in,
+// sessions/<sessionId>/receipts out. Identity is the directory; the app decides what the session
+// may do from its record and its role file, never from anything this process says about itself.
+// Request shapes: src/core/session-requests.ts parseSessionRequest.
+const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+function sessionDir(dir, sessionId) {
+  if (!SESSION_ID.test(String(sessionId))) throw new Error(`not a session id: ${sessionId}`);
+  return path.join(dir, 'sessions', sessionId);
+}
+function dropSessionRequest(dir, sessionId, obj) {
+  const req = path.join(sessionDir(dir, sessionId), 'requests');
+  fs.mkdirSync(req, { recursive: true });
+  const ts = Date.now();
+  const id = `${ts}-${Math.random().toString(36).slice(2, 8)}`;
+  const final = path.join(req, `${id}.json`);
+  const tmp = path.join(req, `.${id}.tmp`);
+  fs.writeFileSync(tmp, JSON.stringify({ v: 1, id, sentMs: ts, ...obj }), 'utf8');
+  fs.renameSync(tmp, final);
+  return final;
+}
+function sessionReceiptPath(dir, sessionId, id) { return path.join(sessionDir(dir, sessionId), 'receipts', `${id}.json`); }
+
+function waitForReceiptFile(file, opts = {}) {
   const waitMs = opts.waitMs != null ? opts.waitMs : core.TELL_WAIT_MS;
   const pollMs = opts.pollMs != null ? opts.pollMs : core.POLL_MS;
-  const file = receiptPath(dir, id);
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
@@ -255,5 +280,6 @@ module.exports = {
   acquire, release, readLocks, readHolder, appendBoard, note, taskEvent, appendChat,
   acquireAt, withGuard, writeAtomic, readFileState, breakStale,
   tell, watch, spawn, rename, personality, close, newTab, withdraw, dropOutbox, sleepSync,
-  receiptPath, waitForTellReceipt,
+  receiptPath, waitForTellReceipt, waitForReceiptFile,
+  SESSION_ID, dropSessionRequest, sessionReceiptPath,
 };
