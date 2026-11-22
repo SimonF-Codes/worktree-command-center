@@ -59,12 +59,37 @@ export async function writeReportPair(dir: string, rendered: { json: string; mar
  *  turns the vault write OFF rather than guessing where the vault's root is — a guessed root is
  *  how a file lands somewhere in a vault nobody asked for. No role library: off, the same way
  *  role loading is. */
-export function vaultReportTarget(roleLibraryPath: string | undefined): VaultTarget | null {
+export const DEFAULT_REPORT_PARTITION = 'Personal/Code';
+
+/** Forward slashes, no leading or trailing separator. */
+function normalizePartition(partition: string): string {
+	return partition.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+/** True for a partition that stays inside the vault root. Rejects an absolute path, a drive
+ *  letter, any `.` or `..` segment and any empty segment, so a partition can name a folder under
+ *  the vault and can never climb out of it or jump to another disk.
+ *
+ *  Checked on the string before joining rather than on the result: a joined path that had already
+ *  escaped would have lost the information needed to say that it did. */
+export function isVaultPartition(partition: string): boolean {
+	const p = normalizePartition(partition);
+	if (!p) return false;
+	if (/^[A-Za-z]:/.test(p)) return false;
+	return p.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..');
+}
+
+export function vaultReportTarget(
+	roleLibraryPath: string | undefined,
+	partition: string = DEFAULT_REPORT_PARTITION,
+): VaultTarget | null {
 	if (!roleLibraryPath || !roleLibraryPath.trim()) return null;
+	if (!isVaultPartition(partition)) return null;
 	const parts = roleLibraryPath.trim().replace(/\\/g, '/').replace(/\/+$/, '').split('/');
 	if (parts.length < 3) return null;
 	if (parts[parts.length - 1]!.toLowerCase() !== 'agents' || parts[parts.length - 2]!.toLowerCase() !== '_meta') return null;
-	const dir = path.join(parts.slice(0, -2).join('/'), 'Personal', 'Code');
+	const root = parts.slice(0, -2).join('/');
+	const dir = path.join(root, ...normalizePartition(partition).split('/'));
 	return { dir, markdown: path.join(dir, 'Floor Report.md'), json: path.join(dir, FLOOR_REPORT_JSON) };
 }
 
