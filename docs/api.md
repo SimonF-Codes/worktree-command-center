@@ -695,8 +695,11 @@ cos-coord spawn "<repo>" --task "<first instruction>" [--base <branch>] [--model
 - `--role <slug>`: the role file the new session runs on, by its `role:` slug. Without it a
   worktree session is a `worker-terminal` and a folder session a `folder-terminal`. The slug is
   **not validated** at spawn: an unknown or non-`active` one falls back to the compiled default,
-  and the app logs why (`[roles] …`). Kane's spawns are not checked against it. A session's own
-  spawn is: see [Managers](#managers-session-requests-and-spawn-proposals).
+  and the app logs why (`[roles] …`). Kane's spawns are not refused on it. A session's own
+  spawn is: see [Managers](#managers-session-requests-and-spawn-proposals). With `v2.managers`
+  on, the team tree does check Kane's edge against the overseer's role file (`alpha`, whose
+  `spawns:` lists what it may start): a session Kane opened on a role outside that list still
+  runs, but sits in UNASSIGNED, "outside delegation", with the failing condition named.
 - `--workstream <id>`: the workstream the session serves. Stored on the session record, and
   otherwise unused for now.
 - `--class`, `--writes`, `--isolation`: the session's isolation intent — see

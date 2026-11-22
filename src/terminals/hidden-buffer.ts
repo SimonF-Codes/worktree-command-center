@@ -25,6 +25,10 @@ export class HiddenOutputBuffer {
 		this.chunks.push(chunk);
 	}
 
+	/** True when a window has overflowed since the last take: the pending bytes are a partial
+	 *  tail, and the tile needs a repaint rather than a parse. */
+	get dropped(): boolean { return this.droppedSinceTake; }
+
 	/** Drain: pending data in arrival order + whether any window was dropped since the
 	 *  last take. Resets both. */
 	takeAll(): { data: string; dropped: boolean } {

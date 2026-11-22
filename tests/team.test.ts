@@ -133,7 +133,8 @@ import { findNode, placedParentOf, descendantsOf, isUnassignedRoot, unassignedTe
 
 const drole = (slug: string, authority: string, spawns: string[] = []): DelegationRole => ({ slug, authority, spawns });
 const roles = lookupFrom([
-	drole('alpha', 'operator'),
+	// Alpha's spawns: must list (and cover the spawns: of) every role these tests open under it.
+	drole('alpha', 'operator', ['worker-terminal', 'team-lead', 'researcher']),
 	drole('team-lead', 'operator', ['worker-terminal', 'researcher']),
 	drole('worker-terminal', 'operator'),
 	drole('researcher', 'proposer'),
@@ -175,10 +176,23 @@ describe('buildTeam — with delegation (v2.managers)', () => {
 		expect((t.unassigned[0] as UnassignedNode).detail).toContain('declares role: ghost');
 	});
 
-	it('edges from the overseer are not checked — it spawns through its own channel, as today', () => {
+	it('edges from the overseer are checked against its role file like any other', () => {
 		const t = buildTeam([alpha(), ses(1, 's-1'), ses(2, 's-1', 'auditor')], { delegation: roles });
-		expect(shape(t.overseers)).toEqual([[-1, [1, 2]]]);
-		expect(t.unassigned).toEqual([]);
+		expect(shape(t.overseers)).toEqual([[-1, [1]]]);
+		expect(t.unassigned.map((u) => [u.session.key, u.reason])).toEqual([[2, 'outside-delegation']]);
+		expect(unassignedText(t.unassigned[0]!)).toBe("outside delegation: alpha may not spawn auditor — condition 1 of 3 (listed): auditor is not in alpha's spawns: (worker-terminal, team-lead, researcher)");
+	});
+
+	it('an overseer whose role file declares no spawns: places no children', () => {
+		const bare = lookupFrom([drole('alpha', 'operator'), drole('worker-terminal', 'operator')]);
+		const t = buildTeam([alpha(), ses(1, 's-1')], { delegation: bare });
+		expect(t.overseers[0]!.children).toEqual([]);
+		expect(t.unassigned[0]!.reason).toBe('outside-delegation');
+	});
+
+	it('an overseer with no active role file places no children (fails closed)', () => {
+		const t = buildTeam([alpha(), ses(1, 's-1')], { delegation: lookupFrom([drole('worker-terminal', 'operator')]) });
+		expect((t.unassigned[0] as UnassignedNode).detail).toContain('declares role: alpha');
 	});
 
 	it('an invalid edge confers nothing below it either: its own valid children stay with it, unassigned', () => {

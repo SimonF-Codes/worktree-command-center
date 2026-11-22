@@ -8,7 +8,8 @@ import { MAX_TELL_MESSAGE_LEN } from '../src/terminals/connectors';
 
 const r = (slug: string, authority: string, spawns: string[] = []): DelegationRole => ({ slug, authority, spawns });
 const lookup = lookupFrom([
-	r('alpha', 'operator'),
+	// The overseer's edges are checked like anyone's (team.ts), so its spawns: covers the tree below.
+	r('alpha', 'operator', ['worker-terminal', 'folder-terminal', 'team-lead', 'researcher']),
 	r('team-lead', 'operator', ['worker-terminal', 'researcher']),
 	r('worker-terminal', 'operator'),
 	r('folder-terminal', 'operator'),
@@ -86,8 +87,13 @@ describe('spawn — checkDelegation in full', () => {
 	it('a worker is refused, naming condition 1', () => {
 		expect(evaluateSessionRequest(spawn(), ctx('s2'))).toEqual({ ok: false, reason: "worker-terminal may not spawn worker-terminal — condition 1 of 3 (listed): worker-terminal has no spawns:, so it starts nothing" });
 	});
-	it('the overseer through this channel is checked too — Alpha has no spawns: yet', () => {
-		expect(evaluateSessionRequest(spawn(), ctx('s-1'))).toMatchObject({ ok: false, reason: expect.stringContaining('alpha may not spawn worker-terminal — condition 1 of 3') });
+	it('the overseer through this channel is checked too, against its own spawns:', () => {
+		expect(evaluateSessionRequest(spawn(), ctx('s-1'))).toMatchObject({ ok: true, action: 'spawn', childRole: 'worker-terminal' });
+		expect(evaluateSessionRequest(spawn({ role: 'auditor' }), ctx('s-1'))).toMatchObject({ ok: false, reason: expect.stringContaining("alpha may not spawn auditor — condition 1 of 3 (listed): auditor is not in alpha's spawns:") });
+	});
+	it('an overseer whose role file has no spawns: starts nothing through this channel', () => {
+		const bare = lookupFrom([r('alpha', 'operator'), r('worker-terminal', 'operator')]);
+		expect(evaluateSessionRequest(spawn(), ctx('s-1', { lookup: bare }))).toMatchObject({ ok: false, reason: expect.stringContaining('alpha may not spawn worker-terminal — condition 1 of 3') });
 	});
 	it('an unknown repo or a bad effort is refused before delegation is consulted', () => {
 		expect(evaluateSessionRequest(spawn({ repo: 'nope' }), ctx('s1'))).toMatchObject({ ok: false, reason: expect.stringContaining('unknown repo "nope"') });

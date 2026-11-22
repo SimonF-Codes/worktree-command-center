@@ -311,6 +311,7 @@ import { lookupFrom } from '../src/core/delegation';
 
 describe('buildSidebar — team view with v2.managers', () => {
 	const delegation = lookupFrom([
+		{ slug: 'alpha', authority: 'operator', spawns: ['team-lead', 'worker-terminal'] }, // the overseer's edges are checked too
 		{ slug: 'team-lead', authority: 'operator', spawns: ['worker-terminal'] },
 		{ slug: 'worker-terminal', authority: 'operator', spawns: [] },
 	]);
@@ -318,9 +319,9 @@ describe('buildSidebar — team view with v2.managers', () => {
 	const lineage = [lin(OVERSEER_ID, undefined, 'alpha'), lin(1, OVERSEER_ID, 'team-lead'), lin(2, 1), lin(3, OVERSEER_ID), lin(4, 3)];
 	const on = () => buildSidebar([ws('w', sessions, { lineage })], new Set(), { teamView: true, delegation })[0]!;
 
-	it('stars the manager row and only it', () => {
+	it('stars the rows whose role file declares spawns: and only them, the overseer included', () => {
 		const g = on();
-		expect(g.team!.tree.filter((l) => l.row.manager).map((l) => l.row.id)).toEqual([1]);
+		expect(g.team!.tree.filter((l) => l.row.manager).map((l) => l.row.id)).toEqual([OVERSEER_ID, 1]);
 	});
 
 	it('a worker\'s "child" is unassigned with the delegation refusal as its reason', () => {
