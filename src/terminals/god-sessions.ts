@@ -15,6 +15,8 @@ export interface GodIndexed { kind?: string; godIndex?: number }
 /** A `god` record as persisted: the god-specific fields plus the filler a SessionRecord wants. */
 export interface GodRecord extends GodIndexed {
 	kind: 'god';
+	/** The console's stable session identity (lineage.ts). Absent in records older builds wrote. */
+	sessionId?: string;
 	worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string;
 }
 
@@ -28,13 +30,15 @@ export function godIndexOf(rec: GodIndexed): number {
 }
 
 /** The `god` records to persist for a workspace: the primary when it is open, then one per
- *  duplicate, ordered and de-duplicated so a restore can't build the same console twice. */
-export function godRecords(hasPrimary: boolean, extraIndexes: readonly number[]): GodRecord[] {
+ *  duplicate, ordered and de-duplicated so a restore can't build the same console twice.
+ *  `sessionIds` maps an instance number to that console's sessionId, written when known. */
+export function godRecords(hasPrimary: boolean, extraIndexes: readonly number[], sessionIds: ReadonlyMap<number, string> = new Map()): GodRecord[] {
 	const blank = { kind: 'god', worktreePath: '', branch: '', repoName: 'god', repoPath: '', baseBranch: '' } as const;
 	const out: GodRecord[] = [];
-	if (hasPrimary) out.push({ ...blank });
+	const id = (n: number) => { const s = sessionIds.get(n); return s ? { sessionId: s } : {}; };
+	if (hasPrimary) out.push({ ...blank, ...id(PRIMARY_GOD_INDEX) });
 	for (const n of [...new Set(extraIndexes)].sort((a, b) => a - b)) {
-		if (Number.isInteger(n) && n > PRIMARY_GOD_INDEX) out.push({ ...blank, godIndex: n });
+		if (Number.isInteger(n) && n > PRIMARY_GOD_INDEX) out.push({ ...blank, godIndex: n, ...id(n) });
 	}
 	return out;
 }

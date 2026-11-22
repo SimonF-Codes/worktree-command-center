@@ -42,6 +42,7 @@ import { vaultNoteFilename, vaultNoteContent, type ConvertDestination, type Vaul
 import type { StageTile } from './stage-tile';
 import type { SessionClaim } from './session-memory';
 import type { SessionFacts } from './auto-close';
+import { ensureSessionIds, newIdentity, restoreIdentity, type SessionIdentity } from './lineage';
 
 /** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
  *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
@@ -104,7 +105,10 @@ export interface GridDeps {
 	 *  the same code the + tab button uses. `by` names the asker in the window's notice. */
 	newTab?: (fields: NewTabFields, by: string) => Promise<NewTabOutcome>;
 }
-export interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string; }
+export interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string;
+	/** Stable session identity (lineage.ts). Absent only in records an older build wrote — restore
+	 *  mints one for those, once, and the healing persist writes it. */
+	sessionId?: string; }
 
 // Effort options for the spawn toolbar dropdown. Empty value = inherit the claude CLI default.
 const SPAWN_EFFORTS: { label: string; value: string }[] = [
@@ -616,7 +620,7 @@ export class TerminalsGrid {
 		}
 		const model = opts.model ?? (this.modelSel?.value || undefined);
 		const effort = opts.effort ?? (this.effortSel?.value || undefined);
-		const tile = this.makeTile({ worktreePath: repo.path, branch: '' }, repo.name, repo.path, '', false, opts.name, model, effort, true, opts.roleSlug);
+		const tile = this.makeTile({ worktreePath: repo.path, branch: '' }, repo.name, repo.path, '', false, opts.name, model, effort, true, opts.roleSlug, newIdentity());
 		if (opts.task) this.pendingTask.set(tile.tileId, opts.task);
 		if (this.stageEl) tile.render(this.stageEl);
 		this.tiles.push(tile);
@@ -636,7 +640,7 @@ export class TerminalsGrid {
 			// Explicit opts win; otherwise inherit the toolbar dropdowns ('' = CLI default = no flag).
 			const model = opts.model ?? (this.modelSel?.value || undefined);
 			const effort = opts.effort ?? (this.effortSel?.value || undefined);
-			const tile = this.makeTile(worktree, repo.name, repo.path, base, false, opts.name, model, effort);
+			const tile = this.makeTile(worktree, repo.name, repo.path, base, false, opts.name, model, effort, undefined, undefined, newIdentity());
 			if (opts.task) this.pendingTask.set(tile.tileId, opts.task);
 			if (this.stageEl) tile.render(this.stageEl);
 			this.tiles.push(tile);
@@ -1133,11 +1137,11 @@ export class TerminalsGrid {
 	}
 
 	/** Toggle the GOD console: spawn on first open, then just show/hide (session persists). */
-	private toggleGod(): void {
+	private toggleGod(sessionId?: string): void {
 		if (!this.godConsole) {
 			const godHomeDir = path.join(this.coordDir, '..', '.god', this.deps.group);
 			const kane: GodConsole = new GodConsole(
-				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, roleLibraryPath: this.deps.roleLibrary?.path, resume: true, onTranscriptOff: () => this.warnTranscriptOff(this.overseerName), onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
+				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionId: sessionId ?? newIdentity().sessionId, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, roleLibraryPath: this.deps.roleLibrary?.path, resume: true, onTranscriptOff: () => this.warnTranscriptOff(this.overseerName), onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
 				() => this.hideGod(),
 			);
 			this.godConsole = kane;
@@ -1167,7 +1171,7 @@ export class TerminalsGrid {
 	 *  and drops the record; the transcript on disk is left alone.
 	 *  Pass `index` to reopen a persisted duplicate; omit it for a user-created one, which takes
 	 *  the next unclaimed number and gets the focus. */
-	private addKane(index?: number): void {
+	private addKane(index?: number, sessionId?: string): void {
 		const n = index ?? this.kaneSeq + 1;
 		if (this.extraKanes.some((k) => k.n === n)) return; // already live — never two consoles on one home dir
 		this.kaneSeq = Math.max(this.kaneSeq, n);
@@ -1178,6 +1182,7 @@ export class TerminalsGrid {
 				coordDir: this.coordDir,
 				sidecarPath: this.sidecarPath,
 				godHomeDir,
+				sessionId: sessionId ?? newIdentity().sessionId,
 				sessionEnv: this.deps.sessionEnv,
 				selfImprove: this.deps.godSelfImprove,
 				roleLibraryPath: this.deps.roleLibrary?.path,
@@ -2043,9 +2048,10 @@ export class TerminalsGrid {
 
 	/** Build a tile with all the grid callbacks wired. `resume` → claude --continue.
 	 *  `folder` → a plain-folder target (no worktree, no branch). */
-	private makeTile(worktree: WorktreeInfo, repoName: string, repoPath: string, baseBranch: string, resume: boolean, name?: string, model?: string, effort?: string, folder?: boolean, roleSlug?: string): TerminalTile {
+	private makeTile(worktree: WorktreeInfo, repoName: string, repoPath: string, baseBranch: string, resume: boolean, name: string | undefined, model: string | undefined, effort: string | undefined, folder: boolean | undefined, roleSlug: string | undefined, identity: SessionIdentity): TerminalTile {
 		return new TerminalTile({
-			tileId: this.nextTileId++,
+			tileId: this.nextTileId++, // a display handle, reissued every launch — identity is the stable one
+			identity,
 			repoName, repoPath, baseBranch, worktree, folder,
 			sidecarPath: this.sidecarPath,
 			coordDir: this.coordDir,
@@ -2152,6 +2158,14 @@ export class TerminalsGrid {
 		return run;
 	}
 
+	/** Each live Kane console's sessionId, by instance number, for godRecords. */
+	private godSessionIds(): Map<number, string> {
+		const ids = new Map<number, string>();
+		if (this.godConsole) ids.set(PRIMARY_GOD_INDEX, this.godConsole.sessionId);
+		for (const k of this.extraKanes) ids.set(k.n, k.console.sessionId);
+		return ids;
+	}
+
 	private async persistNow(): Promise<void> {
 		const all = await this.readAllSessions();
 		const serializeTile = (t: StageTile, hidden: boolean): SessionRecord => {
@@ -2177,7 +2191,7 @@ export class TerminalsGrid {
 			// launch, resumed with --continue. /clear inside his session is the fresh-start path.
 			// Every 🜲+ duplicate persists the same way, tagged with its instance number; the
 			// primary stays untagged so an older build still reads the file and reopens it.
-			...(godRecords(!!this.godConsole, this.extraKanes.map((k) => k.n)) as SessionRecord[]),
+			...(godRecords(!!this.godConsole, this.extraKanes.map((k) => k.n), this.godSessionIds()) as SessionRecord[]),
 		];
 		try { await fs.writeFile(this.sessionsFile, JSON.stringify(all, null, 2), 'utf8'); } catch { /* best effort */ }
 	}
@@ -2185,7 +2199,10 @@ export class TerminalsGrid {
 	/** On open: re-create a tile (claude --continue) for each persisted worktree that still exists. */
 	private async restoreSessions(): Promise<void> {
 		const all = await this.readAllSessions();
-		const recs = all[this.deps.group] ?? [];
+		// Older builds wrote no sessionId. Mint the missing ones here, BEFORE anything restores or is
+		// retained, so a live tile and a retained record agree; the healing persist below writes them,
+		// and from then on every launch reads them back and mints nothing.
+		const { records: recs } = ensureSessionIds(all[this.deps.group] ?? []);
 		// Claim every instance number already used — by a record or by a .god home on disk — before
 		// anything can add a duplicate, so a new one never lands on a live transcript.
 		this.kaneSeq = Math.max(this.kaneSeq, highestGodIndex(recs, await this.readGodDirNames(), this.deps.group));
@@ -2211,8 +2228,8 @@ export class TerminalsGrid {
 			if (rec.kind === 'god') {
 				// No godIndex — which is every record written before duplicates were persisted —
 				// reads as the primary, so existing sessions restore exactly as they did.
-				if (godIndexOf(rec) === PRIMARY_GOD_INDEX) { if (!this.godConsole) this.toggleGod(); } // opens + resumes (resume: true in toggleGod)
-				else this.addKane(godIndexOf(rec)); // duplicate: --continue-s its own .god/<group>-N
+				if (godIndexOf(rec) === PRIMARY_GOD_INDEX) { if (!this.godConsole) this.toggleGod(restoreIdentity(rec).sessionId); } // opens + resumes (resume: true in toggleGod)
+				else this.addKane(godIndexOf(rec), restoreIdentity(rec).sessionId); // duplicate: --continue-s its own .god/<group>-N
 				return;
 			}
 			if (rec.kind === 'journal') {
@@ -2239,7 +2256,7 @@ export class TerminalsGrid {
 			let exists = false;
 			try { await fs.access(rec.worktreePath); exists = true; } catch { exists = false; }
 			if (!exists) { this.unrestored.push(rec); return; } // retained — retried next launch
-			const tile = this.makeTile({ worktreePath: rec.worktreePath, branch: rec.branch }, rec.repoName, rec.repoPath, rec.baseBranch, true, rec.name, rec.model, rec.effort, rec.folder, rec.roleSlug);
+			const tile = this.makeTile({ worktreePath: rec.worktreePath, branch: rec.branch }, rec.repoName, rec.repoPath, rec.baseBranch, true, rec.name, rec.model, rec.effort, rec.folder, rec.roleSlug, restoreIdentity(rec));
 			if (this.stageEl) tile.render(this.stageEl);
 			if (rec.hidden) { tile.setHidden(true); this.hidden.push(tile); }
 			else this.tiles.push(tile);
@@ -2380,7 +2397,7 @@ export class TerminalsGrid {
 		// Skip if a tile is already attached to this worktree.
 		if (this.tiles.some((t) => !t.isJournal && path.resolve((t as TerminalTile).worktreePath) === path.resolve(entry.path))) return;
 		await reopenWorktree(repo.path, entry.path, branch);
-		const tile = this.makeTile({ worktreePath: entry.path, branch }, repo.name, repo.path, this.baseOf(branch), false);
+		const tile = this.makeTile({ worktreePath: entry.path, branch }, repo.name, repo.path, this.baseOf(branch), false, undefined, undefined, undefined, undefined, undefined, newIdentity());
 		if (this.stageEl) tile.render(this.stageEl);
 		this.tiles.push(tile);
 		this.centeredId = tile.tileId;

@@ -35,6 +35,8 @@ export interface GodConsoleOpts {
 	onFocusChange?: (focused: boolean) => void;
 	instanceName?: string;   // head label + COS_TERMINAL_NAME (default 'Kane')
 	terminalId?: string;     // COS_TERMINAL_ID for cos-coord identity (default '0')
+	/** Stable identity (lineage.ts): minted when the console is first opened, read back on restore. */
+	sessionId: string;
 	resume?: boolean;        // reopen this home's conversation (fresh fallback) — the main Kane sets this
 	/** Fired once if this console's claude reports transcript saving is off (see TerminalTile's). */
 	onTranscriptOff?: () => void;
@@ -79,6 +81,9 @@ export class GodConsole {
 	});
 
 	constructor(private opts: GodConsoleOpts, private onHide: () => void) {}
+
+	/** Stable across restarts — what a session this console spawns records as its parent. */
+	get sessionId(): string { return this.opts.sessionId; }
 
 	/** The panel root, so the grid can place it in the dock and toggle visibility. */
 	get element(): HTMLElement | null { return this.el; }

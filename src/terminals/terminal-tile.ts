@@ -24,6 +24,7 @@ import { looksDelivered } from './prompt-detect';
 import type { StageTile } from './stage-tile';
 import type { AttentionKind } from './attention';
 import { NoticeGate } from './notice-gate';
+import { identityFields, type SessionIdentity } from './lineage';
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -53,6 +54,9 @@ export interface TerminalTileOpts {
 	 *  when a caller is deliberately spawning some OTHER agent, e.g. the Agent Custodian from
 	 *  the agent-instruction view. Persisted, so a restored session is still that agent. */
 	roleSlug?: string;
+	/** Who this session is: minted once at spawn, read back from the record on every restore
+	 *  (lineage.ts). Never derived from the tile id or the worktree path — see E6. */
+	identity: SessionIdentity;
 	sessionEnv?: () => Record<string, string>;
 	onClosed: (tile: TerminalTile) => void;
 	/** The × kept the branch or the worktree — what was kept and why, for the user. */
@@ -135,6 +139,8 @@ export class TerminalTile implements StageTile {
 	}
 
 	get tileId(): number { return this.opts.tileId; }
+	/** Stable across restarts, unlike tileId. */
+	get sessionId(): string { return this.opts.identity.sessionId; }
 
 	render(parent: HTMLElement): void {
 		this.el = parent.createDiv({ cls: 'cos-term-tile' });
@@ -735,8 +741,9 @@ export class TerminalTile implements StageTile {
 	}
 
 	/** Serializable record for persistence. */
-	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; folder?: boolean; model?: string; effort?: string; roleSlug?: string } {
+	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; folder?: boolean; model?: string; effort?: string; roleSlug?: string } & SessionIdentity {
 		return {
+			...identityFields(this.opts.identity),
 			worktreePath: this.opts.worktree.worktreePath,
 			branch: this.opts.worktree.branch,
 			repoName: this.opts.repoName,
