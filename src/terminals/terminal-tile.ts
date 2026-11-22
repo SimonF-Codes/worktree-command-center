@@ -10,6 +10,7 @@ import { removeWorktreeAndBranch, terminalSystemPrompt, folderSystemPrompt, work
 import { loadRolePrompt } from './role-loader';
 import type { SessionFact } from './role-library';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
+import { attachDragSelect } from './drag-select';
 import { FitThrottle } from './fit-throttle';
 import { MIN_TERM_COLS, MIN_TERM_ROWS, type TileCellMetrics } from './bubble-layout';
 import { HiddenOutputBuffer } from './hidden-buffer';
@@ -185,7 +186,7 @@ export class TerminalTile implements StageTile {
 			// OSC 8 terminal hyperlinks (the new Claude TUI emits links this way) — open them in the
 			// real browser on Ctrl/Cmd+click. WITHOUT this, xterm's OscLinkProvider falls back to its
 			// built-in "Do you want to navigate… could be dangerous" confirm instead of opening.
-			linkHandler: { activate: (e, uri) => { if (e.ctrlKey || e.metaKey) openExternalUrl(uri); } },
+			linkHandler: { activate: (e, uri) => { if ((e.ctrlKey || e.metaKey) && !this.tuiOwnsMouse()) openExternalUrl(uri); } },
 		});
 		this.fit = new FitAddon();
 		this.term.loadAddon(this.fit);
@@ -198,8 +199,9 @@ export class TerminalTile implements StageTile {
 			gl.onContextLoss(() => gl.dispose());
 			this.term.loadAddon(gl);
 		} catch { /* no GPU/context available — DOM renderer remains */ }
-		// Ctrl/Cmd+click a URL (e.g. http://localhost:5173) to open it in the real browser.
-		this.term.loadAddon(new WebLinksAddon(ctrlClickActivator(openExternalUrl)));
+		// Ctrl/Cmd+click a URL (e.g. http://localhost:5173) to open it in the real browser —
+		// unless the TUI owns the mouse (it opens clicked links itself; see tuiOwnsMouse).
+		this.term.loadAddon(new WebLinksAddon(ctrlClickActivator(openExternalUrl, () => this.tuiOwnsMouse())));
 		// Ctrl/Cmd+C copies the selection if there is one (otherwise ^C falls through as an
 		// interrupt to Claude); Ctrl/Cmd+V pastes from the clipboard (xterm would otherwise
 		// send a literal ^V); Shift+Page/Arrow/Home/End scroll the scrollback. Everything else
@@ -233,14 +235,16 @@ export class TerminalTile implements StageTile {
 			this.applyScroll(intent);
 			return false;
 		});
-		// Right-click: copy the selection if there is one, otherwise paste.
+		// Right-click: copy the selection if there is one, otherwise paste — but when the TUI
+		// owns the mouse (claude v2.1.227+ enables tracking and pastes on right-click ITSELF),
+		// stand down or the clipboard lands twice.
 		body.addEventListener('contextmenu', (e) => {
 			e.preventDefault();
 			if (this.term?.hasSelection()) {
 				const sel = this.term.getSelection();
 				if (sel) this.writeClipboard(sel);
 				this.term.clearSelection();
-			} else {
+			} else if (!this.tuiOwnsMouse()) {
 				this.pasteFromClipboard();
 			}
 		});
@@ -248,6 +252,14 @@ export class TerminalTile implements StageTile {
 		// xterm's native paste in the capture phase so a right-click doesn't paste TWICE: the Ctrl+V
 		// keydown path already preventDefaults the native paste; right-click did not, hence the double.
 		body.addEventListener('paste', (e) => { e.preventDefault(); e.stopImmediatePropagation(); }, true);
+		// Plain drag selects text even while Claude's TUI tracks the mouse (clicks still reach
+		// the TUI, so menu options stay clickable). Without this, selecting required the
+		// undiscoverable Shift+drag. Attached after the focus-guard above so a press on an
+		// UNcentered tile still only focuses it.
+		attachDragSelect(body, {
+			tuiOwnsMouse: () => this.tuiOwnsMouse(),
+			clearSelection: () => this.term?.clearSelection(),
+		});
 		this.fitThrottle = new FitThrottle({
 			// Only resize the PTY when this tile is CENTERED. Resizing on every bubble/center makes
 			// ConPTY re-emit the screen (xterm appends it → the same message duplicated N times).
@@ -653,6 +665,14 @@ export class TerminalTile implements StageTile {
 		// CLAUDE_CODE_SCROLL_SPEED (default 3) lines — matching the old 3-line xterm scroll, not a page.
 		else seq = intent.amount < 0 ? '\x1b[<64;1;1M' : '\x1b[<65;1;1M';  // wheel up / down
 		this.bridge?.write(seq);
+	}
+
+	/** Does the running TUI track the mouse (DECSET 1000/1002/1003)? If so it receives our
+	 *  clicks and handles paste/links itself — WCC's own handlers must yield, or every
+	 *  action fires twice. A dead session or plain shell tracks nothing, and our handlers
+	 *  take over again. */
+	private tuiOwnsMouse(): boolean {
+		return (this.term?.modes.mouseTrackingMode ?? 'none') !== 'none';
 	}
 
 	/** Paste clipboard text into the terminal (honors bracketed-paste via term.paste). */
