@@ -669,7 +669,7 @@ sender's `COS_SESSION_ID`, or `null`). Verbs that block read `god-outbox/.receip
 | --- | --- | --- | --- |
 | `tell <target> "<message>"` | yes | `target`, `message` | 0 delivered · 2 not delivered (reason on stderr) |
 | `watch <target> --note "…"` | no | `target`, `note` | 0 |
-| `spawn <repo> --task "…"` | **yes** | `repo`, `base`, `task`, `model`, `effort`, `name`, `workstream`, `role` (each `null` when not given) | 0 spawned · 2 refused, or never picked up and withdrawn · 3 taken but not confirmed |
+| `spawn <repo> --task "…"` | **yes** | `repo`, `base`, `task`, `model`, `effort`, `name`, `workstream`, `role`, `taskClass`, `writes`, `isolation` (each `null` when not given) | 0 spawned · 2 refused, or never picked up and withdrawn · 3 taken but not confirmed |
 | `rename <target> --to "…"` | no | `target`, `name` | 0 |
 | `close <target>` | yes | `target` | 0 closed · 2 refused or not confirmed |
 | `personality` | no | — | 0 |
@@ -680,6 +680,7 @@ sender's `COS_SESSION_ID`, or `null`). Verbs that block read `god-outbox/.receip
 ```sh
 cos-coord spawn "<repo>" --task "<first instruction>" [--base <branch>] [--model <alias-or-id>]
   [--effort <level>] [--name "<terminal name>"] [--role <slug>] [--workstream <id>]
+  [--class <task-class>] [--writes none|repo|outside] [--isolation <mode>]
 ```
 
 - `--role <slug>`: the role file the new session runs on, by its `role:` slug. Without it a
@@ -688,6 +689,10 @@ cos-coord spawn "<repo>" --task "<first instruction>" [--base <branch>] [--model
   and the app logs why (`[roles] …`). Which roles a session may start is a later step.
 - `--workstream <id>`: the workstream the session serves. Stored on the session record, and
   otherwise unused for now.
+- `--class`, `--writes`, `--isolation`: the session's isolation intent — see
+  [Isolation modes](#isolation-modes). Passed through as given; junk reads as absent. They change
+  nothing unless `config.json` `isolation` is `cheap-readonly`, except that `--isolation
+  shared-write` is always refused (exit 2).
 
 It **confirms before returning**. Success prints the new terminal, its branch and its session id:
 
@@ -698,7 +703,7 @@ coord: spawned "wt-main-7" on wt/main-7 — session 3f0c…e21a
 The receipt the app files (`god.ts` `SpawnReceipt`):
 
 ```jsonc
-{ "ok": true, "spawned": { "terminal": "wt-main-7", "branch": "wt/main-7", "sessionId": "3f0c…e21a" } }
+{ "ok": true, "spawned": { "terminal": "wt-main-7", "branch": "wt/main-7", "sessionId": "3f0c…e21a", "mode": "worktree" } }
 { "ok": false, "reason": "unknown repo \"ghost\". Known: app, api" }
 ```
 
@@ -726,3 +731,44 @@ as absent. Turning it off needs no migration, and turning it back on finds the l
 ```json
 { "v2": { "recordLineage": false } }
 ```
+
+### Isolation modes
+
+Where a new session in a **repo** target works is decided by `decideIsolation()`
+(`src/core/isolation.ts`), a pure function of the spawn's intent, the role's rung and the setting.
+Folder targets are not decided: they run in the folder, as always.
+
+| mode | chip | where | granted at this step |
+| --- | --- | --- | --- |
+| `worktree` | `wt` | its own branch and worktree | always — every repo write |
+| `shared-readonly` | `ro` | the repo's existing checkout; writes nothing | under `cheap-readonly` |
+| `scratch` | `scr` | `<coordDir>/scratch/<sessionId>`, outside every target | under `cheap-readonly` |
+| `shared-write` | `rw🔒` | the existing checkout, holding a write lease | **never** — needs the step-9 lease store and write hook |
+
+`config.json` `isolation`: `"worktree-always"` (the default, and the rollback: every spawn gets
+a worktree, exactly as before) or `"cheap-readonly"`. Any other value reads as the default.
+
+```json
+{ "isolation": "cheap-readonly" }
+```
+
+The intent: `--class` is one of `feature` (default), `small-fix`, `config`, `investigate`,
+`doc`, `release`. `--writes` defaults from the class — `investigate` → `none`, `doc` →
+`outside`, everything else `repo`. `--isolation` requests a mode; a request for `ro`/`scr` with
+repo writes falls back to a worktree, it is never refused.
+
+The rung ceiling comes from the role file's `authority:`. An `observer` or `proposer` gets
+`shared-readonly` or `scratch` whatever it asks for; an undeclared `--writes` reads as `none`
+for it, and an explicit `--writes repo` is **refused**, naming the role and the checkout. Roles
+carry no `isolation:` key. A refusal is a spawn receipt with `ok: false` whose reason names a
+holder and a path.
+
+A `ro`/`scr` session is told its mode in its prompt (a Session facts line). Nothing **enforces**
+it yet — the Edit/Write hook is step 9 — and its record carries `folder: true`, so closing it
+never removes the checkout or deletes a branch.
+
+Every decision is appended to `<coordDir>/isolation.jsonl`, one JSON object per line: `ts`,
+`repo`, `checkout`, `taskClass`, `writes`, `requested`, `policy`, `rungCeiling`, `role`,
+`ok`, then `mode` or `holder` + `path`, `reason`, and once known `sessionId` and `cwd` (or
+`failed` when the grant could not be carried out). It exists because the app's own `git worktree
+add` does not pass through the coordination hook, so `board.md` undercounts worktree creation.
