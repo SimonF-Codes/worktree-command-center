@@ -636,7 +636,7 @@ export class TerminalsGrid {
 
 	/** Shared spawn core: create a worktree + tile, render, persist, layout. Optionally queue an
 	 *  initial task to send once the new session is first ready. Returns the tile (or null). */
-	private async spawnWorktree(repo: RepoConfig, base: string, opts: { task?: string; model?: string; effort?: string; name?: string; lineage?: SessionLineage }): Promise<TerminalTile | null> {
+	private async spawnWorktree(repo: RepoConfig, base: string, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage }): Promise<TerminalTile | null> {
 		try {
 			const branches = await listBranches(repo.path);
 			const branch = this.pendingNewBranch ?? nextWorktreeBranch(branches, base);
@@ -645,7 +645,7 @@ export class TerminalsGrid {
 			// Explicit opts win; otherwise inherit the toolbar dropdowns ('' = CLI default = no flag).
 			const model = opts.model ?? (this.modelSel?.value || undefined);
 			const effort = opts.effort ?? (this.effortSel?.value || undefined);
-			const tile = this.makeTile(worktree, repo.name, repo.path, base, false, opts.name, model, effort, undefined, undefined, newIdentity(opts.lineage));
+			const tile = this.makeTile(worktree, repo.name, repo.path, base, false, opts.name, model, effort, undefined, opts.roleSlug, newIdentity(opts.lineage));
 			if (opts.task) this.pendingTask.set(tile.tileId, opts.task);
 			if (this.stageEl) tile.render(this.stageEl);
 			this.tiles.push(tile);
@@ -1103,9 +1103,12 @@ export class TerminalsGrid {
 		const repo = this.repos.find((r) => r.name === repoName)
 			?? this.repos.find((r) => r.name.toLowerCase() === repoName.toLowerCase());
 		if (!repo) return null;
-		if (repo.folder) return this.spawnFolder(repo, { task, model, effort, name, lineage }); // --base is meaningless here
+		// roleSlug is passed through as given: an unknown or inactive slug falls back to the compiled
+		// default inside role-loader, with the reason logged. Checking it against `spawns:` is step 10.
+		const roleSlug = extras.roleSlug;
+		if (repo.folder) return this.spawnFolder(repo, { task, model, effort, name, roleSlug, lineage }); // --base is meaningless here
 		const baseBranch = base ?? (defaultBranch(await listBranches(repo.path)) ?? 'main');
-		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name, lineage });
+		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name, roleSlug, lineage });
 	}
 
 	/** Spawn a terminal on a NAMED role, in a folder that need not be one of the floor's repos.

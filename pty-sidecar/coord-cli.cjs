@@ -134,8 +134,9 @@ function main() {
     const effort = flag(rest, '--effort') || '';
     const name = flag(rest, '--name') || '';
     const workstream = flag(rest, '--workstream') || '';
+    const role = flag(rest, '--role') || ''; // passed through; the app's role loader decides what it resolves to
     requireArgs('spawn', Boolean(repo && task), '<repo> --task "<task>"');
-    store.spawn(dir, repo, base, task, model, effort, name, { workstream });
+    store.spawn(dir, repo, base, task, model, effort, name, { workstream, role });
     process.exit(0);
   }
 
@@ -187,7 +188,7 @@ function main() {
     process.exit(0);
   }
 
-  console.error('usage: cos-coord <status|acquire|release|note|chat|tell|watch|spawn|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--to "…"]');
+  console.error('usage: cos-coord <status|acquire|release|note|chat|tell|watch|spawn|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--to "…"]');
   process.exit(0);
 }
 

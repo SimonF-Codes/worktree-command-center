@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseOutboxMessage, spawnExtrasOf } from '../src/terminals/god';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
+import { sessionRoleSlug } from '../src/terminals/role-library';
 
 /** A counter-backed mint, so a test can see exactly how many ids were created. */
 function countingMint(): { mint: () => string; count: () => number } {
@@ -133,5 +134,29 @@ describe('lineage fields on the record', () => {
 		const back = restoreIdentity(JSON.parse(JSON.stringify(identityFields(id))));
 		expect(back).toEqual({ sessionId: 's-1', parentSessionId: 'kane-1', workstreamId: 'ws-1' });
 		expect(identityFields(newIdentity({ parentSessionId: ' ', workstreamId: '' }, () => 's-2'))).toEqual({ sessionId: 's-2' });
+	});
+});
+
+describe('spawn --role (E4)', () => {
+	it('reaches the tile\'s resolved role slug, and the record keeps it', () => {
+		const { raw, msg } = spawnViaCli(['app', '--task', 'research X', '--role', 'researcher']);
+		expect(raw.role).toBe('researcher');
+		const extras = spawnExtrasOf(msg);
+		expect(extras.roleSlug).toBe('researcher');
+		// What the tile resolves (terminal-tile sessionPrompt) for a spawned WORKTREE session.
+		expect(sessionRoleSlug(extras.roleSlug, false)).toBe('researcher');
+	});
+
+	it('without --role a spawned worktree session is still a Worker Terminal, a folder one a Folder Terminal', () => {
+		const { raw, msg } = spawnViaCli(['app', '--task', 'do X']);
+		expect(raw.role).toBeNull();
+		expect(sessionRoleSlug(spawnExtrasOf(msg).roleSlug, false)).toBe('worker-terminal');
+		expect(sessionRoleSlug(undefined, true)).toBe('folder-terminal');
+		expect(sessionRoleSlug('  ', false)).toBe('worker-terminal');
+	});
+
+	it('an unknown slug is passed through unvalidated — the role loader is what falls back', () => {
+		const { msg } = spawnViaCli(['app', '--task', 'x', '--role', 'no-such-role']);
+		expect(sessionRoleSlug(spawnExtrasOf(msg).roleSlug, false)).toBe('no-such-role');
 	});
 });

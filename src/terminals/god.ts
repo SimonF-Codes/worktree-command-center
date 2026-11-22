@@ -18,8 +18,9 @@ export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracod
 export type OutboxMessage =
 	| { kind: 'tell'; target: string; message: string }
 	| { kind: 'watch'; target: string; note: string }
-	// workstream: `spawn --workstream`, null when not given (and in drops from an older cos-coord).
-	| { kind: 'spawn'; repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null; workstream: string | null }
+	// workstream / role: `spawn --workstream` / `--role`, null when not given (and in drops from an
+	// older cos-coord).
+	| { kind: 'spawn'; repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null; workstream: string | null; role: string | null }
 	| { kind: 'rename'; target: string; name: string }
 	| { kind: 'close'; target: string }
 	| { kind: 'personality' }
@@ -28,14 +29,17 @@ export type OutboxMessage =
 	| { kind: 'new-tab'; request: Record<string, unknown> };
 
 /** Pure: what a parsed spawn request asks the app to record about the session it creates. */
-export function spawnExtrasOf(msg: Extract<OutboxMessage, { kind: 'spawn' }>): { workstreamId?: string } {
-	return msg.workstream ? { workstreamId: msg.workstream } : {};
+export function spawnExtrasOf(msg: Extract<OutboxMessage, { kind: 'spawn' }>): { workstreamId?: string; roleSlug?: string } {
+	return {
+		...(msg.workstream ? { workstreamId: msg.workstream } : {}),
+		...(msg.role ? { roleSlug: msg.role } : {}),
+	};
 }
 
 /** Parse one god-outbox JSON message into a typed command. An untagged {target,message} is
  *  read as a tell (back-compat). Returns null on malformed / missing fields. */
 export function parseOutboxMessage(text: string): OutboxMessage | null {
-	let o: { kind?: unknown; target?: unknown; message?: unknown; note?: unknown; repo?: unknown; base?: unknown; task?: unknown; model?: unknown; effort?: unknown; name?: unknown; workstream?: unknown };
+	let o: { kind?: unknown; target?: unknown; message?: unknown; note?: unknown; repo?: unknown; base?: unknown; task?: unknown; model?: unknown; effort?: unknown; name?: unknown; workstream?: unknown; role?: unknown };
 	try { o = JSON.parse(text); } catch { return null; }
 	if (!o || typeof o !== 'object') return null;
 	const kind = typeof o.kind === 'string' ? o.kind : 'tell';
@@ -58,7 +62,8 @@ export function parseOutboxMessage(text: string): OutboxMessage | null {
 			const effort = typeof o.effort === 'string' && o.effort.trim() ? o.effort.trim().toLowerCase() : null;
 			const name = typeof o.name === 'string' && o.name.trim() ? o.name.trim() : null;
 			const workstream = typeof o.workstream === 'string' && o.workstream.trim() ? o.workstream.trim() : null;
-			return { kind: 'spawn', repo: o.repo, base, task: o.task, model, effort, name, workstream };
+			const role = typeof o.role === 'string' && o.role.trim() ? o.role.trim() : null;
+			return { kind: 'spawn', repo: o.repo, base, task: o.task, model, effort, name, workstream, role };
 		}
 	} else if (kind === 'rename') {
 		if (typeof o.target === 'string' && typeof o.name === 'string' && o.target.trim() && o.name.trim()) {

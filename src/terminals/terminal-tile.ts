@@ -8,7 +8,7 @@ import { SessionBridge, safeSessionEnv } from './session-bridge';
 import { readClipboardText, writeClipboardText } from './clipboard';
 import { removeWorktreeAndBranch, terminalSystemPrompt, folderSystemPrompt, worktreeSettingsPath, type WorktreeInfo, type CloseOutcome } from './worktree-manager';
 import { loadRolePrompt } from './role-loader';
-import type { SessionFact } from './role-library';
+import { sessionRoleSlug, type SessionFact } from './role-library';
 import { scrollIntentForKey, type ScrollIntent } from './scroll-keys';
 import { attachDragSelect } from './drag-select';
 import { FitThrottle } from './fit-throttle';
@@ -726,7 +726,7 @@ export class TerminalTile implements StageTile {
 		const facts: SessionFact[] = this.opts.folder
 			? [{ label: 'folder', value: this.opts.repoName }, { label: 'working directory', value: wt.worktreePath }]
 			: [{ label: 'repo', value: this.opts.repoName }, { label: 'branch', value: wt.branch }, { label: 'worktree', value: wt.worktreePath }];
-		const slug = this.opts.roleSlug ?? (this.opts.folder ? 'folder-terminal' : 'worker-terminal');
+		const slug = sessionRoleSlug(this.opts.roleSlug, this.opts.folder);
 		return loadRolePrompt(this.opts.roleLibraryPath, slug, facts)
 			?? (this.opts.folder
 				? folderSystemPrompt(this.opts.repoName, wt.worktreePath)

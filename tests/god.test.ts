@@ -18,15 +18,15 @@ describe('parseOutboxMessage', () => {
   });
   it('parses a spawn with and without a base', () => {
     expect(parseOutboxMessage('{"kind":"spawn","repo":"app","base":"main","task":"do X"}'))
-      .toEqual({ kind: 'spawn', repo: 'app', base: 'main', task: 'do X', model: null, effort: null, name: null, workstream: null });
+      .toEqual({ kind: 'spawn', repo: 'app', base: 'main', task: 'do X', model: null, effort: null, name: null, workstream: null, role: null });
     expect(parseOutboxMessage('{"kind":"spawn","repo":"app","task":"do X"}'))
-      .toEqual({ kind: 'spawn', repo: 'app', base: null, task: 'do X', model: null, effort: null, name: null, workstream: null });
+      .toEqual({ kind: 'spawn', repo: 'app', base: null, task: 'do X', model: null, effort: null, name: null, workstream: null, role: null });
   });
   it('parses spawn model/effort/name, lowercasing effort and nulling junk', () => {
     expect(parseOutboxMessage('{"kind":"spawn","repo":"app","task":"x","model":"opus","effort":"MAX","name":"Linehaul"}'))
-      .toEqual({ kind: 'spawn', repo: 'app', base: null, task: 'x', model: 'opus', effort: 'max', name: 'Linehaul', workstream: null });
+      .toEqual({ kind: 'spawn', repo: 'app', base: null, task: 'x', model: 'opus', effort: 'max', name: 'Linehaul', workstream: null, role: null });
     expect(parseOutboxMessage('{"kind":"spawn","repo":"app","task":"x","model":"  ","effort":42,"name":" "}'))
-      .toEqual({ kind: 'spawn', repo: 'app', base: null, task: 'x', model: null, effort: null, name: null, workstream: null });
+      .toEqual({ kind: 'spawn', repo: 'app', base: null, task: 'x', model: null, effort: null, name: null, workstream: null, role: null });
   });
   it('parses a rename and rejects blank fields', () => {
     expect(parseOutboxMessage('{"kind":"rename","target":"wt-1","name":"Linehaul fix"}'))
