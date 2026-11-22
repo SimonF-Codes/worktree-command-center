@@ -43,9 +43,10 @@ import type { StageTile } from './stage-tile';
 import type { SessionClaim } from './session-memory';
 import type { SessionFacts } from './auto-close';
 import { ensureSessionIds, newIdentity, readLineage, restoreIdentity, type SessionIdentity, type SessionLineage } from './lineage';
-import { decideIsolation, resolveIntent, rungCeilingOf, parseMode, DEFAULT_POLICY, type IsolationPolicy, type IsolationIntent, type IsolationContext, type IsolationDecision, type Mode } from '../core/isolation';
+import { decideIsolation, resolveIntent, rungCeilingOf, parseMode, isolationRecord, DEFAULT_POLICY, type IsolationPolicy, type IsolationIntent, type IsolationContext, type IsolationDecision, type Mode } from '../core/isolation';
 import { loadRoleAuthority } from './role-loader';
 import { sessionRoleSlug } from './role-library';
+import { appendIsolationRecord } from './isolation-log';
 
 /** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
  *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
@@ -625,7 +626,12 @@ export class TerminalsGrid {
 		if (repo?.folder) { await this.spawnFolder(repo, {}); return; } // no branch to require
 		const base = this.branchSel?.value;
 		if (!repo || !base) { this.deps.toast('Pick a repo and branch first', 'warn'); return; }
-		await this.spawnWorktree(repo, base, {});
+		// The toolbar declares no intent, so this is always a worktree — but it is still a spawn,
+		// and isolation.jsonl has to count it or the worktree-creation figure undercounts.
+		const plan = this.planIsolation(repo, {});
+		let failed: string | undefined;
+		const tile = await this.executeIsolation(plan.decision, repo, base, { onFail: (r) => { failed = r; } });
+		this.logIsolation(repo, plan, tile, failed);
 	}
 
 	/** Spawn core for a FOLDER target: no `git worktree add`, no branch — the tile's working
@@ -1144,11 +1150,30 @@ export class TerminalsGrid {
 		const roleSlug = extras.roleSlug;
 		if (repo.folder) return this.spawnFolder(repo, { task, model, effort, name, roleSlug, lineage, onFail }); // --base is meaningless here
 		// gather → plan → execute: the decision is pure (core/isolation.ts); everything below acts on it.
-		const { decision } = this.planIsolation(repo, extras);
+		const plan = this.planIsolation(repo, extras);
+		let failed: string | undefined;
+		const fail = (r: string): void => { failed = r; onFail?.(r); };
+		const tile = await this.executeIsolation(plan.decision, repo, base, { task, model, effort, name, roleSlug, lineage, onFail: fail });
+		this.logIsolation(repo, plan, tile, failed);
+		return tile;
+	}
+
+	/** Append this spawn's decision, and what came of it, to isolation.jsonl. A refusal has no
+	 *  outcome to add; a grant that could not be carried out says why. */
+	private logIsolation(repo: RepoConfig, plan: { intent: IsolationIntent; ctx: IsolationContext; decision: IsolationDecision }, tile: TerminalTile | null, failed: string | undefined): void {
+		const outcome = tile
+			? { sessionId: tile.sessionId, cwd: tile.worktreePath }
+			: (plan.decision.ok && failed ? { failed } : {});
+		appendIsolationRecord(this.coordDir, isolationRecord(repo.name, plan.intent, plan.ctx, plan.decision, outcome));
+	}
+
+	/** Carry out one isolation decision for a repo target. */
+	private async executeIsolation(decision: IsolationDecision, repo: RepoConfig, base: string | null, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage; onFail: (reason: string) => void }): Promise<TerminalTile | null> {
+		const { task, model, effort, name, roleSlug, lineage, onFail } = opts;
 		if (!decision.ok) {
 			const why = `${decision.reason} (holder: ${decision.holder}; path: ${decision.path})`;
 			this.deps.toast(`Not spawned in ${repo.name} — ${why}`, 'warn');
-			onFail?.(why);
+			onFail(why);
 			return null;
 		}
 		if (decision.mode === 'shared-readonly') {
