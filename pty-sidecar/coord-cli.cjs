@@ -248,6 +248,48 @@ function main() {
     return viaSession(dir, 'assign', { terminal: resource }, `assign "${resource}"`, 'COS_COORD_TELL_WAIT_MS');
   }
 
+  // Spawn proposals (V2 step 10). Any session may propose, whatever its rung; the record is inert
+  // until a session whose role holds spawns: accepts it, and accepting re-runs checkDelegation.
+  if (cmd === 'propose-spawn') {
+    const all = [resource, ...rest].filter((x) => x !== undefined);
+    const role = flag(all, '--role') || '';
+    const task = flag(all, '--task') || '';
+    const why = flag(all, '--why') || '';
+    requireArgs('propose-spawn', Boolean(role && task && why), '--role <slug> --task "<task>" --why "<why it deserves its own session>"');
+    return viaSession(dir, 'propose-spawn', { role, task, why }, 'propose-spawn', 'COS_COORD_TELL_WAIT_MS');
+  }
+
+  if (cmd === 'proposal') {
+    const id = rest[0];
+    if (resource === 'accept') {
+      requireArgs('proposal accept', Boolean(id), '<proposal-id> [--repo <repo>] [--base <branch>]');
+      return viaSession(dir, 'proposal-accept', { proposal: id, repo: flag(rest, '--repo') || null, base: flag(rest, '--base') || null }, `accept of proposal ${id}`, 'COS_COORD_SPAWN_WAIT_MS');
+    }
+    if (resource === 'decline') {
+      const reason = flag(rest, '--reason') || '';
+      requireArgs('proposal decline', Boolean(id && reason), '<proposal-id> --reason "<why not>"');
+      return viaSession(dir, 'proposal-decline', { proposal: id, reason }, `decline of proposal ${id}`, 'COS_COORD_TELL_WAIT_MS');
+    }
+    requireArgs('proposal', false, 'accept <id> [--repo <repo>] | decline <id> --reason "…"');
+  }
+
+  // Read-only: this session's proposals (made by it, or addressed to it), or every one with --all.
+  // Reads the append-only file directly, so a proposer can read a decline's reason with no app.
+  if (cmd === 'proposals') {
+    const proposalsCore = require('./proposals-core.cjs');
+    let text = '';
+    try { text = require('fs').readFileSync(path.join(dir, 'spawn-proposals.jsonl'), 'utf8'); } catch { /* none yet */ }
+    const all = proposalsCore.foldProposals(text);
+    const me = env('COS_SESSION_ID', '');
+    const showAll = resource === '--all' || !me;
+    const mine = showAll ? all : all.filter((p) => p.from.sessionId === me || p.to === me);
+    const names = {};
+    for (const p of all) names[p.from.sessionId] = p.from.name;
+    if (me) names[me] = `${names[me] || me} (you)`;
+    console.log(mine.length ? mine.map((p) => proposalsCore.formatProposal(p, names)).join('\n') : `coord: no spawn proposals${showAll ? '' : ' from or to this session'}`);
+    process.exit(0);
+  }
+
   if (cmd === 'rename') {
     if (env('COS_ROLE') !== 'god') denyGodOnly('rename'); // only GOD may rename worker terminals
     const target = resource;
@@ -296,7 +338,7 @@ function main() {
     process.exit(0);
   }
 
-  console.error('usage: cos-coord <status|lease [release]|acquire|release|note|chat|tell|watch|spawn|assign|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--class <task-class>] [--writes <none|repo|outside>] [--isolation <mode>] [--to "…"]');
+  console.error('usage: cos-coord <status|lease [release]|acquire|release|note|chat|tell|watch|spawn|assign|propose-spawn|proposal accept|proposal decline|proposals|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--class <task-class>] [--writes <none|repo|outside>] [--isolation <mode>] [--to "…"] [--why "…"] [--repo <repo>] [--reason "…"]');
   process.exit(0);
 }
 

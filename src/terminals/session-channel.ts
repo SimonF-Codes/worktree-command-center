@@ -8,6 +8,7 @@
  *    sessions/<sessionId>/requests/.done/      the claimed requests (claim = rename, as connectors)
  *    sessions/<sessionId>/receipts/<id>.json   out — accepted | rejected, with a reason
  *    delegation.jsonl                          one line per decision: who asked, what, the outcome
+ *    spawn-proposals.jsonl                     proposals and their decisions (proposals-core.cjs)
  *
  *  Identity is the DIRECTORY a request was dropped in, as on the connector channel. The role that
  *  identity carries is the one on the app's session record; what that role may do is its role
@@ -20,8 +21,15 @@ import { isReceiptStale, receiptFilename } from './connectors';
 import type { RoleLookup } from '../core/delegation';
 import {
 	evaluateSessionRequest, parseSessionRequest, requesterOf,
-	type FloorRepo, type FloorSession, type SessionRequest, type SpawnPlan,
+	type FloorRepo, type FloorSession, type SessionContext, type SpawnPlan,
 } from '../core/session-requests';
+import { evaluateAccept, evaluateDecline, evaluatePropose, staleOnEnd, type SpawnProposal } from '../core/proposals';
+import { foldProposals } from '../../pty-sidecar/proposals-core.cjs';
+
+/** Every proposal in a coordination directory, folded. An unreadable file reads as none. */
+export function readProposals(coordDir: string): SpawnProposal[] {
+	try { return foldProposals(fsSync.readFileSync(path.join(coordDir, 'spawn-proposals.jsonl'), 'utf8')); } catch { return []; }
+}
 
 export interface SpawnedInfo { terminal: string; branch: string; sessionId: string; mode?: string }
 
@@ -44,8 +52,6 @@ export interface SessionChannelDeps {
 	tell: (terminal: string, message: string) => Promise<{ ok: boolean; reason?: string }>;
 	/** Re-parent a live session and persist it. False when it is no longer live. */
 	assign: (targetSessionId: string, parentSessionId: string) => boolean;
-	/** Optional extra kinds (proposals) — return null to fall through to "not handled". */
-	extra?: (req: SessionRequest, requesterId: string) => Promise<Omit<SessionReceipt, 'v' | 'id' | 'handledMs'> & { log?: Record<string, unknown> } | null>;
 	now?: () => number;
 }
 
@@ -111,12 +117,13 @@ export class SessionChannel {
 		};
 		if (!parsed.ok) { reply({ status: 'rejected', reason: parsed.reason }); return; }
 		const req = parsed.request;
+		const ctx = (): SessionContext => ({
+			enabled: this.deps.enabled(), requesterId: sessionId,
+			sessions: this.deps.floor(), lookup: this.deps.lookup(), repos: this.deps.repos(),
+		});
 		try {
 			if (req.kind === 'spawn' || req.kind === 'tell' || req.kind === 'assign') {
-				const d = evaluateSessionRequest(req, {
-					enabled: this.deps.enabled(), requesterId: sessionId,
-					sessions: this.deps.floor(), lookup: this.deps.lookup(), repos: this.deps.repos(),
-				});
+				const d = evaluateSessionRequest(req, ctx());
 				if (!d.ok) { reply({ status: 'rejected', reason: d.reason }, req.kind === 'spawn' ? { role: req.role, repo: req.repo } : { target: req.terminal }); return; }
 				if (d.action === 'spawn') {
 					const r = await this.deps.spawn(d);
@@ -136,12 +143,52 @@ export class SessionChannel {
 				{ target: d.terminal, targetSessionId: d.targetSessionId, parent: d.parentSessionId, by: requesterOf({ requesterId: sessionId, sessions: this.deps.floor() })?.name });
 				return;
 			}
-			const r = this.deps.extra ? await this.deps.extra(req, sessionId) : null;
-			if (r) { const { log, ...receipt } = r; reply(receipt, log); return; }
-			reply({ status: 'rejected', reason: `${req.kind} is not handled by this build of the app` });
+			// ---- Spawn proposals. Inert records; a decision is the only thing that moves one.
+			const proposals = readProposals(this.deps.coordDir);
+			if (req.kind === 'propose-spawn') {
+				const now = this.now();
+				const d = evaluatePropose(req, ctx(), proposals, { id: `p-${now}-${Math.random().toString(36).slice(2, 8)}`, ts: now });
+				if (!d.ok) { reply({ status: 'rejected', reason: d.reason }, { role: req.role }); return; }
+				this.appendProposalEvent(d.event);
+				reply({ status: 'accepted', proposalId: d.event.id }, { role: req.role, proposal: d.event.id, to: d.event.to });
+				return;
+			}
+			if (req.kind === 'proposal-accept') {
+				const plan = evaluateAccept(req, ctx(), proposals);
+				if (!plan.ok) { reply({ status: 'rejected', reason: plan.reason }, { proposal: req.proposal }); return; }
+				const { proposal, ...spawnPlan } = plan;
+				const r = await this.deps.spawn(spawnPlan);
+				if (!r.ok) { reply({ status: 'rejected', reason: r.reason }, { proposal: proposal.id }); return; } // still open: nothing was spawned
+				this.appendProposalEvent({ ev: 'accept', ts: this.now(), id: proposal.id, by: sessionId, byName: this.nameOf(sessionId), spawned: r.spawned.sessionId });
+				reply({ status: 'accepted', terminalName: r.spawned.terminal, spawned: r.spawned, proposalId: proposal.id }, { proposal: proposal.id, role: spawnPlan.childRole, child: r.spawned.sessionId });
+				return;
+			}
+			const d = evaluateDecline(req, ctx(), proposals);
+			if (!d.ok) { reply({ status: 'rejected', reason: d.reason }, { proposal: req.proposal }); return; }
+			this.appendProposalEvent({ ev: 'decline', ts: this.now(), id: d.proposal.id, by: sessionId, byName: this.nameOf(sessionId), reason: req.reason });
+			reply({ status: 'accepted', proposalId: d.proposal.id }, { proposal: d.proposal.id, reason: req.reason });
 		} catch (e) {
 			reply({ status: 'rejected', reason: `the app failed while handling it: ${(e as Error).message}` });
 		}
+	}
+
+	private nameOf(sessionId: string): string {
+		return this.deps.floor().find((s) => s.sessionId === sessionId)?.name ?? sessionId;
+	}
+
+	/** Rule 3: a session ended — its open proposals go stale rather than linger unexplained. */
+	proposerEnded(sessionId: string): void {
+		try {
+			for (const p of staleOnEnd(readProposals(this.deps.coordDir), sessionId)) {
+				this.appendProposalEvent({ ev: 'stale', ts: this.now(), id: p.id, reason: `${p.from.name} ended` });
+			}
+		} catch { /* a close must not fail on this; display reads an orphaned open one as stale anyway */ }
+	}
+
+	/** Append-only (D2): persist() rewrites config.json from memory; this file it never touches. */
+	private appendProposalEvent(e: Record<string, unknown>): void {
+		fsSync.mkdirSync(this.deps.coordDir, { recursive: true });
+		fsSync.appendFileSync(path.join(this.deps.coordDir, 'spawn-proposals.jsonl'), JSON.stringify({ v: 1, ...e }) + '\n', 'utf8');
 	}
 
 	private writeReceipt(sessionId: string, receipt: SessionReceipt): void {

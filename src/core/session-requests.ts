@@ -128,6 +128,8 @@ export interface FloorSession {
 	name: string;
 	/** The target the session works in, when it has one — the default repo for an accepted proposal. */
 	repoName?: string;
+	/** The workstream it serves — carried onto a proposal it writes. */
+	workstreamId?: string;
 	journal?: boolean;
 }
 

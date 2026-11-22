@@ -1022,6 +1022,7 @@ export class TerminalsGrid {
 		if (this.centeredId === tileId) this.centeredId = null;
 		this.q = rqClose(this.q, tileId).state;
 		tile.kill();
+		this.sessionChannel?.proposerEnded(tt.sessionId); // its open spawn proposals go stale with it
 		await this.persist();
 		this.applyLayout();
 		this.autoCenter();
@@ -1477,8 +1478,8 @@ export class TerminalsGrid {
 		const on = this.deps.recordLineage ?? true;
 		const out: FloorSession[] = this.allSessions().filter((t) => !t.isJournal).map((t) => {
 			const tt = t as TerminalTile;
-			const parent = readLineage(tt.identity, on).parentSessionId;
-			return { key: tt.tileId, sessionId: tt.sessionId, role: tt.role, name: tt.name, ...(tt.repoName ? { repoName: tt.repoName } : {}), ...(parent ? { parentSessionId: parent } : {}) };
+			const { parentSessionId: parent, workstreamId } = readLineage(tt.identity, on);
+			return { key: tt.tileId, sessionId: tt.sessionId, role: tt.role, name: tt.name, ...(tt.repoName ? { repoName: tt.repoName } : {}), ...(parent ? { parentSessionId: parent } : {}), ...(workstreamId ? { workstreamId } : {}) };
 		});
 		if (this.godConsole) out.unshift({ key: -1, sessionId: this.godConsole.sessionId, role: 'alpha', name: this.overseerName });
 		return out;
@@ -2314,7 +2315,7 @@ export class TerminalsGrid {
 			onRequestRename: (t, cur) => {
 				void this.deps.promptForTopic('Rename terminal', 'New name', cur, 'Rename').then((name) => { if (name && name.trim()) t.setName(name.trim()); });
 			},
-			onClosed: (t) => { this.idleTiles.delete(t.tileId); if (this.lockedTileId === t.tileId) this.lockedTileId = null; if (this.centeredId === t.tileId) this.centeredId = null; this.q = rqClose(this.q, t.tileId).state; this.tiles = this.tiles.filter((x) => x !== t); void this.persist(); this.applyLayout(); this.autoCenter(); void this.releaseLeases(t); },
+			onClosed: (t) => { this.idleTiles.delete(t.tileId); if (this.lockedTileId === t.tileId) this.lockedTileId = null; if (this.centeredId === t.tileId) this.centeredId = null; this.q = rqClose(this.q, t.tileId).state; this.tiles = this.tiles.filter((x) => x !== t); void this.persist(); this.applyLayout(); this.autoCenter(); void this.releaseLeases(t); this.sessionChannel?.proposerEnded(t.sessionId); },
 			onCloseKept: (t, r) => this.deps.toast(`${t.name} closed — ${r.branch === 'kept' ? `branch ${t.branch} kept` : 'branch deleted'}${r.worktree === 'kept' ? ', worktree kept' : ''}: ${r.reason}${r.parked ? '. Its uncommitted work was committed onto the branch first' : ''}`, 'warn'),
 			onHide: (t) => this.hideTile(t),
 			onLock: (t) => this.toggleLockById(t.tileId),
