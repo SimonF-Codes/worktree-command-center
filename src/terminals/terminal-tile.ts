@@ -141,6 +141,8 @@ export class TerminalTile implements StageTile {
 	get tileId(): number { return this.opts.tileId; }
 	/** Stable across restarts, unlike tileId. */
 	get sessionId(): string { return this.opts.identity.sessionId; }
+	/** Identity plus lineage, as written. Readers go through lineage.ts readLineage. */
+	get identity(): SessionIdentity { return this.opts.identity; }
 
 	render(parent: HTMLElement): void {
 		this.el = parent.createDiv({ cls: 'cos-term-tile' });

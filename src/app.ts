@@ -4,6 +4,7 @@ import { promptForTopic, promptForConfirm, promptForChoice } from './ui/prompt-d
 import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/terminals-grid';
 import { parseGodSelfImprove } from './terminals/god';
 import { parseRoleLibrary } from './terminals/role-library';
+import { parseRecordLineage } from './terminals/lineage';
 import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, forgetRepo, retargetRepo, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
 import { planMove, describeMovePlan, describeRefusals, remapRepoLinks, samePath, isInside, legacyWorktreeRootFor, nestButton, type PathMove } from './move-repo';
@@ -231,6 +232,8 @@ async function main(): Promise<void> {
 		// folder, each session's system prompt comes from the role file there instead of the
 		// compiled-in builder. Absent key = built-ins, which is every existing config.
 		const roleLibrary = parseRoleLibrary(cfg.roleLibrary);
+		// V2 step 6: `v2.recordLineage`, default on. Off = lineage still written, never read.
+		const recordLineage = parseRecordLineage(cfg.v2);
 
 		const sessionsFile = path.join(userData, '.terminal-sessions.json');
 		// A grid drains its outbox and connectors in its constructor — before the new-tab code
@@ -257,6 +260,7 @@ async function main(): Promise<void> {
 			godSelfImprove,
 			roleLibrary,
 			connectors,
+			recordLineage,
 			newTab: async (fields, by) => { await newTabIsReady; return newTabFromSession(fields, by); },
 			sessionEnv: () => sessionEnvProvider({ workspaceId: id }),
 			overseerName: typeof cfg.overseerName === 'string' ? cfg.overseerName : undefined,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ensureSessionIds, restoreIdentity, newIdentity, identityFields, mintSessionId } from '../src/terminals/lineage';
+import { ensureSessionIds, restoreIdentity, newIdentity, identityFields, mintSessionId, parseRecordLineage, readLineage } from '../src/terminals/lineage';
 import { godRecords, godIndexOf } from '../src/terminals/god-sessions';
 import { execFileSync } from 'node:child_process';
 import * as os from 'node:os';
@@ -197,5 +197,30 @@ describe('from on outbox requests (E5)', () => {
 		// session-env strips every COS_*; each spawn path sets its own. A tile that inherited the
 		// overseer's id would attribute its own spawns to Kane.
 		expect(isParentSessionVar('COS_SESSION_ID')).toBe(true);
+	});
+});
+
+describe('v2.recordLineage', () => {
+	it('defaults on; only an explicit false turns it off', () => {
+		expect(parseRecordLineage(undefined)).toBe(true);
+		expect(parseRecordLineage({})).toBe(true);
+		expect(parseRecordLineage('junk')).toBe(true);
+		expect(parseRecordLineage({ recordLineage: 'no' })).toBe(true);
+		expect(parseRecordLineage({ recordLineage: true })).toBe(true);
+		expect(parseRecordLineage({ recordLineage: false })).toBe(false);
+	});
+
+	it('off: the fields are still WRITTEN, and simply not read', () => {
+		const off = parseRecordLineage({ recordLineage: false });
+		// The whole write path, unchanged by the setting: CLI → outbox → extras → record → disk.
+		const { msg } = spawnViaCli(['app', '--task', 'x', '--workstream', 'ws-9'], { COS_SESSION_ID: 'kane-1' });
+		const onDisk = JSON.parse(JSON.stringify(identityFields(newIdentity(spawnExtrasOf(msg)))));
+		expect(onDisk).toMatchObject({ parentSessionId: 'kane-1', workstreamId: 'ws-9' });
+		// ...and survives a restore with the setting off, so turning it back on finds it intact.
+		const restored = restoreIdentity(onDisk);
+		expect(restored).toMatchObject({ parentSessionId: 'kane-1', workstreamId: 'ws-9' });
+		// The reader sees nothing while it is off, everything once it is back on.
+		expect(readLineage(restored, off)).toEqual({});
+		expect(readLineage(restored, true)).toEqual({ parentSessionId: 'kane-1', workstreamId: 'ws-9' });
 	});
 });

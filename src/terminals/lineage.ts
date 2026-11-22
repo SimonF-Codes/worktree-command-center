@@ -62,6 +62,26 @@ export function identityFields(id: SessionIdentity): SessionIdentity {
 	return { sessionId: id.sessionId, ...cleanLineage(id) };
 }
 
+// ---- The setting: config.json `v2.recordLineage`, default ON.
+//
+// Off means the lineage fields are still WRITTEN — spawn records them and persist keeps them —
+// but every reader treats them as absent. That is the whole rollback story: turning it off needs
+// no migration, and turning it back on finds the edges intact. (Older builds already ignore
+// fields they do not know.) sessionId is identity, not lineage, and is never gated.
+
+/** Read `v2.recordLineage` from config.json's `v2` block. Only an explicit `false` turns it off:
+ *  a missing block, a missing key or junk all read as the default, on. */
+export function parseRecordLineage(v2: unknown): boolean {
+	if (!v2 || typeof v2 !== 'object') return true;
+	return (v2 as { recordLineage?: unknown }).recordLineage !== false;
+}
+
+/** The lineage a reader may use. With the setting off this is always empty, whatever the record
+ *  holds — the ONLY gate; nothing that writes lineage consults the setting. */
+export function readLineage(src: { parentSessionId?: unknown; workstreamId?: unknown }, recordLineage: boolean): SessionLineage {
+	return recordLineage ? cleanLineage(src) : {};
+}
+
 /** Only the usable lineage values; blanks and junk are dropped. */
 function cleanLineage(src: { parentSessionId?: unknown; workstreamId?: unknown }): SessionLineage {
 	return {

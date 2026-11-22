@@ -42,7 +42,7 @@ import { vaultNoteFilename, vaultNoteContent, type ConvertDestination, type Vaul
 import type { StageTile } from './stage-tile';
 import type { SessionClaim } from './session-memory';
 import type { SessionFacts } from './auto-close';
-import { ensureSessionIds, newIdentity, restoreIdentity, type SessionIdentity, type SessionLineage } from './lineage';
+import { ensureSessionIds, newIdentity, readLineage, restoreIdentity, type SessionIdentity, type SessionLineage } from './lineage';
 
 /** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
  *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
@@ -88,6 +88,9 @@ export interface GridDeps {
 	/** Connectors registered in config.json — a request from an unregistered id gets a rejected
 	 *  receipt rather than being honoured. See docs/api.md. */
 	connectors?: ConnectorConfig[];
+	/** config.json `v2.recordLineage` (lineage.ts parseRecordLineage). Gates READING lineage only —
+	 *  spawn and persist write it either way. Absent reads as on. */
+	recordLineage?: boolean;
 	toast: (msg: string, variant?: ToastVariant, opts?: ToastPushOptions) => void;
 	promptForTopic: (title: string, placeholder: string, initial?: string, okLabel?: string) => Promise<string | null>;
 	openSettings: () => void;
@@ -1048,6 +1051,17 @@ export class TerminalsGrid {
 	}
 
 	/** Snapshot of which terminals need attention, for the topbar queue. */
+	/** Every live terminal session's identity and the lineage the setting lets a reader see.
+	 *  The input the team tree (step 7) builds from; with `v2.recordLineage` off the lineage is
+	 *  empty here while the records still carry it. */
+	sessionLineage(): Array<{ sessionId: string; tileId: number; name: string } & SessionLineage> {
+		const on = this.deps.recordLineage ?? true;
+		return [...this.tiles, ...this.hidden].filter((t) => !t.isJournal).map((t) => {
+			const tt = t as TerminalTile;
+			return { sessionId: tt.sessionId, tileId: tt.tileId, name: tt.name, ...readLineage(tt.identity, on) };
+		});
+	}
+
 	attentionItems(): AttentionItem[] {
 		return classifyAttention((this.allSessions().filter((t) => !t.isJournal) as TerminalTile[]).map((t) => ({
 			id: t.tileId, name: t.name, repo: this.repoNameFor(t),
