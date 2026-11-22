@@ -48,6 +48,10 @@ import type { SessionClaim } from './terminals/session-memory';
 import { RolesView } from './ui/roles-view';
 import { ManagerViewPane } from './ui/manager-view';
 import { openProposalCounts } from './ui/manager-model';
+import { ProjectPanel } from './ui/project-panel';
+import { ProjectMetricsRunner } from './terminals/project-metrics';
+import { parseProjectPanelEnabled, panelPlacement, PROJECT_PANEL_W, METRICS_REFRESH_MS } from './core/project-panel';
+import { minTileSize } from './terminals/bubble-layout';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
 import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, linkWorkspaceRepo, type Workspace } from './terminals/workspace-store';
 import { pickCloseRecords, summarizeClose, riskProbeTargets, buildCloseConfirm } from './terminals/close-summary';
@@ -339,6 +343,8 @@ async function main(): Promise<void> {
 			onTeamViewChange: (on) => { teamView = on; sidebar.refresh(); },
 			// Applied live: the grids' request channels and the sidebar both read `managers` on every use.
 			onManagersChange: (on) => { managers = on; sidebar.refresh(); },
+			// Applied live. Off hides 📊 and closes the panel; the logs keep being written regardless.
+			onProjectPanelChange: (on) => { projectPanelOn = on; projectBtn.style.display = on ? '' : 'none'; if (!on) closeProject(); },
 			targets: {
 				list: () => repos,
 				move: (r) => moveTargetInteractive(r),
@@ -600,7 +606,9 @@ async function main(): Promise<void> {
 			viewLibraryPath = parseRoleLibrary(fresh.roleLibrary)?.path ?? roleLibrary?.path;
 			// One full-window view at a time. Swapping hands over whether the terminal was showing,
 			// rather than showing it and hiding it again (showTerminal's mount is async).
-			if (managerView.isOpen) {
+			const fromProject = releaseProjectPane();
+			if (fromProject !== null) terminalWasShownBeforeRoles = fromProject;
+			else if (managerView.isOpen) {
 				managerView.close();
 				managerTarget = null;
 				terminalWasShownBeforeRoles = terminalWasShownBeforeManager;
@@ -649,7 +657,9 @@ async function main(): Promise<void> {
 			const sessionId = g?.sessionIdOfTile(tileId);
 			if (!g || !sessionId) return;
 			const name = g.floorSessions().find((s) => s.sessionId === sessionId)?.name ?? 'manager';
-			if (managerView.isOpen) managerView.close(); // switching managers keeps the terminal hidden
+			const fromProject = releaseProjectPane();
+			if (fromProject !== null) terminalWasShownBeforeManager = fromProject;
+			else if (managerView.isOpen) managerView.close(); // switching managers keeps the terminal hidden
 			else if (rolesView.isOpen) {
 				rolesView.close(); // hand over, as openRoles does — never show-then-hide
 				terminalWasShownBeforeManager = terminalWasShownBeforeRoles;
@@ -660,6 +670,117 @@ async function main(): Promise<void> {
 			managerTarget = { workspaceId, sessionId, name };
 			managerView.open(appEl);
 		}
+
+		// --- 📊 Project panel (V2 Team Floor step 11), behind `v2.projectPanel` (default off; applied
+		// live). Its numbers come from `wcc-team metrics`, run as a CHILD PROCESS (D11) — on demand when
+		// it opens and at most every five minutes while it stays open — and its live sections (open
+		// work, tasks, proposals) from the same core functions over the coordination files. It PINS as
+		// a column only while the stage beside it still holds one usable terminal (panelPlacement: the
+		// minTileSize inequality from live cell metrics, never a pixel breakpoint); otherwise it opens
+		// in the main pane, the way Roles does. Off = no 📊; the logs keep being written regardless.
+		let projectPanelOn = parseProjectPanelEnabled(cfg.v2);
+		const projectBtn = barButton('wcc-settings-btn', '📊', 'Project');
+		projectBtn.style.display = projectPanelOn ? '' : 'none';
+		const metricsRunner = new ProjectMetricsRunner({ cliPath: path.join(sidecarDir, 'wcc-team.cjs'), userData, log: (l) => console.info(l) });
+		let terminalWasShownBeforeProject = true;
+		let projectTimer: number | null = null;
+		const runProjectMetrics = (): void => {
+			const id = activeId;
+			void metricsRunner.refresh(id).then(() => projectPanel.refresh());
+			projectPanel.refresh(); // show "computing" at once
+		};
+		const projectPanel = new ProjectPanel({
+			input: () => {
+				const g = grids.get(activeId);
+				if (!g) return null;
+				const sessions = g.floorSessions();
+				return {
+					now: Date.now(),
+					workspace: { id: activeId, name: workspaces.find((w) => w.id === activeId)?.name ?? activeId },
+					run: metricsRunner.latest(activeId),
+					running: metricsRunner.running(activeId),
+					live: {
+						workstreams: g.workstreams(),
+						proposals: g.spawnProposals(),
+						liveSessionIds: new Set(sessions.map((s) => s.sessionId)),
+						names: Object.fromEntries(sessions.map((s) => [s.sessionId, s.name])),
+						preview: (id) => g.previewProposal(id),
+					},
+				};
+			},
+			onRefresh: runProjectMetrics,
+			// FR-53: Accept / Decline act FOR the proposal's addressee — the same evaluation, and the same
+			// checkDelegation against its role file, as the addressee's own `cos-coord proposal accept`.
+			onAccept: (id) => void decideProposal(id, 'accept'),
+			onDecline: (id) => void decideProposal(id, 'decline'),
+		});
+		async function decideProposal(id: string, decision: 'accept' | 'decline'): Promise<void> {
+			const g = grids.get(activeId);
+			if (!g) return;
+			let reason: string | undefined;
+			if (decision === 'decline') {
+				const r = await promptForTopic('Decline this spawn proposal', 'Why not? The proposer reads this, and it is not re-proposed.', '', 'Decline');
+				if (!r?.trim()) return;
+				reason = r.trim();
+			}
+			projectPanel.setBusy(id, true);
+			const r = await g.decideProposal(id, decision, reason);
+			projectPanel.setBusy(id, false);
+			toast(r.ok ? r.message : `Not ${decision === 'accept' ? 'accepted' : 'declined'} — ${r.reason}`, r.ok ? 'success' : 'error');
+		}
+		const projectWhere = (): 'column' | 'main-pane' => {
+			const f = activeGrid.layoutFacts();
+			if (!terminalShown || f.stageW === null || f.stageW <= 0) return 'main-pane';
+			const pinnedNow = projectPanel.isOpen && projectPanel.mode === 'column';
+			return panelPlacement({ stageW: f.stageW, pinnedNow, panelW: PROJECT_PANEL_W, minTileW: minTileSize(f.metrics).w });
+		};
+		function closeProject(): void {
+			if (!projectPanel.isOpen) return;
+			if (projectTimer !== null) { window.clearInterval(projectTimer); projectTimer = null; }
+			const wasPane = projectPanel.mode === 'pane';
+			projectPanel.close();
+			gridContainer.removeClass('wcc-has-project');
+			if (wasPane && terminalWasShownBeforeProject) void showTerminal();
+		}
+		projectPanel.onClose = closeProject;
+		/** Another main-pane view is opening: give up the pane, handing over whether the terminal was
+		 *  showing. Null when the panel was not in the pane (a pinned column stays where it is). */
+		function releaseProjectPane(): boolean | null {
+			if (!projectPanel.isOpen || projectPanel.mode !== 'pane') return null;
+			if (projectTimer !== null) { window.clearInterval(projectTimer); projectTimer = null; }
+			projectPanel.close();
+			return terminalWasShownBeforeProject;
+		}
+		function openProject(): void {
+			if (projectPanel.isOpen) closeProject();
+			if (projectWhere() === 'column') {
+				gridContainer.style.setProperty('--wcc-project-w', `${PROJECT_PANEL_W}px`);
+				gridContainer.addClass('wcc-has-project');
+				projectPanel.open(gridContainer, 'column');
+			} else {
+				if (rolesView.isOpen) { rolesView.close(); terminalWasShownBeforeProject = terminalWasShownBeforeRoles; }
+				else if (managerView.isOpen) { managerView.close(); managerTarget = null; terminalWasShownBeforeProject = terminalWasShownBeforeManager; }
+				else { terminalWasShownBeforeProject = terminalShown; hideTerminal(); }
+				projectPanel.open(appEl, 'pane');
+			}
+			runProjectMetrics(); // on demand when it opens …
+			projectTimer = window.setInterval(runProjectMetrics, METRICS_REFRESH_MS); // … and at most every 5 min after
+		}
+		projectBtn.addEventListener('click', () => { if (projectPanel.isOpen) closeProject(); else openProject(); });
+		// A pinned column that would now leave the stage narrower than one usable terminal unpins.
+		// Re-checked whenever the grid container changes size: a window resize, the sidebar, a font change.
+		new ResizeObserver(() => {
+			if (!projectPanel.isOpen || projectPanel.mode !== 'column' || projectWhere() === 'column') return;
+			closeProject();
+			toast('Project panel unpinned — beside it the stage would be narrower than one usable terminal. 📊 opens it in the main pane.', 'info');
+		}).observe(gridContainer);
+		wsSwitchCbs.push((id) => {
+			if (!projectPanel.isOpen) return;
+			const last = metricsRunner.latest(id);
+			if (!last || Date.now() - (last.finishedAt ?? 0) > METRICS_REFRESH_MS) runProjectMetrics();
+			else projectPanel.refresh();
+		});
+		window.addEventListener('beforeunload', () => closeProject());
 
 		// --- tabs born linked to a repo (tab-repo.ts) ---
 		// Where the last new repo went, so the next one is proposed beside it. Written by its own

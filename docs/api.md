@@ -927,6 +927,22 @@ rows read *no repo* and the task rows still work. No role library → the vault 
 configured*. Vault logs are matched by their filename's `— <Project>` part against the workspace and
 repo names.
 
+**The 📊 Project panel** renders this for the active workspace (`v2.projectPanel`, default off;
+Settings → Sidebar → Project panel, applied live). It runs `wcc-team metrics --json --workspace <id>`
+when it opens and at most every five minutes after, and recomputes open work, tasks and proposals
+live from the files with the same functions. It **pins** beside the stage only while
+`stageW − 400 ≥ minTileSize(m).w` — one 80-column terminal at the live font still fits — and
+otherwise opens in the main pane; a pinned panel that stops fitting unpins. Its **Spawn proposals**
+list has Accept / Decline, which act **for the proposal's addressee**: the decision is evaluated as
+that session, so Accept runs the same `checkDelegation` against the addressee's role file as its own
+`cos-coord proposal accept` would, spawns under it, and records `"by": "simon"`. A proposal written
+while unassigned has no addressee, so the panel can only decline it. Profile:
+[perf/step11-metrics-profile.md](perf/step11-metrics-profile.md).
+
+```json
+{ "v2": { "projectPanel": true } }
+```
+
 ### Isolation modes
 
 Where a new session in a **repo** target works is decided by `decideIsolation()`

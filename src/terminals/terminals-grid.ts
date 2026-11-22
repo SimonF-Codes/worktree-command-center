@@ -50,6 +50,8 @@ import { loadRoleAuthority } from './role-loader';
 import { sessionRoleSlug } from './role-library';
 import { appendIsolationRecord } from './isolation-log';
 import { appendAttentionLines, readAttentionLog } from './attention-log';
+import { foldWorkstreams, type Workstream } from '../../pty-sidecar/workstreams-core.cjs';
+import { foldCached } from './append-log-cache';
 import { AttentionRecorder, type AttentionLine, type UnobservedWhy } from '../core/attention-log';
 import { SessionChannel, readProposals, type SpawnedInfo } from './session-channel';
 import type { SpawnProposal } from '../core/proposals';
@@ -1497,6 +1499,27 @@ export class TerminalsGrid {
 
 	/** Every spawn proposal in this workspace's coordination directory, folded (read-only). */
 	spawnProposals(): SpawnProposal[] { return readProposals(this.coordDir); }
+
+	/** This workspace's workstreams, folded from workstreams.jsonl (read-only — the CLI owns it). */
+	workstreams(): Workstream[] {
+		return foldCached(path.join(this.coordDir, 'workstreams.jsonl'), foldWorkstreams);
+	}
+
+	/** The Project panel's Accept / Decline, acting for the proposal's addressee (session-channel.ts). */
+	decideProposal(id: string, decision: 'accept' | 'decline', reason?: string): Promise<{ ok: true; message: string } | { ok: false; reason: string }> {
+		return this.sessionChannel?.decideForAddressee(id, decision, reason) ?? Promise.resolve({ ok: false, reason: 'this workspace\'s request channel is not running' });
+	}
+
+	/** Would Accept pass right now? The same evaluation, no spawn. */
+	previewProposal(id: string): { ok: true } | { ok: false; reason: string } {
+		return this.sessionChannel?.previewAccept(id) ?? { ok: false, reason: 'this workspace\'s request channel is not running' };
+	}
+
+	/** px per cell + chrome from a live terminal, and the stage's current width — the Project panel's
+	 *  pin rule is the same inequality the layout uses (minTileSize), never a pixel breakpoint. */
+	layoutFacts(): { metrics: CellMetrics; stageW: number | null } {
+		return { metrics: this.cellMetrics(), stageW: this.stageEl?.clientWidth ?? null };
+	}
 
 	/** The active role files, as delegation reads them (cached, see delegation-roles.ts). */
 	delegationRoles(): RoleLookup { return delegationLookup(this.deps.roleLibrary?.path); }

@@ -59,7 +59,7 @@ describe('the rule: unavailable is a reason, never a zero, never a missing row',
 		const tm = Object.fromEntries(r.taskMetrics.map((m) => [m.id, m]));
 		expect(tm.progress!.value).toBe('1 / 2');
 		expect(tm['task-lead-time']).toMatchObject({ value: 2, unit: 'd' });
-		expect(tm['stale-work']).toMatchObject({ value: 1, unit: 'tasks' }); // doing, unchanged 4 d
+		expect(tm['stale-work']).toMatchObject({ value: 1, unit: 'task' }); // doing, unchanged 4 d
 		expect(r.metrics.find((m) => m.id === 'open-work')).toMatchObject({ value: 1 });
 		expect(r.openWork).toEqual([expect.objectContaining({ id: 'ws-1', state: 'doing', done: 1, total: 2 })]);
 		expect(r.metrics.find((m) => m.id === 'landed')!.value).toBe('0 workstreams · 1 task');

@@ -250,7 +250,8 @@ function leadTime(i: ProjectInputs, merges: LandedMerge[] | null): Metric {
 	};
 }
 
-function openWork(i: ProjectInputs): Metric {
+/** Exported: the panel recomputes it live from the file between wcc-team runs. */
+export function openWork(i: Pick<ProjectInputs, 'now' | 'workstreams'>): Metric {
 	const id = 'open-work';
 	const label = 'Open work · workstreams not landed or dropped';
 	const source = 'workstreams.jsonl';
@@ -343,7 +344,7 @@ function idleAlive(i: ProjectInputs): Metric {
 		return { ...unavailable(id, label, source, '≤5m', `the floor report is ${Math.round((i.now - f.generatedAt) / 60_000)} min old — is the app running?`), asOf: f.generatedAt };
 	}
 	const n = f.terminals.filter((t) => !t.dead && t.status === 'idle' && t.idleSince && i.now - Date.parse(t.idleSince) >= IDLE_ALIVE_MS).length;
-	return { id, label, value: n, unit: 'sessions', source, asOf: f.generatedAt, freshness: '≤5m' };
+	return { id, label, value: n, unit: n === 1 ? 'session' : 'sessions', source, asOf: f.generatedAt, freshness: '≤5m' };
 }
 
 function isolationCost(i: ProjectInputs): Metric {
@@ -412,7 +413,7 @@ export function taskMetrics(i: Pick<ProjectInputs, 'now' | 'workstreams'>): Metr
 		? unavailable('task-lead-time', 'Task lead time · median opened → done, 14 d', source, 'live', 'no task was done in the last 14 days')
 		: { id: 'task-lead-time', label: `Task lead time · median of ${done.length}, 14 d`, ...durationValue(lt), source, asOf: i.now, freshness: 'live' };
 	const stale = tasks.filter((t) => t.state === 'doing' && i.now - t.changed >= STALE_TASK_MS).length;
-	return [progress, lead, { id: 'stale-work', label: 'Stale work · tasks doing, unchanged ≥ 3 d', value: stale, unit: 'tasks', source, asOf: i.now, freshness: 'live' }];
+	return [progress, lead, { id: 'stale-work', label: 'Stale work · tasks doing, unchanged ≥ 3 d', value: stale, unit: stale === 1 ? 'task' : 'tasks', source, asOf: i.now, freshness: 'live' }];
 }
 
 export function openWorkRows(i: Pick<ProjectInputs, 'now' | 'workstreams' | 'names'>): OpenWorkRow[] {
@@ -481,6 +482,26 @@ export function buildProjectReport(i: ProjectInputs): ProjectReport {
 		updates: updates(i, merges),
 		proposals: proposalRows(i.proposals, null),
 	};
+}
+
+/** The nine's base labels, for when there is no report to read them from yet. */
+export const METRIC_LABELS: Record<(typeof METRIC_IDS)[number], string> = {
+	'lead-time': 'Lead time · median, 14 d',
+	'open-work': 'Open work · workstreams not landed or dropped',
+	landed: 'Landed · last 7 d',
+	'blocked-time': 'Blocked time · waiting on you (input + help), 7 d',
+	rework: 'Rework rate · landed then reverted or reopened, 14 d',
+	'idle-alive': 'Idle but alive · sessions idle ≥ 20 min',
+	'isolation-cost': 'Isolation cost · worktrees created ÷ workstreams landed, 14 d',
+	highlights: 'Highlights · releases and highlight:: log entries, 14 d',
+	suggestions: 'Suggestions · newest Workflow Auditor notes',
+};
+
+/** All nine, each unavailable for the same reason — while wcc-team runs, or when it failed. The
+ *  rows are there either way: a panel that drew nothing until the numbers arrived would hide that
+ *  nine measurements were expected. */
+export function pendingMetrics(reason: string): Metric[] {
+	return METRIC_IDS.map((id) => ({ id, label: METRIC_LABELS[id], value: null, source: 'wcc-team metrics --json', asOf: null, freshness: '≤5m' as const, unavailable: reason }));
 }
 
 /** A metric is well-formed: null exactly when there is a reason. The panel checks this before
