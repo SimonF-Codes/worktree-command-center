@@ -221,12 +221,22 @@ Kane's. Point `config.json` at a folder of them:
 { "roleLibrary": { "path": "C:/Users/you/vault/_meta/agents" } }
 ```
 
-Each file is frontmatter plus prose. Only three fields matter:
+Each file is frontmatter plus prose. The vault's `_meta/agents/Charter.md` documents the whole
+format; these are the fields the app reads:
 
 - `role:` is the slug the app looks up. It is **not** the filename, so a role can be renamed for
   display without breaking anything.
 - `status:` must be `active`.
 - Everything after the frontmatter becomes the prompt.
+- `authority:`, one rung of `observer < proposer < operator < autonomous`, caps a spawn's
+  isolation (V2 step 8) and is condition 2 of delegation.
+- `spawns:`, the role slugs it may start, makes it a **manager** (V2 step 10, `v2.managers`):
+  the app checks every spawn, tell and assign a session asks for against it — listed, no higher
+  rung, a subset of the parent's own — and the ★ in the team view comes from it. Absent or empty
+  means the role starts nothing. See [api.md](api.md#managers-session-requests-and-spawn-proposals).
+
+The Charter's `model:`, `effort:` and `mutable-by:` are not read by the app: a session's model and
+effort come from the toolbar or the spawn, and `mutable-by:` is the Custodian's business.
 
 The three slugs the app asks for are `worker-terminal`, `folder-terminal` and `alpha` (the
 overseer).

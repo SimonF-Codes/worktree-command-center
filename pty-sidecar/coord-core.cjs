@@ -38,9 +38,21 @@ function resolveTargetPath(command, cwd) {
   return cwd;
 }
 
+// Could the target a git command was parsed to act on be a real path? The hook reads the TEXT of a
+// Bash command, so a session that merely writes about `git -C <repo> worktree add …` — in a
+// heredoc, a fixture, a doc example — looks like a git operation on the folder "<repo>". Angle
+// brackets are the placeholder signature and are never valid in a Windows path; an empty target is
+// never valid anywhere. Deliberately narrow: this does not ask whether the path exists on disk.
+function isPlausibleTarget(target) {
+  const t = String(target == null ? '' : target).trim();
+  return t !== '' && !/[<>]/.test(t);
+}
+
+// null when the target is not a plausible path: there is no real git operation to lock.
 function gitResource(op, command, cwd) {
-  const repo = baseName(resolveTargetPath(command, cwd));
-  return (op === 'push' ? 'push:' : 'worktree:') + repo;
+  const target = resolveTargetPath(command, cwd);
+  if (!isPlausibleTarget(target)) return null;
+  return (op === 'push' ? 'push:' : 'worktree:') + baseName(target);
 }
 
 function lockStatus(holder, now) {
@@ -116,9 +128,34 @@ function spawnOutcome(r, opts = {}) {
   return { code: 2, err: `coord: spawn in "${repo}" did NOT happen — ${(r && r.reason) || 'unknown reason'}` };
 }
 
+// A session-channel request's exit (V2 step 10): what its receipt — `{ status: 'accepted' |
+// 'rejected', reason, terminalName, spawned, proposalId }`, written by src/terminals/session-
+// channel.ts — or its absence means for the caller. Same exit codes as spawnOutcome: 0 done, 2
+// refused or withdrawn (known not to have happened), 3 taken but unanswered (it may still happen).
+function sessionOutcome(kind, r, opts = {}) {
+  const what = opts.what || kind;
+  const secs = Math.round((opts.waitMs || 0) / 1000);
+  if (r && r.timedOut) {
+    if (opts.withdrawn) return { code: 2, err: `coord: ${what} was WITHDRAWN — the app never picked it up within ${secs}s, so nothing happened and nothing will. Is the app running?` };
+    return { code: 3, err: `coord: ${what} was NOT confirmed — the app took it but gave no answer within ${secs}s; it may still happen. Check floor/INDEX.md before retrying` };
+  }
+  if (!r || r.status !== 'accepted') return { code: 2, err: `coord: ${what} did NOT happen — ${(r && r.reason) || 'unknown reason'}` };
+  if (r.spawned) {
+    const s = r.spawned;
+    const where = s.branch ? `on ${s.branch}` : (s.mode && s.mode !== 'worktree' ? `(${s.mode} — no branch)` : '(folder — no branch)');
+    const prop = r.proposalId ? ` (proposal ${r.proposalId} accepted)` : '';
+    return { code: 0, out: `coord: spawned "${s.terminal}" ${where} — session ${s.sessionId}${prop}` };
+  }
+  if (kind === 'tell') return { code: 0, out: `coord: delivered to "${r.terminalName || '?'}"` };
+  if (kind === 'assign') return { code: 0, out: `coord: "${r.terminalName || '?'}" now reports to this session` };
+  if (kind === 'propose-spawn') return { code: 0, out: `coord: proposal ${r.proposalId || '?'} recorded — inert until a session that holds spawns: acts on it. \`cos-coord proposals\` shows its state` };
+  if (kind === 'proposal-decline') return { code: 0, out: `coord: proposal ${r.proposalId || '?'} declined — the proposer can read why with \`cos-coord proposals\`` };
+  return { code: 0, out: `coord: ${what} done` };
+}
+
 module.exports = {
-  WAIT_MS, POLL_MS, CLI_TTL_MS, GIT_TTL_MS, TELL_WAIT_MS, SEP, spawnOutcome,
-  slug, parseGitOp, baseName, resolveTargetPath, gitResource,
+  WAIT_MS, POLL_MS, CLI_TTL_MS, GIT_TTL_MS, TELL_WAIT_MS, SEP, spawnOutcome, sessionOutcome,
+  slug, parseGitOp, baseName, resolveTargetPath, isPlausibleTarget, gitResource,
   lockStatus, formatBoardLine, parseBoardLine, mergeEvents, taskLabel,
   formatChatLine, parseChatLine,
 };

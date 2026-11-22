@@ -304,3 +304,34 @@ describe('parseTeamSort', () => {
 		expect(TEAM_SORTS.map((x) => x.label)).toEqual(['Lineage', 'Triage', 'Needs-you pinned']);
 	});
 });
+
+// ---- V2 Team Floor step 10: ★ and outside-delegation in the team view.
+
+import { lookupFrom } from '../src/core/delegation';
+
+describe('buildSidebar — team view with v2.managers', () => {
+	const delegation = lookupFrom([
+		{ slug: 'team-lead', authority: 'operator', spawns: ['worker-terminal'] },
+		{ slug: 'worker-terminal', authority: 'operator', spawns: [] },
+	]);
+	const sessions = [s(OVERSEER_ID, 'running', { name: 'Alpha' }), s(1, 'idle'), s(2, 'running'), s(3, 'running'), s(4, 'running')];
+	const lineage = [lin(OVERSEER_ID, undefined, 'alpha'), lin(1, OVERSEER_ID, 'team-lead'), lin(2, 1), lin(3, OVERSEER_ID), lin(4, 3)];
+	const on = () => buildSidebar([ws('w', sessions, { lineage })], new Set(), { teamView: true, delegation })[0]!;
+
+	it('stars the manager row and only it', () => {
+		const g = on();
+		expect(g.team!.tree.filter((l) => l.row.manager).map((l) => l.row.id)).toEqual([1]);
+	});
+
+	it('a worker\'s "child" is unassigned with the delegation refusal as its reason', () => {
+		const g = on();
+		expect(lines(g.team!.tree)).toEqual([[OVERSEER_ID, 0], [1, 1], [2, 2], [3, 1]]);
+		expect(g.team!.unassigned.map((l) => [l.row.id, l.reason])).toEqual([[4, expect.stringMatching(/^outside delegation: worker-terminal may not spawn worker-terminal — condition 1 of 3/)]]);
+	});
+
+	it('without a lookup, nothing is starred and the tree is step 7\'s', () => {
+		const g = buildSidebar([ws('w', sessions, { lineage })], new Set(), { teamView: true })[0]!;
+		expect(g.team!.tree.some((l) => l.row.manager)).toBe(false);
+		expect(g.team!.unassigned).toEqual([]);
+	});
+});

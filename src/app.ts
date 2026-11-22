@@ -5,6 +5,8 @@ import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/termi
 import { parseGodSelfImprove } from './terminals/god';
 import { parseRoleLibrary } from './terminals/role-library';
 import { parseRecordLineage } from './terminals/lineage';
+import { parseManagersEnabled } from './core/delegation';
+import { delegationLookup } from './terminals/delegation-roles';
 import { parseIsolationPolicy } from './core/isolation';
 import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, forgetRepo, retargetRepo, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
@@ -44,6 +46,8 @@ import { parseAutoClose } from './terminals/auto-close';
 import { AutoCloseNoticeView } from './ui/auto-close-notice';
 import type { SessionClaim } from './terminals/session-memory';
 import { RolesView } from './ui/roles-view';
+import { ManagerViewPane } from './ui/manager-view';
+import { openProposalCounts } from './ui/manager-model';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
 import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, linkWorkspaceRepo, type Workspace } from './terminals/workspace-store';
 import { pickCloseRecords, summarizeClose, riskProbeTargets, buildCloseConfirm } from './terminals/close-summary';
@@ -238,6 +242,11 @@ async function main(): Promise<void> {
 		const roleLibrary = parseRoleLibrary(cfg.roleLibrary);
 		// V2 step 6: `v2.recordLineage`, default on. Off = lineage still written, never read.
 		const recordLineage = parseRecordLineage(cfg.v2);
+		// V2 Team Floor step 10: `v2.managers` (default off), applied live. On, a session acts through
+		// its own request directory, checked by checkDelegation against role files re-read live
+		// (delegation-roles.ts) — never against a session's environment — and the team view marks ★
+		// from spawns:. Off, every non-overseer spawn is refused, exactly as before.
+		let managers = parseManagersEnabled(cfg.v2);
 		// V2 steps 8-9: config.json `isolation`, default worktree-always (today's behaviour, and the
 		// rollback). `cheap-readonly` lets a spawn that writes nothing skip the worktree;
 		// `cheapest-safe` also lets a small fix write an existing checkout under its write lease.
@@ -270,6 +279,7 @@ async function main(): Promise<void> {
 			roleLibrary,
 			connectors,
 			recordLineage,
+			managers: () => managers,
 			isolation,
 			newTab: async (fields, by) => { await newTabIsReady; return newTabFromSession(fields, by); },
 			sessionEnv: () => sessionEnvProvider({ workspaceId: id }),
@@ -324,6 +334,8 @@ async function main(): Promise<void> {
 			onAutoCloseChange: (raw) => { autoCloseCfg = parseAutoClose(raw); autoCloser?.apply(); },
 			onSidebarChange: (on) => applySidebar(on),
 			onTeamViewChange: (on) => { teamView = on; sidebar.refresh(); },
+			// Applied live: the grids' request channels and the sidebar both read `managers` on every use.
+			onManagersChange: (on) => { managers = on; sidebar.refresh(); },
 			targets: {
 				list: () => repos,
 				move: (r) => moveTargetInteractive(r),
@@ -497,13 +509,19 @@ async function main(): Promise<void> {
 			activeId: () => activeId,
 			floor: (id) => {
 				const g = grids.get(id);
-				return g ? { live: g.sessionsAreLive(), sessions: g.floorState(), lineage: teamView ? g.sessionLineage() : undefined } : null;
+				if (!g) return null;
+				const lineage = teamView ? g.sessionLineage() : undefined;
+				// FR-53: open spawn proposals, as a count on the row they are addressed to.
+				const proposals = lineage && managers ? openProposalCounts(g.spawnProposals(), new Set(lineage.map((l) => l.sessionId))) : undefined;
+				return { live: g.sessionsAreLive(), sessions: g.floorState(), lineage, proposals };
 			},
 			teamView: () => teamView,
+			delegation: () => (managers ? delegationLookup(roleLibrary?.path) : undefined),
 			onReveal: (id, tileId) => void (async () => {
 				if (id !== activeId) await switchTo(id);
 				if (id === activeId && tileId >= 0) activeGrid.revealTile(tileId); // the overseer row (-1) only switches
 			})(),
+			onOpenManager: (id, tileId) => void openManager(id, tileId),
 		});
 		function applySidebar(on: boolean): void {
 			terminalRoot.toggleClass('wcc-has-sidebar', on);
@@ -577,11 +595,68 @@ async function main(): Promise<void> {
 		const openRoles = async (): Promise<void> => {
 			const fresh = await window.wcc.getConfig().catch(() => ({} as Record<string, unknown>));
 			viewLibraryPath = parseRoleLibrary(fresh.roleLibrary)?.path ?? roleLibrary?.path;
-			terminalWasShownBeforeRoles = terminalShown;
-			hideTerminal();
+			// One full-window view at a time. Swapping hands over whether the terminal was showing,
+			// rather than showing it and hiding it again (showTerminal's mount is async).
+			if (managerView.isOpen) {
+				managerView.close();
+				managerTarget = null;
+				terminalWasShownBeforeRoles = terminalWasShownBeforeManager;
+			} else {
+				terminalWasShownBeforeRoles = terminalShown;
+				hideTerminal();
+			}
 			rolesView.open(appEl);
 		};
 		rolesBtn.addEventListener('click', () => { if (rolesView.isOpen) closeRoles(); else void openRoles(); });
+
+		// --- ★ Manager view (V2 Team Floor step 10): one manager session, full width, in the main pane
+		// — the Roles view's own mechanism. A presentation: it reads the grid's records, the role files
+		// and the proposals file on every refresh, and grants nothing. Opened from a ★ in the sidebar.
+		let managerTarget: { workspaceId: string; sessionId: string; name: string } | null = null;
+		let terminalWasShownBeforeManager = true;
+		const managerView = new ManagerViewPane({
+			input: () => {
+				if (!managerTarget) return null;
+				const g = grids.get(managerTarget.workspaceId);
+				if (!g) return null;
+				const states = new Map(g.floorState().map((r) => [r.id, r]));
+				return {
+					managerSessionId: managerTarget.sessionId,
+					lastKnownName: managerTarget.name,
+					sessions: g.floorSessions().map((s) => ({ ...s, state: states.get(s.key)?.state ?? 'running', branch: states.get(s.key)?.branch ?? '' })),
+					lookup: g.delegationRoles(),
+					proposals: g.spawnProposals(),
+				};
+			},
+			onReveal: (tileKey) => {
+				const ws = managerTarget?.workspaceId;
+				closeManager();
+				if (ws) void (async () => { if (ws !== activeId) await switchTo(ws); if (ws === activeId && tileKey >= 0) activeGrid.revealTile(tileKey); })();
+			},
+		});
+		function closeManager(): void {
+			if (!managerView.isOpen) return;
+			managerView.close();
+			managerTarget = null;
+			if (terminalWasShownBeforeManager) void showTerminal();
+		}
+		managerView.onClose = closeManager;
+		function openManager(workspaceId: string, tileId: number): void {
+			const g = grids.get(workspaceId);
+			const sessionId = g?.sessionIdOfTile(tileId);
+			if (!g || !sessionId) return;
+			const name = g.floorSessions().find((s) => s.sessionId === sessionId)?.name ?? 'manager';
+			if (managerView.isOpen) managerView.close(); // switching managers keeps the terminal hidden
+			else if (rolesView.isOpen) {
+				rolesView.close(); // hand over, as openRoles does — never show-then-hide
+				terminalWasShownBeforeManager = terminalWasShownBeforeRoles;
+			} else {
+				terminalWasShownBeforeManager = terminalShown;
+				hideTerminal();
+			}
+			managerTarget = { workspaceId, sessionId, name };
+			managerView.open(appEl);
+		}
 
 		// --- tabs born linked to a repo (tab-repo.ts) ---
 		// Where the last new repo went, so the next one is proposed beside it. Written by its own

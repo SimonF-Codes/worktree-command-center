@@ -23,6 +23,14 @@ describe('slug / baseName / gitResource', () => {
     expect(core.gitResource('push', 'git push', '/repo/foo')).toBe('push:foo');
     expect(core.gitResource('worktree-add', 'git -C "C:/x/MyRepo" worktree add z', '/repo/foo')).toBe('worktree:MyRepo');
   });
+  it('names no resource for a placeholder target — text about a git command is not one', () => {
+    expect(core.gitResource('worktree-add', 'git -C <repo> worktree add -b <branch> <path> <base>', '/repo/foo')).toBeNull();
+    expect(core.gitResource('push', 'cd <repo> && git push', '/repo/foo')).toBeNull();
+  });
+  it('isPlausibleTarget: angle brackets and empty are never paths; ordinary paths are', () => {
+    for (const t of ['<repo>', 'C:/dev/<name>', '', '   ', null, undefined]) expect(core.isPlausibleTarget(t)).toBe(false);
+    for (const t of ['C:\\dev\\foo', '/repo/foo', '../sibling', 'MyRepo', '$d']) expect(core.isPlausibleTarget(t)).toBe(true);
+  });
 });
 
 describe('lockStatus', () => {

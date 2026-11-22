@@ -1,3 +1,4 @@
+import type { RoleLookup } from '../core/delegation';
 import { buildSidebar, liveRanks, parseTeamSort, ResortClock, sidebarSignature, TEAM_SORTS, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from './sidebar-model';
 
 export interface SidebarDeps {
@@ -6,11 +7,16 @@ export interface SidebarDeps {
 	activeId: () => string;
 	/** One workspace's floor: its grid's floorState() and whether its sessions are restored yet.
 	 *  Null when the workspace has no grid. */
-	floor: (workspaceId: string) => { live: boolean; sessions: SidebarSession[]; lineage?: SidebarLineage[] } | null;
+	floor: (workspaceId: string) => { live: boolean; sessions: SidebarSession[]; lineage?: SidebarLineage[]; proposals?: Record<string, number> } | null;
 	/** `v2.teamView`, read on every refresh so the setting applies live. */
 	teamView?: () => boolean;
+	/** `v2.managers` on: the active role files (built by the app, which does the reading). Read on
+	 *  every refresh, so the setting and an edited role file both apply live. Undefined = off. */
+	delegation?: () => RoleLookup | undefined;
 	/** A row was clicked: bring that tile up (switching workspace first when it is elsewhere). */
 	onReveal: (workspaceId: string, tileId: number) => void;
+	/** A manager's ★ was clicked: open its Manager view (a presentation — it grants nothing). */
+	onOpenManager?: (workspaceId: string, tileId: number) => void;
 }
 
 /** How often the view re-reads floorState(). It renders; it does not classify — the same
@@ -59,12 +65,13 @@ export class Sidebar {
 			const f = this.deps.floor(w.id);
 			return {
 				id: w.id, name: w.name, repo: w.repo, active: w.id === active,
-				live: f?.live ?? false, sessions: f?.sessions ?? [], lineage: f?.lineage,
+				live: f?.live ?? false, sessions: f?.sessions ?? [], lineage: f?.lineage, proposals: f?.proposals,
 			};
 		});
 		const teamView = this.deps.teamView?.() ?? false;
 		const ranks = teamView && this.sort !== 'lineage' ? this.clock.ranks(liveRanks(inputs), Date.now()) : undefined;
-		const groups = buildSidebar(inputs, this.collapsed, { teamView, sort: this.sort, ranks });
+		const delegation = teamView ? this.deps.delegation?.() : undefined;
+		const groups = buildSidebar(inputs, this.collapsed, { teamView, sort: this.sort, ranks, delegation });
 		const sig = `${teamView ? this.sort : 'flat'}|${sidebarSignature(groups)}`;
 		if (sig === this.lastSig) return; // nothing shown changed → leave the DOM (and hover) alone
 		this.lastSig = sig;
@@ -160,13 +167,25 @@ export class Sidebar {
 	}
 
 	private row(parent: HTMLElement, g: SidebarGroup, r: SidebarRow, reason?: string): HTMLElement {
-		const title = `${r.name} · ${r.branch} · ${DOT_TITLE[r.dot]}${reason ? ` · unassigned: ${reason}` : ''}`;
+		const title = `${r.name}${r.manager ? ' · ★ manager (its role file declares spawns:)' : ''} · ${r.branch} · ${DOT_TITLE[r.dot]}${reason ? ` · unassigned: ${reason}` : ''}`;
 		const row = parent.createDiv({ cls: 'wcc-sb-row', attr: { role: 'button', tabindex: '0', title } });
 		row.toggleClass('overseer', r.overseer);
 		this.dot(row, r.dot);
+		if (r.manager) {
+			const open = this.deps.onOpenManager;
+			const star = row.createSpan({ cls: 'wcc-sb-star', text: '★', attr: open
+				? { role: 'button', tabindex: '0', 'aria-label': `Open ${r.name}'s Manager view`, title: `Open ${r.name}'s Manager view — its team, its spawns: and its open proposals` }
+				: { 'aria-label': 'manager' } });
+			if (open) {
+				const go = (e: Event): void => { e.stopPropagation(); open(g.id, r.id); };
+				star.addEventListener('click', go);
+				star.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } });
+			}
+		}
 		row.createSpan({ cls: 'wcc-sb-name', text: r.name });
 		row.createSpan({ cls: 'wcc-sb-branch', text: r.branch });
 		for (const c of r.chips) row.createSpan({ cls: `wcc-sb-chip chip-${c}`, text: c });
+		if (r.proposals) row.createSpan({ cls: 'wcc-sb-chip chip-proposals', text: `◆${r.proposals}`, attr: { title: `${r.proposals} open spawn proposal${r.proposals === 1 ? '' : 's'} addressed to ${r.name} — never obliged; ignoring one is a legitimate outcome` } });
 		const go = (): void => this.deps.onReveal(g.id, r.id);
 		row.addEventListener('click', go);
 		row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });

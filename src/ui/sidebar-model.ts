@@ -7,8 +7,11 @@
 //
 // V2 Team Floor step 7 adds the team view (`v2.teamView`, default off): the same rows, nested by
 // lineage (src/core/team.ts buildTeam) instead of bucketed by state. Off, nothing below changes.
-// Still absent: managers and ★ (step 10), workstreams (step 11).
-import { buildTeam, triageTeam, OVERSEER_ROLE, UNASSIGNED_TEXT, type TeamNode, type TeamSession, type UnassignedNode } from '../core/team';
+// Step 10 (`v2.managers`): with a role lookup passed in, a manager row carries ★ (from its role
+// file's `spawns:`, never from having children) and an edge its parent could not have made lands
+// in UNASSIGNED with the refusal. Still absent: workstreams (step 11).
+import { buildTeam, triageTeam, unassignedText, OVERSEER_ROLE, type TeamNode, type TeamSession, type UnassignedNode } from '../core/team';
+import type { RoleLookup } from '../core/delegation';
 
 /** floorState()'s id for the overseer console (terminals-grid.ts floorState: `id: -1`). */
 export const OVERSEER_ID = -1;
@@ -29,6 +32,9 @@ export interface SidebarWorkspaceInput {
 	/** The grid's sessionLineage() — identity, role and parent edge per tile. Read only with the
 	 *  team view on. A session with no entry here is still shown, as unassigned. */
 	lineage?: SidebarLineage[];
+	/** `v2.managers` on: open spawn proposals per addressee sessionId (manager-model
+	 *  openProposalCounts) — FR-53's count on the parent's row. Read with the team view only. */
+	proposals?: Readonly<Record<string, number>>;
 }
 
 /** The subset of a sessionLineage() row the team view reads. */
@@ -46,6 +52,10 @@ export interface SidebarRow {
 	dot: DotState;
 	chips: string[];
 	overseer: boolean;
+	/** ★ — the session's role file declares `spawns:` (team view with `v2.managers` on only). */
+	manager: boolean;
+	/** Open spawn proposals addressed to this session (◆N). 0 outside the team view. */
+	proposals: number;
 }
 
 export interface SidebarSection { bucket: Bucket; title: string; rows: SidebarRow[]; }
@@ -163,6 +173,8 @@ export interface SidebarOptions {
 	/** The states to order by (a ResortClock snapshot, keyed by rankKey). A session missing from
 	 *  it — opened since the last re-sort — is ordered by its live state. Default: all live. */
 	ranks?: ReadonlyMap<string, DotState>;
+	/** `v2.managers` on: the active role files. Marks ★ and checks every edge (core/team.ts). */
+	delegation?: RoleLookup;
 }
 
 /** Map a classifier state (prompt | menu | errored | idle | running) onto the StateDot four.
@@ -192,12 +204,14 @@ function toRow(s: SidebarSession): SidebarRow {
 		dot: dotFor(s.state),
 		chips: s.remoteOn ? ['remote'] : [],
 		overseer: s.id === OVERSEER_ID,
+		manager: false,
+		proposals: 0,
 	};
 }
 
 /** The team view of one workspace's sessions. Every session in `w.sessions` comes out as exactly
  *  one line (buildTeam's invariant); lineage for a tile that is not in `w.sessions` is ignored. */
-export function buildTeamView(w: SidebarWorkspaceInput, opts: Pick<SidebarOptions, 'sort' | 'ranks'> = {}): SidebarTeam {
+export function buildTeamView(w: SidebarWorkspaceInput, opts: Pick<SidebarOptions, 'sort' | 'ranks' | 'delegation'> = {}): SidebarTeam {
 	const sort = opts.sort ?? 'lineage';
 	const rows = new Map<number, SidebarRow>();
 	for (const s of w.sessions) rows.set(s.id, toRow(s));
@@ -215,7 +229,7 @@ export function buildTeamView(w: SidebarWorkspaceInput, opts: Pick<SidebarOption
 			...(l?.parentSessionId ? { parentSessionId: l.parentSessionId } : {}),
 		};
 	});
-	const built = buildTeam(sessions);
+	const built = buildTeam(sessions, { delegation: opts.delegation });
 	// Triage reorders siblings by their branch's worst state; the other two keep declared order.
 	const severity = (s: TeamSession): number => SEVERITY[rankedDot(s.key)];
 	const overseers = sort === 'triage' ? triageTeam(built.overseers, severity) : built.overseers;
@@ -224,7 +238,9 @@ export function buildTeamView(w: SidebarWorkspaceInput, opts: Pick<SidebarOption
 	const pinned: PinnedLine[] = [];
 	const flatten = (nodes: readonly TeamNode[], depth: number, out: TeamLine[], context: string, reasonOf?: (n: TeamNode) => string): TeamLine[] => {
 		for (const n of nodes) {
-			const row = rows.get(n.session.key)!;
+			const base = rows.get(n.session.key)!;
+			const open = w.proposals?.[n.session.sessionId] ?? 0;
+			const row = n.manager || open ? { ...base, manager: n.manager === true, proposals: open } : base;
 			const reason = reasonOf?.(n);
 			out.push({ row, depth, ...(reason ? { reason } : {}) });
 			if (sort === 'pinned' && BUCKET_OF[rankedDot(n.session.key)] === 'needs') pinned.push({ row, context });
@@ -233,7 +249,7 @@ export function buildTeamView(w: SidebarWorkspaceInput, opts: Pick<SidebarOption
 		return out;
 	};
 	const tree = flatten(overseers, 0, [], 'overseer');
-	const rest = flatten(unassigned, 0, [], 'unassigned', (n) => UNASSIGNED_TEXT[(n as UnassignedNode).reason]);
+	const rest = flatten(unassigned, 0, [], 'unassigned', (n) => unassignedText(n as UnassignedNode));
 	pinned.sort((a, b) => a.row.id - b.row.id);
 	return { pinned, tree, unassigned: rest };
 }

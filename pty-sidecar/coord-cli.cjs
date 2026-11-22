@@ -1,9 +1,11 @@
 'use strict';
 // cos-coord <status|acquire|release|note> — agents call this from Bash.
 // Fail-open: unexpected errors exit 0 (allow). A timed-out acquire exits 1
-// (the lock is working — the && chain should stop). tell/watch/spawn/rename/close/personality
+// (the lock is working — the && chain should stop). watch/rename/close/personality/new-tab
 // are GOD-only: called without COS_ROLE=god they exit 2 (a refusal is a failure, not a silent
-// no-op). The same commands also exit 2 when called AS god but missing a required argument (empty
+// no-op). spawn and tell from any OTHER session the app opened go through that session's own
+// request directory (V2 step 10), as do assign and the spawn-proposal verbs; the app checks them
+// against the role files and every one gets a receipt (docs/api.md, "Session requests"). The same commands also exit 2 when called AS god but missing a required argument (empty
 // target/message/task/etc.) — a malformed handoff must fail loud too, not just an unauthorized one.
 // `tell` additionally BLOCKS for the app's delivery receipt before reporting success (see
 // store.waitForTellReceipt) — dropping the outbox file was never proof the message was typed
@@ -38,6 +40,33 @@ function requireArgs(cmd, ok, usage) {
   if (ok) return;
   console.error(`coord: ${cmd} requires ${usage}`);
   process.exit(2);
+}
+
+// A session-channel verb needs the session's own directory to drop into. Which directory is a
+// routing choice, never an authority check: the APP decides what the session may do, from its
+// record and its role file (src/core/session-requests.ts) — so no COS_* value grants anything here.
+function requireSessionId(cmd) {
+  const me = env('COS_SESSION_ID', '');
+  if (store.SESSION_ID.test(me)) return me;
+  console.error(`coord: ${cmd} requires COS_ROLE=god, or a session the app opened (COS_SESSION_ID) to send it through its own request directory — refused`);
+  process.exit(2);
+}
+
+// Drop one request into this session's directory and block for the app's receipt. Not fail-open:
+// the request either happened or it did not, and the exit code says which (core.sessionOutcome).
+function viaSession(dir, kind, body, what, waitEnv) {
+  const me = requireSessionId(kind);
+  let file;
+  // The rest of this file fails OPEN on an unexpected error; a request must not, or a drop that
+  // never happened would exit 0.
+  try { file = store.dropSessionRequest(dir, me, { kind, ...body }); } catch (e) { console.error(`coord: ${what} did NOT happen — could not write the request: ${e.message}`); process.exit(2); }
+  const id = path.basename(file, '.json');
+  const waitMs = Number(env(waitEnv, String(core.TELL_WAIT_MS)));
+  const r = store.waitForReceiptFile(store.sessionReceiptPath(dir, me, id), { waitMs });
+  const o = core.sessionOutcome(kind, r, { what, waitMs, withdrawn: r.timedOut ? store.withdraw(file) : false });
+  if (o.out) console.log(o.out);
+  if (o.err) console.error(o.err);
+  process.exit(o.code);
 }
 
 // One line per write lease in the machine-wide store (lenient read: this is a display).
@@ -152,9 +181,15 @@ function main() {
   }
 
   if (cmd === 'tell') {
-    if (env('COS_ROLE') !== 'god') denyGodOnly('tell'); // only GOD may inject into worker terminals
     const target = resource;
     const message = rest.join(' ');
+    // Not god: a manager's tell, through its own request directory. The app decides — it reaches
+    // only the sender's own descendants (src/core/session-requests.ts).
+    if (env('COS_ROLE') !== 'god') {
+      requireSessionId('tell');
+      requireArgs('tell', Boolean(target && message), '<target> "<message>"');
+      return viaSession(dir, 'tell', { terminal: target, message }, `tell to "${target}"`, 'COS_COORD_TELL_WAIT_MS');
+    }
     requireArgs('tell', Boolean(target && message), '<target> "<message>"');
     const file = store.tell(dir, target, message, from);
     const id = path.basename(file, '.json');
@@ -175,7 +210,7 @@ function main() {
   }
 
   if (cmd === 'spawn') {
-    if (env('COS_ROLE') !== 'god') denyGodOnly('spawn');
+    if (env('COS_ROLE') !== 'god') requireSessionId('spawn');
     const repo = resource;
     const base = flag(rest, '--base') || '';
     const task = flag(rest, '--task') || '';
@@ -190,6 +225,11 @@ function main() {
     const writes = flag(rest, '--writes') || '';
     const isolation = flag(rest, '--isolation') || '';
     requireArgs('spawn', Boolean(repo && task), '<repo> --task "<task>"');
+    // Not god: a manager's spawn, through its own request directory. The app runs checkDelegation
+    // against the two role files and refuses with the condition that failed.
+    if (env('COS_ROLE') !== 'god') {
+      return viaSession(dir, 'spawn', { repo, base: base || null, task, model: model || null, effort: effort || null, name: name || null, workstream: workstream || null, role: role || null, taskClass: taskClass || null, writes: writes || null, isolation: isolation || null }, `spawn in "${repo}"`, 'COS_COORD_SPAWN_WAIT_MS');
+    }
     // Block for the app's receipt, the way tell does: success prints the terminal, its branch and
     // the sessionId it was given; anything else exits non-zero with the reason (core.spawnOutcome).
     const file = store.spawn(dir, repo, base, task, model, effort, name, { workstream, role, from, taskClass, writes, isolation });
@@ -200,6 +240,54 @@ function main() {
     if (o.out) console.log(o.out);
     if (o.err) console.error(o.err);
     process.exit(o.code);
+  }
+
+  if (cmd === 'assign') {
+    requireSessionId('assign');
+    requireArgs('assign', Boolean(resource && resource.trim()), '<terminal>');
+    return viaSession(dir, 'assign', { terminal: resource }, `assign "${resource}"`, 'COS_COORD_TELL_WAIT_MS');
+  }
+
+  // Spawn proposals (V2 step 10). Any session may propose, whatever its rung; the record is inert
+  // until a session whose role holds spawns: accepts it, and accepting re-runs checkDelegation.
+  if (cmd === 'propose-spawn') {
+    const all = [resource, ...rest].filter((x) => x !== undefined);
+    const role = flag(all, '--role') || '';
+    const task = flag(all, '--task') || '';
+    const why = flag(all, '--why') || '';
+    requireArgs('propose-spawn', Boolean(role && task && why), '--role <slug> --task "<task>" --why "<why it deserves its own session>"');
+    return viaSession(dir, 'propose-spawn', { role, task, why }, 'propose-spawn', 'COS_COORD_TELL_WAIT_MS');
+  }
+
+  if (cmd === 'proposal') {
+    const id = rest[0];
+    if (resource === 'accept') {
+      requireArgs('proposal accept', Boolean(id), '<proposal-id> [--repo <repo>] [--base <branch>]');
+      return viaSession(dir, 'proposal-accept', { proposal: id, repo: flag(rest, '--repo') || null, base: flag(rest, '--base') || null }, `accept of proposal ${id}`, 'COS_COORD_SPAWN_WAIT_MS');
+    }
+    if (resource === 'decline') {
+      const reason = flag(rest, '--reason') || '';
+      requireArgs('proposal decline', Boolean(id && reason), '<proposal-id> --reason "<why not>"');
+      return viaSession(dir, 'proposal-decline', { proposal: id, reason }, `decline of proposal ${id}`, 'COS_COORD_TELL_WAIT_MS');
+    }
+    requireArgs('proposal', false, 'accept <id> [--repo <repo>] | decline <id> --reason "…"');
+  }
+
+  // Read-only: this session's proposals (made by it, or addressed to it), or every one with --all.
+  // Reads the append-only file directly, so a proposer can read a decline's reason with no app.
+  if (cmd === 'proposals') {
+    const proposalsCore = require('./proposals-core.cjs');
+    let text = '';
+    try { text = require('fs').readFileSync(path.join(dir, 'spawn-proposals.jsonl'), 'utf8'); } catch { /* none yet */ }
+    const all = proposalsCore.foldProposals(text);
+    const me = env('COS_SESSION_ID', '');
+    const showAll = resource === '--all' || !me;
+    const mine = showAll ? all : all.filter((p) => p.from.sessionId === me || p.to === me);
+    const names = {};
+    for (const p of all) names[p.from.sessionId] = p.from.name;
+    if (me) names[me] = `${names[me] || me} (you)`;
+    console.log(mine.length ? mine.map((p) => proposalsCore.formatProposal(p, names)).join('\n') : `coord: no spawn proposals${showAll ? '' : ' from or to this session'}`);
+    process.exit(0);
   }
 
   if (cmd === 'rename') {
@@ -250,7 +338,7 @@ function main() {
     process.exit(0);
   }
 
-  console.error('usage: cos-coord <status|lease [release]|acquire|release|note|chat|tell|watch|spawn|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--class <task-class>] [--writes <none|repo|outside>] [--isolation <mode>] [--to "…"]');
+  console.error('usage: cos-coord <status|lease [release]|acquire|release|note|chat|tell|watch|spawn|assign|propose-spawn|proposal accept|proposal decline|proposals|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--class <task-class>] [--writes <none|repo|outside>] [--isolation <mode>] [--to "…"] [--why "…"] [--repo <repo>] [--reason "…"]');
   process.exit(0);
 }
 

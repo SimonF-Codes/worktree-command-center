@@ -4,6 +4,7 @@ import { promptForChoice, promptForTopic, promptForConfirm } from './prompt-dial
 import type { ToastVariant } from './toast-queue';
 import { parseAutoClose, thresholdLabel, AUTO_CLOSE_CHOICES } from '../terminals/auto-close';
 import { parseSidebarEnabled, parseTeamView } from './sidebar-model';
+import { parseManagersEnabled } from '../core/delegation';
 import type { RepoConfig } from '../terminals/terminals-grid';
 import type { NestButton } from '../move-repo';
 import * as fs from 'fs';
@@ -21,6 +22,8 @@ export interface SettingsPanelDeps {
 	onSidebarChange?: (enabled: boolean) => void;
 	/** Switch the sidebar's team view live — the value just saved as `v2.teamView`. */
 	onTeamViewChange?: (enabled: boolean) => void;
+	/** Turn manager delegation on or off live — the value just saved as `v2.managers`. */
+	onManagersChange?: (enabled: boolean) => void;
 	/** The registered targets and what can be done to one. Read from the APP, never from config:
 	 *  persist() rewrites the whole `repos` key from the app's memory, so the app has to make
 	 *  these edits itself or they are overwritten. Each action resolves once it is finished or
@@ -230,6 +233,29 @@ export class SettingsPanel {
 				await this.deps.setConfig({ ...cfg, v2: { ...prev, teamView: on } });
 				this.deps.onTeamViewChange?.(on);
 				this.deps.toast(on ? 'Team view on' : 'Team view off', 'success');
+			})();
+		});
+
+		// V2 Team Floor step 10: managers and delegation. Its own key, default OFF — off is today exactly.
+		const mrow = s.createDiv({ cls: 'wcc-settings-row' });
+		const mlabel = mrow.createEl('label', { cls: 'wcc-settings-row-label' });
+		const mbox = mlabel.createEl('input', { attr: { type: 'checkbox' } }) as HTMLInputElement;
+		mbox.checked = parseManagersEnabled(v2);
+		mlabel.append(' Managers — sessions whose role file declares spawns: may delegate');
+		s.createDiv({
+			cls: 'wcc-settings-note',
+			text: 'A session acts through its own request directory, and the app checks every spawn, tell and assign against '
+				+ 'the role files (listed in spawns:, no higher rung, spawns a subset). The ★ comes from spawns:; a session its parent '
+				+ 'could not have spawned is shown as Unassigned with the reason. Off, the app refuses every non-overseer spawn, as before.',
+		});
+		mbox.addEventListener('change', () => {
+			void (async () => {
+				const on = mbox.checked;
+				const cfg = await this.deps.getConfig();
+				const prev = cfg.v2 && typeof cfg.v2 === 'object' ? (cfg.v2 as Record<string, unknown>) : {};
+				await this.deps.setConfig({ ...cfg, v2: { ...prev, managers: on } });
+				this.deps.onManagersChange?.(on);
+				this.deps.toast(on ? 'Managers on — delegation is checked against the role files' : 'Managers off — only the overseer may spawn', 'success');
 			})();
 		});
 	}

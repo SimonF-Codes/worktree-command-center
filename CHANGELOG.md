@@ -5,6 +5,25 @@ landed on `main`.
 
 ## Unreleased
 
+**★ Managers and delegation (V2 Team Floor step 10) — off by default (`v2.managers`)**
+- **`spawns:` in a role file makes it a manager.** A parent may spawn a child role only when the
+  child is listed in its `spawns:`, sits at or below its rung, and spawns nothing the parent cannot
+  (the Charter's §Delegation). Every refusal names the condition that failed. Checked against the
+  role files only — **no authority check reads an environment variable**.
+- **A request directory per session.** A manager's `cos-coord spawn`, `tell` and the new `assign`
+  go through `sessions/<sessionId>/requests/`, and every attempt gets a receipt. Its `tell` reaches
+  only its own descendants; `assign` is the only way a session moves between groups. Off, every
+  non-overseer spawn is refused, exactly as before. Kane's own channel is unchanged.
+- **The team view**: ★ comes from `spawns:`, never from having children, and a session its parent
+  could not have spawned is listed as Unassigned with the reason.
+- **Spawn proposals.** Any session may `cos-coord propose-spawn --role … --task … --why …`. The
+  record is inert; accepting it re-runs the delegation check in full, so it changes what the
+  orchestrator is asked, never what it may do. Three open per session at most, a declined one is not
+  re-proposed, they go stale with their proposer, and nothing ever auto-spawns. `◆N` on the row.
+- **The Manager view**: open a manager's ★ for a full-width view of its team, its `spawns:` and its
+  open proposals. A presentation — it grants nothing.
+- Role files may write `spawns:` as a YAML block list; before, every `- item` line was dropped.
+
 **🔒 Write claims: shared-readonly is enforced, and shared-write exists (V2 step 9)**
 - **The write hook.** Claude's file tools (Edit, Write, MultiEdit, NotebookEdit) now pass through
   `coord-hook.cjs --write`. A `shared-readonly` or `scratch` session's write into a shared checkout is
@@ -21,6 +40,10 @@ landed on `main`.
   were per workspace, so two tabs could push one repo at once — and named after the session's
   folder, so two worktrees of one repo never contended at all. Now they live in `_claims/`, keyed
   on the git common dir, owned by the session id, and listed in every tab.
+- **Fixed:** a session that only *wrote about* `git -C <repo> worktree add …` (a heredoc, a doc
+  example) took a real lock on the literal folder `<repo>`, which outlived it — and with Q12 every
+  tab would see it. A target carrying `<`/`>`, or an empty one, is not a path: the hook now allows
+  the command and takes no lock.
 - **Fixed:** a stale lock could be taken over twice at once — the second taker deleted the first's
   fresh lock. Every unlink and rewrite of a lock now happens under a guard.
 - It is a cooperative guarantee, **not a sandbox**: shell writes are not seen
