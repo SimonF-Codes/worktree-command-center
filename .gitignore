@@ -6,6 +6,7 @@ pty-sidecar/contexts/
 pty-sidecar/settings/
 # built by esbuild.config.mjs from src/cli/
 pty-sidecar/wcc-worktrees.cjs
+pty-sidecar/wcc-team.cjs
 *.log
 .DS_Store
 .superpowers/

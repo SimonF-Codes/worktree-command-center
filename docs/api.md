@@ -877,6 +877,56 @@ record, so an interval still open at the next boot — the app crashed — is re
 **unknown-length**, never stretched across the hours the app was closed. Blocked time is the sum of
 `input` + `help`. Written whatever `v2.projectPanel` says. Model: `src/core/attention-log.ts`.
 
+### `wcc-team metrics` — the Project panel's numbers
+
+```sh
+wcc-team metrics [--json] [--workspace <id>] [--user-data <dir>]
+```
+
+Beside `wcc-worktrees` in `pty-sidecar/` (bundled from `src/cli/team-cli.ts` by `npm run build`).
+It is how the app computes the Project panel: **as a child process, never on the UI thread** (D11)
+— git never runs in the renderer's process — and the panel renders its JSON. Every figure is made by
+`src/core/metrics.ts`, which the panel also calls for its live, file-backed sections, so there is
+one implementation with two callers. Read-only: it writes nothing.
+
+**It always prints its own cost to stderr** — wall time, the process's own lifetime, and every git
+call with its exit code, duration and output size (NFR-2):
+
+```
+wcc-team: 10 workspaces, 7 repos · wall 336 ms (process 356 ms) · 14 git calls, 1911 ms summed
+  git -C C:\dev\worktree-command-center for-each-ref "--format=…" refs/heads/main refs/heads/master refs/tags → 0 · 66 ms · 1 KB
+  git -C C:\dev\worktree-command-center log --since=2026-10-09 "--format=…" main → 0 · 218 ms · 98 KB
+```
+
+Two git calls per **distinct** repo, however many workspaces share it, all repos at once. With
+`--json`, stdout is `{ schema: 1, generatedAt, workspaces: ProjectReport[], timing }`.
+
+Each `Metric` is `{ id, label, value, unit?, source, asOf, freshness, unavailable? }`. **`value` is
+`null` exactly when `unavailable` holds the reason**; a `0` is always a measured zero. The nine are
+always present, in this order:
+
+| id | measures | source |
+| --- | --- | --- |
+| `lead-time` | median open → land of workstreams landed in 14 d; **until one has, a labelled proxy**: a branch's first commit (author date) → its first-parent merge | `workstreams.jsonl`, else `git log` |
+| `open-work` | workstreams not landed or dropped (the panel lists them) | `workstreams.jsonl` |
+| `landed` | merges, landed workstreams, done tasks and vault log entries, 7 d | git · `workstreams.jsonl` · `Personal/Code/Logs/<date> — <Project>.md` |
+| `blocked-time` | hours in `input` + `help`, 7 d | `attention.jsonl` |
+| `rework` | landed then reverted (`This reverts commit …`) or reopened, 14 d | git · `workstreams.jsonl` |
+| `idle-alive` | sessions idle ≥ 20 min (a floor report older than 15 min is a reason) | `floor-report.json` |
+| `isolation-cost` | worktrees created ÷ workstreams landed, 14 d | `isolation.jsonl` ÷ `workstreams.jsonl` |
+| `highlights` | tags, and log bullets carrying `highlight::`, 14 d | `git for-each-ref refs/tags` · vault logs |
+| `suggestions` | the newest Workflow Auditor notes naming the project in `project::` | `Personal/Code/Proposals/` |
+
+Plus the three task measures that never touch git: `progress`, `task-lead-time`, `stale-work`
+(a task `doing` unchanged for 3 days).
+
+**Which repo a workspace is.** The tab's link; else the one repo tagged to it; else a repo whose
+name is the workspace's (`Brain 2.0` ≡ `Brain_2.0`); else the repo most of its saved terminals work
+in. Never the toolbar's selection, which is a habit rather than a declaration. No repo → the git
+rows read *no repo* and the task rows still work. No role library → the vault rows read *vault not
+configured*. Vault logs are matched by their filename's `— <Project>` part against the workspace and
+repo names.
+
 ### Isolation modes
 
 Where a new session in a **repo** target works is decided by `decideIsolation()`
