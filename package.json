@@ -1,6 +1,6 @@
 {
   "name": "worktree-command-center",
-  "version": "0.13.0",
+  "version": "1.0.0",
   "description": "Run many Claude Code sessions in parallel, each in its own git worktree, tiled in one view.",
   "license": "MIT",
   "author": "Ronald Fridlyand",
@@ -11,7 +11,7 @@
     "start": "npm run build && electron .",
     "test": "vitest run",
     "check-version": "node scripts/check-version.mjs",
-    "dist": "node scripts/check-version.mjs && node scripts/check-no-private.mjs && npm run build && electron-builder --win --publish never",
+    "dist": "node scripts/check-version.mjs && node scripts/check-no-private.mjs && npm test && npm run build && electron-builder --win --publish never",
     "dist:mac": "node scripts/check-version.mjs && node scripts/check-no-private.mjs && npm run build && electron-builder --mac",
     "install-local": "node scripts/install-local.mjs"
   },
@@ -49,12 +49,19 @@
       {
         "from": "pty-sidecar",
         "to": "pty-sidecar",
-        "filter": ["**/*", "!contexts/**"]
+        "filter": [
+          "**/*",
+          "!contexts/**"
+        ]
       },
       {
         "from": "node_modules/node-pty",
         "to": "pty-sidecar/node_modules/node-pty",
-        "filter": ["package.json", "lib/**/*", "prebuilds/**/*"]
+        "filter": [
+          "package.json",
+          "lib/**/*",
+          "prebuilds/**/*"
+        ]
       }
     ],
     "win": {
@@ -69,8 +76,20 @@
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "icon": "assets/icon.icns",
       "category": "public.app-category.developer-tools"
