@@ -119,9 +119,9 @@ function dropOutbox(dir, obj, from) {
 }
 function tell(dir, target, message, from) { return dropOutbox(dir, { kind: 'tell', target, message }, from); }
 function watch(dir, target, note, from) { return dropOutbox(dir, { kind: 'watch', target, note }, from); }
-// extra: { workstream, role, from } — fields added after the positional ones, null when unset.
+// extra: { workstream, role, from, taskClass, writes, isolation } — fields added after the positional ones, null when unset.
 function spawn(dir, repo, base, task, model, effort, name, extra = {}) {
-  return dropOutbox(dir, { kind: 'spawn', repo, base: base || null, task, model: model || null, effort: effort || null, name: name || null, workstream: extra.workstream || null, role: extra.role || null }, extra.from);
+  return dropOutbox(dir, { kind: 'spawn', repo, base: base || null, task, model: model || null, effort: effort || null, name: name || null, workstream: extra.workstream || null, role: extra.role || null, taskClass: extra.taskClass || null, writes: extra.writes || null, isolation: extra.isolation || null }, extra.from);
 }
 function rename(dir, target, to, from) { return dropOutbox(dir, { kind: 'rename', target, name: to }, from); }
 function personality(dir, from) { return dropOutbox(dir, { kind: 'personality' }, from); }

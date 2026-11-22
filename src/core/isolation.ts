@@ -243,3 +243,24 @@ export function isolationRecord(
 
 /** One JSONL line, newline-terminated, safe to append. */
 export function formatIsolationLine(r: IsolationRecord): string { return JSON.stringify(r) + '\n'; }
+
+// ---- What a non-worktree session is told about its mode.
+
+/** The instruction a shared-readonly or scratch session carries in its prompt. Undefined for the
+ *  worktree modes, whose role text (Worker Terminal) already says where to write. Nothing at this
+ *  step ENFORCES these — the write hook is step 9 — so the text is the whole guarantee for now,
+ *  and it says so plainly rather than implying a guard exists. */
+export function isolationInstruction(mode: Mode | undefined): string | undefined {
+	if (mode === 'shared-readonly') {
+		return 'shared-readonly — this working directory is a SHARED checkout that other sessions use, not a worktree of your own. '
+			+ 'Read only: do not create, edit or delete any file in it, and do not run commands that write into it '
+			+ '(builds that emit output, formatters, installs, git commit / checkout / stash / reset). '
+			+ 'If the task turns out to need a write, stop and say so — it must be respawned with its own worktree.';
+	}
+	if (mode === 'scratch') {
+		return 'scratch — this working directory is a scratch folder outside every registered repository. '
+			+ 'Write here, or to a vault path your brief names. Do not write inside any repository; '
+			+ 'if the task needs a repository change, stop and say so — it must be respawned with its own worktree.';
+	}
+	return undefined;
+}

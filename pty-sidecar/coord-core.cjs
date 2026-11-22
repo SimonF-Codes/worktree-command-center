@@ -108,7 +108,9 @@ function spawnOutcome(r, opts = {}) {
   }
   if (r && r.ok && r.spawned) {
     const s = r.spawned;
-    const where = s.branch ? `on ${s.branch}` : '(folder — no branch)';
+    // mode: the isolation decision (V2 step 8). A shared-readonly / scratch session has no branch
+    // either, but it is not a folder target — say which it is.
+    const where = s.branch ? `on ${s.branch}` : (s.mode && s.mode !== 'worktree' ? `(${s.mode} — no branch)` : '(folder — no branch)');
     return { code: 0, out: `coord: spawned "${s.terminal}" ${where} — session ${s.sessionId}` };
   }
   return { code: 2, err: `coord: spawn in "${repo}" did NOT happen — ${(r && r.reason) || 'unknown reason'}` };

@@ -25,6 +25,7 @@ import type { StageTile } from './stage-tile';
 import type { AttentionKind } from './attention';
 import { NoticeGate } from './notice-gate';
 import { identityFields, type SessionIdentity } from './lineage';
+import { isolationInstruction, type Mode } from '../core/isolation';
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -54,6 +55,11 @@ export interface TerminalTileOpts {
 	 *  when a caller is deliberately spawning some OTHER agent, e.g. the Agent Custodian from
 	 *  the agent-instruction view. Persisted, so a restored session is still that agent. */
 	roleSlug?: string;
+	/** Where this session works, as decideIsolation (core/isolation.ts) answered at spawn. Absent in
+	 *  records written before step 8 and for plain folder targets. A shared-readonly or scratch
+	 *  session is ALSO `folder: true`: its directory is not a worktree we made, so close must never
+	 *  remove it or delete a branch. Persisted, so a restored session keeps its mode. */
+	isolation?: Mode;
 	/** Who this session is: minted once at spawn, read back from the record on every restore
 	 *  (lineage.ts). Never derived from the tile id or the worktree path — see E6. */
 	identity: SessionIdentity;
@@ -638,6 +644,8 @@ export class TerminalTile implements StageTile {
 	get branch(): string { return this.opts.worktree.branch; }
 	/** True for a plain-folder target — the grid uses this to skip git-only bookkeeping. */
 	get isFolder(): boolean { return this.opts.folder === true; }
+	/** The isolation mode decided at spawn (core/isolation.ts), when one was. */
+	get isolation(): Mode | undefined { return this.opts.isolation; }
 	get baseBranch(): string { return this.opts.baseBranch; }
 	get repoName(): string { return this.opts.repoName; }
 
@@ -725,14 +733,21 @@ export class TerminalTile implements StageTile {
 	 *  did not already carry. */
 	private sessionPrompt(): string {
 		const wt = this.opts.worktree;
+		const isolation = isolationInstruction(this.opts.isolation);
 		const facts: SessionFact[] = this.opts.folder
 			? [{ label: 'folder', value: this.opts.repoName }, { label: 'working directory', value: wt.worktreePath }]
 			: [{ label: 'repo', value: this.opts.repoName }, { label: 'branch', value: wt.branch }, { label: 'worktree', value: wt.worktreePath }];
+		if (isolation) facts.push({ label: 'isolation', value: isolation });
 		const slug = sessionRoleSlug(this.opts.roleSlug, this.opts.folder);
-		return loadRolePrompt(this.opts.roleLibraryPath, slug, facts)
-			?? (this.opts.folder
+		const builtIn = (): string => {
+			const base = this.opts.folder
 				? folderSystemPrompt(this.opts.repoName, wt.worktreePath)
-				: terminalSystemPrompt(this.opts.repoName, wt.branch, wt.worktreePath));
+				: terminalSystemPrompt(this.opts.repoName, wt.branch, wt.worktreePath);
+			// The folder prompt says every edit lands on the real files; a ro/scr session must hear
+			// the narrower rule last, so it is the one that sticks.
+			return isolation ? `${base}\n\nIsolation mode: ${isolation}` : base;
+		};
+		return loadRolePrompt(this.opts.roleLibraryPath, slug, facts) ?? builtIn();
 	}
 
 	/** Set the tile's display name (persisted via onRename). */
@@ -743,7 +758,7 @@ export class TerminalTile implements StageTile {
 	}
 
 	/** Serializable record for persistence. */
-	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; folder?: boolean; model?: string; effort?: string; roleSlug?: string } & SessionIdentity {
+	sessionRecord(): { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name: string; folder?: boolean; model?: string; effort?: string; roleSlug?: string; isolation?: Mode } & SessionIdentity {
 		return {
 			...identityFields(this.opts.identity),
 			worktreePath: this.opts.worktree.worktreePath,
@@ -758,6 +773,7 @@ export class TerminalTile implements StageTile {
 			// Without this a restored Custodian would come back as an ordinary folder terminal —
 			// same transcript, different instructions, and nothing on screen saying so.
 			...(this.opts.roleSlug ? { roleSlug: this.opts.roleSlug } : {}),
+			...(this.opts.isolation ? { isolation: this.opts.isolation } : {}),
 		};
 	}
 

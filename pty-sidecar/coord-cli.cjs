@@ -137,10 +137,15 @@ function main() {
     const name = flag(rest, '--name') || '';
     const workstream = flag(rest, '--workstream') || '';
     const role = flag(rest, '--role') || ''; // passed through; the app's role loader decides what it resolves to
+    // Isolation intent (V2 step 8): passed through as given; the app's decideIsolation reads them,
+    // and only under the `isolation: cheap-readonly` setting do they change anything.
+    const taskClass = flag(rest, '--class') || '';
+    const writes = flag(rest, '--writes') || '';
+    const isolation = flag(rest, '--isolation') || '';
     requireArgs('spawn', Boolean(repo && task), '<repo> --task "<task>"');
     // Block for the app's receipt, the way tell does: success prints the terminal, its branch and
     // the sessionId it was given; anything else exits non-zero with the reason (core.spawnOutcome).
-    const file = store.spawn(dir, repo, base, task, model, effort, name, { workstream, role, from });
+    const file = store.spawn(dir, repo, base, task, model, effort, name, { workstream, role, from, taskClass, writes, isolation });
     const id = path.basename(file, '.json');
     const waitMs = Number(env('COS_COORD_SPAWN_WAIT_MS', String(core.TELL_WAIT_MS)));
     const r = store.waitForTellReceipt(dir, id, { waitMs });
@@ -198,7 +203,7 @@ function main() {
     process.exit(0);
   }
 
-  console.error('usage: cos-coord <status|acquire|release|note|chat|tell|watch|spawn|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--to "…"]');
+  console.error('usage: cos-coord <status|acquire|release|note|chat|tell|watch|spawn|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--class <task-class>] [--writes <none|repo|outside>] [--isolation <mode>] [--to "…"]');
   process.exit(0);
 }
 
