@@ -656,8 +656,8 @@ worker tiles once inherited `COS_ROLE=god` and ran with god authority.
 | `COS_COORD_DIR` | every session | the workspace's coordination directory | where every request, lock and note goes |
 | `COS_TERMINAL_ID` | every session | a tile id (`0` for the primary Kane, `-N` for a duplicate). **Reissued every launch**, and repeated across tabs | ownership of this workspace's explicit `cos-coord acquire` locks within one run |
 | `COS_TERMINAL_NAME` | every session | the tile's display name | board and chat attribution |
-| `COS_ROLE` | Kane consoles only | `god` | the gate on `tell`, `watch`, `spawn`, `rename`, `close`, `personality`, `new-tab` |
-| `COS_SESSION_ID` | every terminal and Kane console | the session's `sessionId`: a uuid minted once and **stable across restarts** | the `from` on every outbox request (attribution only), and the **owner of a write lease** — see [Write claims](#write-claims-the-lease-and-the-write-hook) |
+| `COS_ROLE` | Kane consoles only | `god` | which channel `tell` and `spawn` go to (Kane's `god-outbox/`, or else the session's own [request directory](#managers-session-requests-and-spawn-proposals)), and the gate on `watch`, `rename`, `close`, `personality`, `new-tab`. **The app never reads it**: a manager's authority comes from its role file |
+| `COS_SESSION_ID` | every terminal and Kane console | the session's `sessionId`: a uuid minted once and **stable across restarts** | the `from` on every outbox request (attribution only), the **owner of a write lease** — see [Write claims](#write-claims-the-lease-and-the-write-hook) — and which `sessions/<id>/` directory a session request is dropped in |
 | `COS_ISOLATION` | sessions with an isolation mode (repo spawns since step 8) | `worktree`, `shared-readonly`, `shared-write` or `scratch` | the write hook's **failure policy** (open for `worktree`, closed otherwise) and its rules |
 | `COS_CHECKOUT` | the same | the checkout the write gate is about: the session's worktree, or the shared checkout | the lease's checkout root |
 | `COS_CLAIMS_DIR` | the same | `<userData>/.coordination/_claims` | the machine-wide lease store |
@@ -666,8 +666,11 @@ worker tiles once inherited `COS_ROLE=god` and ran with god authority.
 
 ### Verb register
 
-Every request lands in `god-outbox/` as one JSON file and carries `ts`, `kind` and `from` (the
-sender's `COS_SESSION_ID`, or `null`). Verbs that block read `god-outbox/.receipts/<id>.json`.
+From Kane (`COS_ROLE=god`), every request lands in `god-outbox/` as one JSON file and carries `ts`,
+`kind` and `from` (the sender's `COS_SESSION_ID`, or `null`). Verbs that block read
+`god-outbox/.receipts/<id>.json`. From any other session the app opened, `spawn` and `tell` — and
+`assign`, `propose-spawn`, `proposal` — go through that session's own request directory instead;
+see [Managers](#managers-session-requests-and-spawn-proposals).
 
 | verb | blocks for a receipt | request fields beyond `ts`/`kind`/`from` | exit codes |
 | --- | --- | --- | --- |
@@ -692,7 +695,8 @@ cos-coord spawn "<repo>" --task "<first instruction>" [--base <branch>] [--model
 - `--role <slug>`: the role file the new session runs on, by its `role:` slug. Without it a
   worktree session is a `worker-terminal` and a folder session a `folder-terminal`. The slug is
   **not validated** at spawn: an unknown or non-`active` one falls back to the compiled default,
-  and the app logs why (`[roles] …`). Which roles a session may start is a later step.
+  and the app logs why (`[roles] …`). Kane's spawns are not checked against it. A session's own
+  spawn is: see [Managers](#managers-session-requests-and-spawn-proposals).
 - `--workstream <id>`: the workstream the session serves. Stored on the session record, and
   otherwise unused for now.
 - `--class`, `--writes`, `--isolation`: the session's isolation intent — see
@@ -737,6 +741,83 @@ as absent. Turning it off needs no migration, and turning it back on finds the l
 
 ```json
 { "v2": { "recordLineage": false } }
+```
+
+### Managers: session requests and spawn proposals
+
+V2 step 10, behind `config.json` `v2.managers` (default **off**; Settings → Sidebar → Managers,
+applied live). **Off, the app refuses every request below**, so every non-overseer spawn is refused
+exactly as before.
+
+A **manager** is a session whose role file declares `spawns:` — a list of role slugs, in the
+Charter's inline form (`spawns: [worker-terminal, researcher]`), as a bare comma list, or as a YAML
+block list. Absent or empty means it starts nothing. A parent `P` may spawn a child role `C` only
+when all three hold (the Charter's §Delegation, `src/core/delegation.ts` `checkDelegation`):
+
+1. `C` is listed in `P.spawns`;
+2. `rung(C) <= rung(P)` on `observer < proposer < operator < autonomous`;
+3. `C.spawns` is a subset of `P.spawns`.
+
+Every refusal names the condition that failed. A role with no `active` file, or an `authority:`
+that is not one of the four rungs, fails closed. **No check reads an environment variable**: the
+role is the one on the app's own session record, and what it may do is its role file's, re-read
+live (within 5 s of an edit).
+
+#### The request directory
+
+```
+<coordDir>/sessions/<sessionId>/requests/<id>.json    in   (claimed into requests/.done/)
+<coordDir>/sessions/<sessionId>/receipts/<id>.json    out
+<coordDir>/delegation.jsonl                           one line per decision
+```
+
+Identity is **the directory a request was dropped in** — the connector channel's model, with a
+session where a connector was; it is a local trust boundary, not authentication. Every request
+carries `v`, `id` and `sentMs`, and every attempt gets a receipt:
+
+```jsonc
+{ "v": 1, "id": "…", "status": "accepted", "terminalName": "wt-main-9",
+  "spawned": { "terminal": "wt-main-9", "branch": "wt/main-9", "sessionId": "…" }, "handledMs": 0 }
+{ "v": 1, "id": "…", "status": "rejected", "handledMs": 0,
+  "reason": "worker-terminal may not spawn worker-terminal — condition 1 of 3 (listed): worker-terminal has no spawns:, so it starts nothing" }
+```
+
+| verb | kind | what the app checks | exit codes |
+| --- | --- | --- | --- |
+| `spawn <repo> --task "…" [--role …]` | `spawn` | `checkDelegation(requester's role, child role)` in full; the child's parent is the requester | 0 · 2 refused or withdrawn · 3 unconfirmed |
+| `tell <target> "<message>"` | `tell` | the requester is a manager, and the target is one of **its own descendants**, through accepted edges | 0 · 2 · 3 |
+| `assign <terminal>` | `assign` | the requester is a manager; the target is unassigned or already on its team, is not the requester, an overseer or above it; and `checkDelegation(requester, target)` passes. Logged with who moved what | 0 · 2 · 3 |
+| `propose-spawn --role <slug> --task "…" --why "…"` | `propose-spawn` | any session, whatever its rung. At most **3 open** per session; the same role + task, once declined, is refused with the decline's reason | 0 recorded · 2 · 3 |
+| `proposal accept <id> [--repo <repo>] [--base <b>]` | `proposal-accept` | the requester is the proposal's addressee (its proposer's parent; any manager for one written while unassigned), it is open, its proposer is live — then **the same `spawn` check, in full** | 0 spawned · 2 · 3 |
+| `proposal decline <id> --reason "…"` | `proposal-decline` | the addressee; a reason is required | 0 · 2 · 3 |
+| `proposals [--all]` | — (reads the file) | nothing: read-only, no app needed | 0 |
+
+`close` stays Kane's alone. Without `COS_SESSION_ID` these verbs are refused (exit 2) before
+anything is written. Dragging a row in the sidebar never re-parents a session; `assign` is the only
+way one moves.
+
+#### Spawn proposals
+
+**A proposal changes what the orchestrator is asked, never what it may do.** It is an inert line in
+`<coordDir>/spawn-proposals.jsonl` (append-only, because `persist()` rewrites `config.json` from
+memory); accepting one builds the very `spawn` the parent could have sent and checks it the same
+way, so a proposal for a role the parent may not spawn is refused with the identical message.
+
+```jsonl
+{"v":1,"ev":"propose","ts":0,"id":"p-…","from":{"sessionId":"…","role":"worker-terminal","name":"wt-main-7"},"to":"<parent sessionId>","toName":"Lead","workstreamId":null,"role":"researcher","task":"…","why":"…"}
+{"v":1,"ev":"accept","ts":0,"id":"p-…","by":"<sessionId>","byName":"Lead","spawned":"<child sessionId>"}
+{"v":1,"ev":"decline","ts":0,"id":"p-…","by":"<sessionId>","byName":"Lead","reason":"…"}
+{"v":1,"ev":"stale","ts":0,"id":"p-…","reason":"wt-main-7 ended"}
+```
+
+Only an open proposal can be decided, so the first decision wins. A proposer's open proposals go
+stale when its session ends. Nothing escalates and nothing times out into a spawn: ignoring a
+proposal is a legitimate outcome. Open proposals show as `◆N` on the addressee's sidebar row and
+in its **Manager view** (open the ★ on a manager's row) — a full-window presentation of its team,
+its `spawns:` and its proposals that grants nothing.
+
+```json
+{ "v2": { "managers": true } }
 ```
 
 ### Isolation modes

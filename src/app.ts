@@ -334,6 +334,8 @@ async function main(): Promise<void> {
 			onAutoCloseChange: (raw) => { autoCloseCfg = parseAutoClose(raw); autoCloser?.apply(); },
 			onSidebarChange: (on) => applySidebar(on),
 			onTeamViewChange: (on) => { teamView = on; sidebar.refresh(); },
+			// Applied live: the grids' request channels and the sidebar both read `managers` on every use.
+			onManagersChange: (on) => { managers = on; sidebar.refresh(); },
 			targets: {
 				list: () => repos,
 				move: (r) => moveTargetInteractive(r),
