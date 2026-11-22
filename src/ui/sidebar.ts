@@ -1,3 +1,4 @@
+import type { RoleLookup } from '../core/delegation';
 import { buildSidebar, liveRanks, parseTeamSort, ResortClock, sidebarSignature, TEAM_SORTS, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from './sidebar-model';
 
 export interface SidebarDeps {
@@ -9,6 +10,9 @@ export interface SidebarDeps {
 	floor: (workspaceId: string) => { live: boolean; sessions: SidebarSession[]; lineage?: SidebarLineage[] } | null;
 	/** `v2.teamView`, read on every refresh so the setting applies live. */
 	teamView?: () => boolean;
+	/** `v2.managers` on: the active role files (built by the app, which does the reading). Read on
+	 *  every refresh, so the setting and an edited role file both apply live. Undefined = off. */
+	delegation?: () => RoleLookup | undefined;
 	/** A row was clicked: bring that tile up (switching workspace first when it is elsewhere). */
 	onReveal: (workspaceId: string, tileId: number) => void;
 }
@@ -64,7 +68,8 @@ export class Sidebar {
 		});
 		const teamView = this.deps.teamView?.() ?? false;
 		const ranks = teamView && this.sort !== 'lineage' ? this.clock.ranks(liveRanks(inputs), Date.now()) : undefined;
-		const groups = buildSidebar(inputs, this.collapsed, { teamView, sort: this.sort, ranks });
+		const delegation = teamView ? this.deps.delegation?.() : undefined;
+		const groups = buildSidebar(inputs, this.collapsed, { teamView, sort: this.sort, ranks, delegation });
 		const sig = `${teamView ? this.sort : 'flat'}|${sidebarSignature(groups)}`;
 		if (sig === this.lastSig) return; // nothing shown changed → leave the DOM (and hover) alone
 		this.lastSig = sig;
@@ -160,10 +165,11 @@ export class Sidebar {
 	}
 
 	private row(parent: HTMLElement, g: SidebarGroup, r: SidebarRow, reason?: string): HTMLElement {
-		const title = `${r.name} · ${r.branch} · ${DOT_TITLE[r.dot]}${reason ? ` · unassigned: ${reason}` : ''}`;
+		const title = `${r.name}${r.manager ? ' · ★ manager (its role file declares spawns:)' : ''} · ${r.branch} · ${DOT_TITLE[r.dot]}${reason ? ` · unassigned: ${reason}` : ''}`;
 		const row = parent.createDiv({ cls: 'wcc-sb-row', attr: { role: 'button', tabindex: '0', title } });
 		row.toggleClass('overseer', r.overseer);
 		this.dot(row, r.dot);
+		if (r.manager) row.createSpan({ cls: 'wcc-sb-star', text: '★', attr: { 'aria-label': 'manager' } });
 		row.createSpan({ cls: 'wcc-sb-name', text: r.name });
 		row.createSpan({ cls: 'wcc-sb-branch', text: r.branch });
 		for (const c of r.chips) row.createSpan({ cls: `wcc-sb-chip chip-${c}`, text: c });

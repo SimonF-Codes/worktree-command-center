@@ -5,6 +5,8 @@ import { TerminalsGrid, type GridDeps, type RepoConfig } from './terminals/termi
 import { parseGodSelfImprove } from './terminals/god';
 import { parseRoleLibrary } from './terminals/role-library';
 import { parseRecordLineage } from './terminals/lineage';
+import { parseManagersEnabled } from './core/delegation';
+import { delegationLookup } from './terminals/delegation-roles';
 import { parseIsolationPolicy } from './core/isolation';
 import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, forgetRepo, retargetRepo, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
@@ -492,6 +494,10 @@ async function main(): Promise<void> {
 		// nothing is created and terminalRoot keeps its plain column layout.
 		// V2 Team Floor step 7: `v2.teamView` (default off) nests each workspace's rows by lineage.
 		let teamView = parseTeamView(cfg.v2);
+		// V2 Team Floor step 10: `v2.managers` (default off). On, the team view marks ★ from each role
+		// file's spawns: and refuses edges a parent could not have made; the role files are re-read
+		// live (delegation-roles.ts), never inferred from a session's environment.
+		let managers = parseManagersEnabled(cfg.v2);
 		const sidebar = new Sidebar({
 			workspaces: () => workspaces,
 			activeId: () => activeId,
@@ -500,6 +506,7 @@ async function main(): Promise<void> {
 				return g ? { live: g.sessionsAreLive(), sessions: g.floorState(), lineage: teamView ? g.sessionLineage() : undefined } : null;
 			},
 			teamView: () => teamView,
+			delegation: () => (managers ? delegationLookup(roleLibrary?.path) : undefined),
 			onReveal: (id, tileId) => void (async () => {
 				if (id !== activeId) await switchTo(id);
 				if (id === activeId && tileId >= 0) activeGrid.revealTile(tileId); // the overseer row (-1) only switches

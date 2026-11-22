@@ -443,6 +443,9 @@ html, body {
 .wcc-sb-row:focus-visible, .wcc-sb-head:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: -1px; }
 .wcc-sb-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .wcc-sb-row.overseer .wcc-sb-name { font-weight: 600; }
+/* ★ manager: from the role file's spawns:, never from having children (V2 step 10). The cyan-blue
+   accent rather than the interactive one: on Olympus that is yellow on white, and unreadable. */
+.wcc-sb-star { flex: 0 0 auto; color: var(--cos-accent); font-size: 11px; line-height: 1; }
 .wcc-sb-branch { flex: 0 0 auto; font-family: var(--font-monospace); font-size: 11px; color: var(--text-faint); }
 .wcc-sb-chip {
 	flex: 0 0 auto; font-size: 10px; line-height: 14px; padding: 0 4px;

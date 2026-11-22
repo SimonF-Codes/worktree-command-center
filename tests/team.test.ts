@@ -125,3 +125,91 @@ describe('triageTeam', () => {
 		expect(JSON.stringify(t)).toBe(before);
 	});
 });
+
+// ---- V2 Team Floor step 10: delegation. The ★ from spawns:, and an invalid edge confers nothing.
+
+import { lookupFrom, type DelegationRole } from '../src/core/delegation';
+import { findNode, placedParentOf, descendantsOf, isUnassignedRoot, unassignedText, type UnassignedNode } from '../src/core/team';
+
+const drole = (slug: string, authority: string, spawns: string[] = []): DelegationRole => ({ slug, authority, spawns });
+const roles = lookupFrom([
+	drole('alpha', 'operator'),
+	drole('team-lead', 'operator', ['worker-terminal', 'researcher']),
+	drole('worker-terminal', 'operator'),
+	drole('researcher', 'proposer'),
+	drole('auditor', 'autonomous'),
+]);
+
+describe('buildTeam — with delegation (v2.managers)', () => {
+	it('marks ★ from spawns: — a manager with no children keeps it', () => {
+		const t = buildTeam([alpha(), ses(1, 's-1', 'team-lead')], { delegation: roles });
+		expect(t.overseers[0]!.children[0]!.manager).toBe(true);
+		expect(t.overseers[0]!.children[0]!.children).toEqual([]);
+	});
+
+	it('a session with children it was not permitted to spawn gets no ★, and the children go unassigned', () => {
+		// worker 1 has "children" 2 and 3, but worker-terminal declares no spawns:
+		const t = buildTeam([alpha(), ses(1, 's-1'), ses(2, 's1'), ses(3, 's1', 'researcher')], { delegation: roles });
+		const w1 = findNode(t, 's1')!;
+		expect(w1.manager).toBeUndefined();
+		expect(w1.children).toEqual([]);
+		expect(t.unassigned.map((u) => [u.session.key, u.reason])).toEqual([[2, 'outside-delegation'], [3, 'outside-delegation']]);
+		expect(unassignedText(t.unassigned[0]!)).toBe("outside delegation: worker-terminal may not spawn worker-terminal — condition 1 of 3 (listed): worker-terminal has no spawns:, so it starts nothing");
+	});
+
+	it('a valid manager edge nests; each failing condition is named in the reason', () => {
+		const t = buildTeam([
+			alpha(), ses(1, 's-1', 'team-lead'),
+			ses(2, 's1'), // ok: listed, operator ≤ operator
+			ses(3, 's1', 'researcher'), // ok
+			ses(4, 's1', 'auditor'), // not listed
+		], { delegation: roles });
+		expect(shape(t.overseers)).toEqual([[-1, [[1, [2, 3]]]]]);
+		const four = t.unassigned.find((u) => u.session.key === 4)!;
+		expect(four.detail).toContain('condition 1 of 3 (listed)');
+	});
+
+	it('a child whose role has no active file is outside delegation (fails closed)', () => {
+		const t = buildTeam([alpha(), ses(1, 's-1', 'team-lead'), ses(2, 's1', 'ghost')], { delegation: roles });
+		expect(t.unassigned[0]!.reason).toBe('outside-delegation');
+		expect((t.unassigned[0] as UnassignedNode).detail).toContain('declares role: ghost');
+	});
+
+	it('edges from the overseer are not checked — it spawns through its own channel, as today', () => {
+		const t = buildTeam([alpha(), ses(1, 's-1'), ses(2, 's-1', 'auditor')], { delegation: roles });
+		expect(shape(t.overseers)).toEqual([[-1, [1, 2]]]);
+		expect(t.unassigned).toEqual([]);
+	});
+
+	it('an invalid edge confers nothing below it either: its own valid children stay with it, unassigned', () => {
+		const t = buildTeam([alpha(), ses(1, 's-1'), ses(2, 's1', 'team-lead'), ses(3, 's2')], { delegation: roles });
+		expect(shape(t.unassigned)).toEqual([[2, [3]]]);
+		expect(findNode(t, 's2')!.manager).toBe(true);
+	});
+
+	it('every session still comes back exactly once', () => {
+		const ss = [alpha(), ses(1, 's-1', 'team-lead'), ses(2, 's1'), ses(3, 's2'), ses(4, 's3', 'team-lead'), ses(5, 's5'), ses(6, 's7'), ses(7, 's6')];
+		expect(allKeys(buildTeam(ss, { delegation: roles }))).toEqual([-1, 1, 2, 3, 4, 5, 6, 7]);
+	});
+
+	it('off (no lookup): exactly step 7 — nothing marked, nothing refused', () => {
+		const ss = [alpha(), ses(1, 's-1'), ses(2, 's1'), ses(3, 's1', 'team-lead')];
+		const t = buildTeam(ss);
+		expect(shape(t.overseers)).toEqual([[-1, [[1, [2, 3]]]]]);
+		expect(findNode(t, 's3')!.manager).toBeUndefined();
+	});
+});
+
+describe('reading a built tree', () => {
+	const t = buildTeam([alpha(), ses(1, 's-1', 'team-lead'), ses(2, 's1'), ses(3, 's1', 'researcher'), ses(4)], { delegation: roles });
+	it('findNode / placedParentOf / descendantsOf / isUnassignedRoot', () => {
+		expect(findNode(t, 's2')!.session.key).toBe(2);
+		expect(findNode(t, 'nope')).toBeUndefined();
+		expect(placedParentOf(t, 's3')!.key).toBe(1);
+		expect(placedParentOf(t, 's-1')).toBeNull();
+		expect(placedParentOf(t, 's4')).toBeNull();
+		expect(descendantsOf(findNode(t, 's1')!).map((s) => s.key)).toEqual([2, 3]);
+		expect(isUnassignedRoot(t, 's4')).toBe(true);
+		expect(isUnassignedRoot(t, 's3')).toBe(false);
+	});
+});
