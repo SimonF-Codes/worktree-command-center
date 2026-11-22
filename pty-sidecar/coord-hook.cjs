@@ -158,9 +158,18 @@ function repoOf(cc, core, command, cwd) {
   const target = core.resolveTargetPath(command, cwd);
   for (const where of [path.resolve(cwd, String(target)), cwd]) {
     const r = spawnSync('git', ['-C', where, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
-    if (r.status === 0 && r.stdout && r.stdout.trim()) return cc.repoIdentity(r.stdout, where);
+    // In a primary checkout git prints the common dir relative (`.git`), so it resolves against
+    // `where` as spelled; in a worktree it prints its own canonical path (8.3 names expanded,
+    // junctions and symlinks resolved). Resolve `where` the same way, or one repository reached by
+    // two spellings gets two lock keys and both pushes are let through.
+    if (r.status === 0 && r.stdout && r.stdout.trim()) return cc.repoIdentity(r.stdout, canonicalDir(where));
   }
   return cc.legacyRepoIdentity(core.baseName(target));
+}
+
+/** `dir` as the OS (and so git) spells it; `dir` unchanged if it cannot be resolved. */
+function canonicalDir(dir) {
+  try { return fs.realpathSync.native(dir); } catch { return dir; }
 }
 
 module.exports = { failurePolicyFor };

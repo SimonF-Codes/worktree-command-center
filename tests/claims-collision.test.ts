@@ -408,6 +408,15 @@ describe('Q12: push / worktree-add locks — two tabs, two worktrees, one reposi
 		expect(run(sa(), 'git push', repo).allowed).toBe(true);
 		expect(run(sb(), 'git push origin wt/main-2', wtB).allowed).toBe(false);
 	});
+	it('…and still share it when the primary is reached by a spelling git canonicalises (a junction / symlink; an 8.3 name)', () => {
+		// In a primary checkout git prints the common dir RELATIVE (`.git`), so it is resolved against
+		// the cwd as spelled; in a worktree git prints its own canonical absolute path. Through a link
+		// those are two spellings of one repository — and two lock keys, unless the cwd is resolved.
+		const viaLink = path.join(root, 'repo-link');
+		fs.symlinkSync(repo, viaLink, 'junction'); // a junction on Windows (no privilege needed), a symlink elsewhere
+		expect(run(sa(), 'git push', viaLink).allowed).toBe(true);
+		expect(run(sb(), 'git push origin wt/main-2', wtB).allowed).toBe(false);
+	});
 	it('the race: two tabs push one repo at the same instant — exactly one is allowed (10 rounds)', async () => {
 		for (let round = 0; round < 10; round++) {
 			for (const f of fs.readdirSync(claimsDir)) fs.rmSync(path.join(claimsDir, f));
