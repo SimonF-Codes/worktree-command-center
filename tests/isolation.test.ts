@@ -250,3 +250,23 @@ describe('isolation.jsonl records', () => {
 		expect(JSON.parse(line)).toEqual(r);
 	});
 });
+
+describe('sessionMode — what the session row shows', () => {
+	it('a recorded mode wins; an unrecorded worktree tile is wt; a plain folder has no chip', async () => {
+		const { sessionMode } = await import('../src/core/isolation');
+		expect(sessionMode('shared-readonly', true)).toBe('shared-readonly');
+		expect(sessionMode('scratch', true)).toBe('scratch');
+		expect(sessionMode(undefined, false)).toBe('worktree');
+		expect(sessionMode(undefined, undefined)).toBe('worktree');
+		expect(sessionMode(undefined, true)).toBeUndefined();
+	});
+	it('the chip uses only CSS custom properties app.css already defines', () => {
+		const fs = require('node:fs'); const path = require('node:path');
+		const css: string = fs.readFileSync(path.join(__dirname, '..', 'app.css'), 'utf8');
+		const rules = css.split('\n').filter((l) => l.startsWith('.cos-mode-chip')).join('\n');
+		const used = [...rules.matchAll(/var\((--[a-z0-9-]+)\)/g)].map((m) => m[1]);
+		expect(used.length).toBeGreaterThan(0);
+		for (const v of used) expect(css).toMatch(new RegExp(`^[ \\t]*${v}:`, 'm'));
+		expect(rules).not.toMatch(/color-(green|red)/); // never a state colour
+	});
+});

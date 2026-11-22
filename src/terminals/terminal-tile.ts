@@ -25,7 +25,7 @@ import type { StageTile } from './stage-tile';
 import type { AttentionKind } from './attention';
 import { NoticeGate } from './notice-gate';
 import { identityFields, type SessionIdentity } from './lineage';
-import { isolationInstruction, type Mode } from '../core/isolation';
+import { isolationInstruction, modeChip, sessionMode, type Mode } from '../core/isolation';
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -162,6 +162,13 @@ export class TerminalTile implements StageTile {
 		this.queueEl.addEventListener('click', (e) => { e.stopPropagation(); this.gate.flushNow(); });
 		this.nameEl = head.createSpan({ cls: 'cos-term-name', text: this.displayName, attr: { title: 'Double-click to rename' } });
 		this.nameEl.addEventListener('dblclick', (e) => { e.stopPropagation(); this.opts.onRequestRename?.(this, this.displayName); });
+		// The mode chip (wt · ro · rw🔒 · scr). Text and variant both come from modeChip — the chip
+		// never re-derives its look from its text. A plain folder target has no mode, so no chip.
+		const mode = sessionMode(this.opts.isolation, this.opts.folder);
+		if (mode) {
+			const chip = modeChip(mode);
+			head.createSpan({ cls: 'cos-mode-chip', text: chip.text, attr: { 'data-variant': chip.variant, title: chip.title } });
+		}
 		// Right-clustered controls: remote, lock, minimize (hide), close.
 		const btns = head.createDiv({ cls: 'cos-term-head-btns' });
 		const refreshBtn = btns.createEl('button', { text: '⟳', cls: 'cos-term-refresh', attr: { title: 'Refresh — reload this session with --continue (keeps its conversation, same position)' } });

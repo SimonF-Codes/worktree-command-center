@@ -187,6 +187,13 @@ export function modeChip(mode: Mode): ModeChip {
 	}
 }
 
+/** The mode a session row shows. A recorded mode wins. With none (a record from before this step)
+ *  a worktree tile is a worktree — that is a fact about the tile, not a re-derivation — and a
+ *  plain folder target has no mode at all. */
+export function sessionMode(recorded: Mode | undefined, folder: boolean | undefined): Mode | undefined {
+	return recorded ?? (folder ? undefined : 'worktree');
+}
+
 /** A persisted mode string → a Mode, or undefined (an older record, or junk). */
 export function parseMode(v: unknown): Mode | undefined { return pick(v, MODES); }
 
