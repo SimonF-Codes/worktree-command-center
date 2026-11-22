@@ -330,3 +330,36 @@ describe.runIf(process.platform === 'win32')('held-open directories (Windows)', 
 		expect(listedWorktrees(to)).toContain(path.join(newRoot, 'wt-main-2'));
 	}, 30000);
 });
+
+// V2 step 9: the machine-wide write leases record a checkout's PATH. A live one refuses the move
+// (like a live terminal); a stale one is re-pointed with everything else.
+describe('write leases across a move, on real git', () => {
+	const claimsStore = require('../pty-sidecar/claims-store.cjs');
+	it('a live lease refuses; once stale, the move goes ahead and re-points it', async () => {
+		const claimsDir = claimsStore.ensureClaimsDir(path.join(root, '_claims'));
+		claimsStore.takeClaim(claimsDir, from, { sessionId: 's1', holder: 'fix-auth', mode: 'shared-write' });
+		let plan = planMove(await gatherMoveFacts(target(), to, ctx({ claimsDir })));
+		expect(plan.refusals.map((r) => r.code)).toEqual(['live-lease']);
+
+		claimsStore.renewClaim(claimsDir, from, 's1', { now: Date.now() - 11 * 60_000 }); // its holder stopped writing
+		plan = planMove(await gatherMoveFacts(target(), to, ctx({ claimsDir })));
+		expect(plan.refusals).toEqual([]);
+		const r = await executeMove(plan, { projectsDir: projects, journalDir: journals, claimsDir, ...appState() });
+		expect(r.ok, describeMoveResult(r)).toBe(true);
+		expect(r.steps.find((s) => /write leases/.test(s.label))?.detail).toMatch(/^1 re-pointed/);
+		const all = claimsStore.readClaims(claimsDir);
+		expect(all).toHaveLength(1);
+		expect(path.resolve(all[0].path)).toBe(path.resolve(to));
+		expect(all[0].sessionId).toBe('s1');
+	});
+	it('an unreadable store refuses the move', async () => {
+		const notADir = path.join(root, 'claims-file');
+		fs.writeFileSync(notADir, 'x');
+		const plan = planMove(await gatherMoveFacts(target(), to, ctx({ claimsDir: notADir })));
+		expect(plan.refusals.map((r) => r.code)).toEqual(['live-lease']);
+	});
+	it('a store that was never made is no leases', async () => {
+		const plan = planMove(await gatherMoveFacts(target(), to, ctx({ claimsDir: path.join(root, 'never') })));
+		expect(plan.refusals).toEqual([]);
+	});
+});

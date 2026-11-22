@@ -5,7 +5,22 @@ landed on `main`.
 
 ## Unreleased
 
-Nothing yet.
+**🔒 Write claims: shared-readonly is enforced, and shared-write exists (V2 step 9)**
+- **The write hook.** Claude's file tools (Edit, Write, MultiEdit, NotebookEdit) now pass through
+  `coord-hook.cjs --write`. A `shared-readonly` or `scratch` session's write into a shared checkout is
+  **denied** — step 8 only announced read-only; this makes it true. For shared sessions the hook
+  fails **closed**; worktree sessions keep fail-open.
+- **`isolation: "cheapest-safe"`** (opt-in; the default stays `worktree-always`) lets a small fix,
+  a config edit or a release write the repo's own checkout under an exclusive **write lease** in the
+  machine-wide `_claims/`. A held checkout falls back to a worktree; a refusal names the holder and
+  the path. Rollback is `cheap-readonly`, and leases expire on their own.
+- **`cos-coord lease` / `lease release`**, and leases in `cos-coord status`. A release, and a
+  session's end, give a lease up only from a clean checkout.
+- **Moves** refuse while a live lease is inside the repo (`live-lease`) and re-point stale ones.
+- **Fixed:** a stale lock could be taken over twice at once — the second taker deleted the first's
+  fresh lock. Every unlink and rewrite of a lock now happens under a guard.
+- It is a cooperative guarantee, **not a sandbox**: shell writes are not seen
+  ([docs/api.md](docs/api.md#write-claims-the-lease-and-the-write-hook)).
 
 > **The next feature release is `1.0.0`, not `0.14.0`.** The V2 Team Floor overhaul changes the
 > shell, the unit of work and the CLI contract, so it ships as a major version. See

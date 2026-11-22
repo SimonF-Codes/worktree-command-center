@@ -62,3 +62,83 @@ describe('coord-hook --task', () => {
     expect(fs.existsSync(path.join(dir, 'locks'))).toBe(false);
   });
 });
+
+// ---- The write gate (--write, V2 step 9): its failure policy, in BOTH directions. The contention
+// behaviour — two sessions, one checkout — is the collision suite (claims-collision.test.ts).
+const hookModule = require('../pty-sidecar/coord-hook.cjs');
+
+function gate(input: object | string, extraEnv: Record<string, string | undefined>, args: string[] = ['--write']) {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.toUpperCase().startsWith('COS_')) env[k] = v;
+  for (const [k, v] of Object.entries(extraEnv)) if (v !== undefined) env[k] = v;
+  const r = require('node:child_process').spawnSync('node', [HOOK, ...args], {
+    input: typeof input === 'string' ? input : JSON.stringify(input), env, encoding: 'utf8',
+  });
+  return { code: r.status as number, out: String(r.stdout), denied: String(r.stdout).includes('"permissionDecision":"deny"') };
+}
+
+describe('coord-hook --write: failurePolicyFor is the one place, and a function of the mode', () => {
+  it('open for no mode and for worktree; closed for every shared mode and for anything unrecognised', () => {
+    expect(hookModule.failurePolicyFor(undefined)).toBe('open');
+    expect(hookModule.failurePolicyFor('')).toBe('open');
+    expect(hookModule.failurePolicyFor('worktree')).toBe('open');
+    for (const m of ['shared-readonly', 'shared-write', 'scratch', 'Shared-Write', 'something-new']) expect(hookModule.failurePolicyFor(m)).toBe('closed');
+  });
+});
+
+describe('coord-hook --write: broken store / environment, both directions', () => {
+  let checkout: string;
+  beforeEach(() => { checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-co-')); });
+  const write = () => ({ tool_name: 'Write', tool_input: { file_path: path.join(checkout, 'a.txt'), content: 'x' }, cwd: checkout });
+  const brokenStore = () => { const f = path.join(dir, 'not-a-dir'); fs.writeFileSync(f, 'x'); return f; }; // readdir → ENOTDIR
+
+  for (const mode of ['shared-readonly', 'shared-write', 'scratch']) {
+    it(`${mode}: an unreadable store DENIES (fail closed), and says so`, () => {
+      const r = gate(write(), { COS_ISOLATION: mode, COS_CHECKOUT: checkout, COS_CLAIMS_DIR: brokenStore(), COS_SESSION_ID: 's1', COS_ISOLATION_POLICY: 'cheapest-safe', COS_RUNG: 'write', COS_TASK_CLASS: 'small-fix' });
+      expect(r.code).toBe(0);
+      expect(r.denied).toBe(true);
+      expect(r.out).toMatch(/could not be read|DENIED/);
+    });
+    it(`${mode}: a missing store directory DENIES`, () => {
+      const r = gate(write(), { COS_ISOLATION: mode, COS_CHECKOUT: checkout, COS_CLAIMS_DIR: path.join(dir, 'never-made'), COS_SESSION_ID: 's1', COS_ISOLATION_POLICY: 'cheapest-safe', COS_RUNG: 'write', COS_TASK_CLASS: 'small-fix' });
+      expect(r.denied).toBe(true);
+      expect(fs.existsSync(path.join(dir, 'never-made'))).toBe(false); // and the hook never makes it
+    });
+    it(`${mode}: no store configured at all DENIES`, () => {
+      expect(gate(write(), { COS_ISOLATION: mode, COS_CHECKOUT: checkout, COS_SESSION_ID: 's1' }).denied).toBe(true);
+    });
+    it(`${mode}: unparseable hook input DENIES`, () => {
+      expect(gate('{not json', { COS_ISOLATION: mode, COS_CHECKOUT: checkout, COS_CLAIMS_DIR: dir, COS_SESSION_ID: 's1' }).denied).toBe(true);
+    });
+  }
+  it('an unrecognised mode fails closed too', () => {
+    expect(gate(write(), { COS_ISOLATION: 'something-new', COS_CHECKOUT: checkout, COS_CLAIMS_DIR: brokenStore(), COS_SESSION_ID: 's1' }).denied).toBe(true);
+  });
+
+  for (const mode of ['worktree', undefined]) {
+    const label = mode ?? 'no mode';
+    it(`${label}: an unreadable store ALLOWS (fail open)`, () => {
+      const r = gate(write(), { COS_ISOLATION: mode, COS_CHECKOUT: checkout, COS_CLAIMS_DIR: brokenStore(), COS_SESSION_ID: 's1' });
+      expect(r.code).toBe(0);
+      expect(r.out.trim()).toBe('');
+    });
+    it(`${label}: no store configured ALLOWS`, () => {
+      expect(gate(write(), { COS_ISOLATION: mode, COS_SESSION_ID: 's1' }).out.trim()).toBe('');
+    });
+    it(`${label}: unparseable hook input ALLOWS`, () => {
+      expect(gate('{not json', { COS_ISOLATION: mode, COS_CLAIMS_DIR: dir }).out.trim()).toBe('');
+    });
+    it(`${label}: an empty, healthy store ALLOWS`, () => {
+      expect(gate(write(), { COS_ISOLATION: mode, COS_CHECKOUT: checkout, COS_CLAIMS_DIR: dir, COS_SESSION_ID: 's1' }).out.trim()).toBe('');
+    });
+  }
+
+  it('PostToolUse (--renew) never denies, even closed with a broken store — the write already happened', () => {
+    const r = gate(write(), { COS_ISOLATION: 'shared-write', COS_CHECKOUT: checkout, COS_CLAIMS_DIR: brokenStore(), COS_SESSION_ID: 's1' }, ['--write', '--renew']);
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe('');
+  });
+  it('the Bash mode is still fail-open with COS_COORD_DIR unset', () => {
+    expect(gate(push, {}, []).out.trim()).toBe('');
+  });
+});

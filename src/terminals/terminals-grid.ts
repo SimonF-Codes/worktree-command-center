@@ -43,7 +43,9 @@ import type { StageTile } from './stage-tile';
 import type { SessionClaim } from './session-memory';
 import type { SessionFacts } from './auto-close';
 import { ensureSessionIds, newIdentity, readLineage, restoreIdentity, type SessionIdentity, type SessionLineage } from './lineage';
-import { decideIsolation, resolveIntent, rungCeilingOf, parseMode, isolationRecord, DEFAULT_POLICY, type IsolationPolicy, type IsolationIntent, type IsolationContext, type IsolationDecision, type Mode } from '../core/isolation';
+import { decideIsolation, redecideAfterLostRace, resolveIntent, rungCeilingOf, parseMode, parseTaskClass, parseRungCeiling, isolationRecord, checkoutIdOf, claimOf, DEFAULT_POLICY, type IsolationPolicy, type IsolationIntent, type IsolationContext, type IsolationDecision, type IsolationPlan, type Mode, type TaskClass, type RungCeiling, type Claim } from '../core/isolation';
+import { claimsDirOf, ensureClaimsDir, readClaims, takeClaim, releaseClaim, claimsOf } from '../../pty-sidecar/claims-store.cjs';
+import { releaseRefusal } from '../../pty-sidecar/claims-core.cjs';
 import { loadRoleAuthority } from './role-loader';
 import { sessionRoleSlug } from './role-library';
 import { appendIsolationRecord } from './isolation-log';
@@ -117,9 +119,16 @@ export interface GridDeps {
 	 *  the same code the + tab button uses. `by` names the asker in the window's notice. */
 	newTab?: (fields: NewTabFields, by: string) => Promise<NewTabOutcome>;
 }
+/** What a session's write gate needs from its spawn's isolation decision (terminal-tile.ts). */
+export interface SpawnGate { taskClass?: TaskClass; rungCeiling?: RungCeiling }
+
 export interface SessionRecord { worktreePath: string; branch: string; repoName: string; repoPath: string; baseBranch: string; name?: string; hidden?: boolean; kind?: 'terminal' | 'journal' | 'god'; journalSlug?: string; godIndex?: number; folder?: boolean; model?: string; effort?: string; roleSlug?: string;
 	/** Where the session works (core/isolation.ts Mode). Absent in pre-step-8 records. */
 	isolation?: string;
+	/** The spawn's task class and rung ceiling (core/isolation.ts), for a shared-readonly session's
+	 *  write-hook escalation. Absent in pre-step-9 records, which then never escalate. */
+	taskClass?: string;
+	rungCeiling?: string;
 	/** Stable session identity (lineage.ts). Absent only in records an older build wrote — restore
 	 *  mints one for those, once, and the healing persist writes it. */
 	sessionId?: string;
@@ -261,6 +270,9 @@ export class TerminalsGrid {
 		// One shared settings file for every session, written beside the sidecar — never into a
 		// worktree. Synchronous + here in the constructor so it exists before any tile spawns.
 		try { writeWorktreeSettings(path.dirname(this.sidecarPath), this.notifyScriptPath, this.coordHookPath); } catch { /* best effort */ }
+		// The machine-wide claim store (V2 step 9). Made by the app, never by the hook: a shared
+		// session's write gate fails CLOSED on a missing store, so it must exist before one spawns.
+		try { ensureClaimsDir(claimsDirOf(this.coordDir)); } catch { /* the gate denies, and says why */ }
 		this.journalStore = new JournalStore(path.join(this.coordDir, 'journals'));
 		this.formatProbe = new FormatProbe({ sidecarPath: this.sidecarPath, cwd: this.coordDir, sessionEnv: deps.sessionEnv });
 		this.convertProbe = new ConvertProbe({ sidecarPath: this.sidecarPath, cwd: this.coordDir, sessionEnv: deps.sessionEnv });
@@ -632,7 +644,7 @@ export class TerminalsGrid {
 		// and isolation.jsonl has to count it or the worktree-creation figure undercounts.
 		const plan = this.planIsolation(repo, {});
 		let failed: string | undefined;
-		const tile = await this.executeIsolation(plan.decision, repo, base, { onFail: (r) => { failed = r; } });
+		const tile = await this.executeIsolation(plan, repo, base, { onFail: (r) => { failed = r; } });
 		this.logIsolation(repo, plan, tile, failed);
 	}
 
@@ -642,7 +654,7 @@ export class TerminalsGrid {
 	private async spawnFolder(repo: RepoConfig, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage; onFail?: (reason: string) => void;
 		/** A shared-readonly or scratch session (core/isolation.ts): it runs like a folder target —
 		 *  nothing of ours to delete on close — in `cwd` (default the target's own path). */
-		isolation?: Mode; cwd?: string; identity?: SessionIdentity }): Promise<TerminalTile | null> {
+		isolation?: Mode; cwd?: string; identity?: SessionIdentity; gate?: SpawnGate }): Promise<TerminalTile | null> {
 		const cwd = opts.cwd ?? repo.path;
 		try {
 			await fs.access(cwd); // a moved/unmounted folder should say so, not spawn into nothing
@@ -653,7 +665,7 @@ export class TerminalsGrid {
 		}
 		const model = opts.model ?? (this.modelSel?.value || undefined);
 		const effort = opts.effort ?? (this.effortSel?.value || undefined);
-		const tile = this.makeTile({ worktreePath: cwd, branch: '' }, repo.name, repo.path, '', false, opts.name, model, effort, true, opts.roleSlug, opts.identity ?? newIdentity(opts.lineage), opts.isolation);
+		const tile = this.makeTile({ worktreePath: cwd, branch: '' }, repo.name, repo.path, '', false, opts.name, model, effort, true, opts.roleSlug, opts.identity ?? newIdentity(opts.lineage), opts.isolation, opts.gate);
 		if (opts.task) this.pendingTask.set(tile.tileId, opts.task);
 		if (this.stageEl) tile.render(this.stageEl);
 		this.tiles.push(tile);
@@ -664,7 +676,7 @@ export class TerminalsGrid {
 
 	/** Shared spawn core: create a worktree + tile, render, persist, layout. Optionally queue an
 	 *  initial task to send once the new session is first ready. Returns the tile (or null). */
-	private async spawnWorktree(repo: RepoConfig, base: string, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage; onFail?: (reason: string) => void; isolation?: Mode }): Promise<TerminalTile | null> {
+	private async spawnWorktree(repo: RepoConfig, base: string, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage; onFail?: (reason: string) => void; isolation?: Mode; gate?: SpawnGate }): Promise<TerminalTile | null> {
 		try {
 			const branches = await listBranches(repo.path);
 			const branch = this.pendingNewBranch ?? nextWorktreeBranch(branches, base);
@@ -673,7 +685,7 @@ export class TerminalsGrid {
 			// Explicit opts win; otherwise inherit the toolbar dropdowns ('' = CLI default = no flag).
 			const model = opts.model ?? (this.modelSel?.value || undefined);
 			const effort = opts.effort ?? (this.effortSel?.value || undefined);
-			const tile = this.makeTile(worktree, repo.name, repo.path, base, false, opts.name, model, effort, undefined, opts.roleSlug, newIdentity(opts.lineage), opts.isolation ?? 'worktree');
+			const tile = this.makeTile(worktree, repo.name, repo.path, base, false, opts.name, model, effort, undefined, opts.roleSlug, newIdentity(opts.lineage), opts.isolation ?? 'worktree', opts.gate);
 			if (opts.task) this.pendingTask.set(tile.tileId, opts.task);
 			if (this.stageEl) tile.render(this.stageEl);
 			this.tiles.push(tile);
@@ -1158,23 +1170,27 @@ export class TerminalsGrid {
 		const plan = this.planIsolation(repo, extras);
 		let failed: string | undefined;
 		const fail = (r: string): void => { failed = r; onFail?.(r); };
-		const tile = await this.executeIsolation(plan.decision, repo, base, { task, model, effort, name, roleSlug, lineage, onFail: fail });
+		const gate: SpawnGate = { taskClass: plan.intent.taskClass, rungCeiling: plan.ctx.rungCeiling };
+		const tile = await this.executeIsolation(plan, repo, base, { task, model, effort, name, roleSlug, lineage, onFail: fail, gate });
 		this.logIsolation(repo, plan, tile, failed);
 		return tile;
 	}
 
 	/** Append this spawn's decision, and what came of it, to isolation.jsonl. A refusal has no
 	 *  outcome to add; a grant that could not be carried out says why. */
-	private logIsolation(repo: RepoConfig, plan: { intent: IsolationIntent; ctx: IsolationContext; decision: IsolationDecision }, tile: TerminalTile | null, failed: string | undefined): void {
+	private logIsolation(repo: RepoConfig, plan: IsolationPlan, tile: TerminalTile | null, failed: string | undefined): void {
 		const outcome = tile
 			? { sessionId: tile.sessionId, cwd: tile.worktreePath }
 			: (plan.decision.ok && failed ? { failed } : {});
 		appendIsolationRecord(this.coordDir, isolationRecord(repo.name, plan.intent, plan.ctx, plan.decision, outcome));
 	}
 
-	/** Carry out one isolation decision for a repo target. */
-	private async executeIsolation(decision: IsolationDecision, repo: RepoConfig, base: string | null, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage; onFail: (reason: string) => void }): Promise<TerminalTile | null> {
-		const { task, model, effort, name, roleSlug, lineage, onFail } = opts;
+	/** Carry out one isolation decision for a repo target. A shared-write grant takes its lease
+	 *  here, before the session exists; losing that race re-decides with the winner's claim, and
+	 *  `plan.decision` is updated to what was actually executed (so isolation.jsonl records it). */
+	private async executeIsolation(plan: IsolationPlan, repo: RepoConfig, base: string | null, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage; onFail: (reason: string) => void; gate?: SpawnGate }): Promise<TerminalTile | null> {
+		const { task, model, effort, name, roleSlug, lineage, onFail, gate } = opts;
+		const decision = plan.decision;
 		if (!decision.ok) {
 			const why = `${decision.reason} (holder: ${decision.holder}; path: ${decision.path})`;
 			this.deps.toast(`Not spawned in ${repo.name} — ${why}`, 'warn');
@@ -1182,7 +1198,7 @@ export class TerminalsGrid {
 			return null;
 		}
 		if (decision.mode === 'shared-readonly') {
-			return this.spawnFolder(repo, { task, model, effort, name, roleSlug, lineage, onFail, isolation: 'shared-readonly', cwd: repo.path });
+			return this.spawnFolder(repo, { task, model, effort, name, roleSlug, lineage, onFail, isolation: 'shared-readonly', cwd: repo.path, gate });
 		}
 		if (decision.mode === 'scratch') {
 			const identity = newIdentity(lineage);
@@ -1191,10 +1207,33 @@ export class TerminalsGrid {
 				onFail?.(`couldn't create a scratch folder: ${(e as Error).message}`);
 				return null;
 			}
-			return this.spawnFolder(repo, { task, model, effort, name, roleSlug, lineage, onFail, isolation: 'scratch', cwd, identity });
+			return this.spawnFolder(repo, { task, model, effort, name, roleSlug, lineage, onFail, isolation: 'scratch', cwd, identity, gate });
 		}
-		// 'worktree' — and, defensively, anything else: shared-write is never granted at this step,
-		// and if it somehow were, a worktree is the answer that cannot collide.
+		if (decision.mode === 'shared-write') {
+			const identity = newIdentity(lineage);
+			const claimsDir = claimsDirOf(this.coordDir);
+			let took: ReturnType<typeof takeClaim>;
+			try {
+				ensureClaimsDir(claimsDir);
+				took = takeClaim(claimsDir, repo.path, { sessionId: identity.sessionId, holder: name ?? repo.name, mode: 'shared-write', reason: plan.intent.taskClass }, { boardDir: this.coordDir });
+			} catch (e) {
+				// No lease, no shared-write session: an unreadable store fails closed here too.
+				const why = `couldn't take the write lease on ${repo.path}: ${(e as Error).message}`;
+				this.deps.toast(`Not spawned in ${repo.name} — ${why}`, 'error');
+				onFail(why);
+				return null;
+			}
+			if (!took.ok) {
+				// Lost the race since planning. Decide again with the winner's claim: a worktree (FR-12)
+				// or, for a release, a refusal naming it.
+				plan.decision = redecideAfterLostRace(plan, took.holder, repo.path);
+				return this.executeIsolation(plan, repo, base, opts);
+			}
+			const tile = await this.spawnFolder(repo, { task, model, effort, name, roleSlug, lineage, onFail, isolation: 'shared-write', cwd: repo.path, identity, gate });
+			if (!tile) { try { releaseClaim(claimsDir, repo.path, identity.sessionId, { boardDir: this.coordDir }); } catch { /* it expires */ } }
+			return tile;
+		}
+		// 'worktree' — and, defensively, anything unrecognised: a worktree is the answer that cannot collide.
 		let baseBranch: string;
 		try { baseBranch = base ?? (defaultBranch(await listBranches(repo.path)) ?? 'main'); } catch (e) {
 			// Unhandled, this rejected past every caller — and a waiting `cos-coord spawn` got no receipt.
@@ -1202,18 +1241,41 @@ export class TerminalsGrid {
 			onFail?.(`couldn't read the branches of ${repo.name}: ${(e as Error).message}`);
 			return null;
 		}
-		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name, roleSlug, lineage, onFail, isolation: 'worktree' });
+		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name, roleSlug, lineage, onFail, isolation: 'worktree', gate });
 	}
 
-	/** Gather the inputs for one spawn's isolation decision and make it. The only IO is reading the
-	 *  role file's `authority:` (for the rung ceiling); the decision itself is pure. Claims are
-	 *  empty until step 9 builds the lease store. */
-	private planIsolation(repo: RepoConfig, extras: SpawnExtras, now = Date.now()): { intent: IsolationIntent; ctx: IsolationContext; decision: IsolationDecision } {
+	/** A session ended (its tile closed): give up every write lease it holds — but only from a clean
+	 *  checkout (design §2, mitigation 2: how a shell write the hook could not see gets noticed). A
+	 *  dirty one keeps its lease, says so, and leaves it to expire by its TTL, since nothing renews
+	 *  it any more. Only shared sessions can hold one; a shared-readonly session may have escalated. */
+	private async releaseLeases(t: TerminalTile): Promise<void> {
+		if (t.isolation !== 'shared-write' && t.isolation !== 'shared-readonly') return;
+		const dir = claimsDirOf(this.coordDir);
+		let held: ReturnType<typeof claimsOf>;
+		try { held = claimsOf(dir, t.sessionId); } catch { return; }
+		if (!held.length) return;
+		const st = await runCommand('git', ['status', '--porcelain'], { cwd: t.gateCheckout, timeoutMs: 15000 });
+		const refusal = releaseRefusal(st.code === 0 ? st.stdout : null, t.gateCheckout);
+		if (refusal) {
+			this.deps.toast(`${t.name} ended, but its write lease is KEPT — ${refusal}`, 'warn');
+			return;
+		}
+		for (const c of held) { try { releaseClaim(dir, c.path, t.sessionId, { boardDir: this.coordDir }); } catch { /* it expires */ } }
+	}
+
+	/** Gather the inputs for one spawn's isolation decision and make it. The IO is reading the
+	 *  role file's `authority:` (for the rung ceiling) and the machine-wide `_claims/`; the
+	 *  decision itself is pure. An unreadable claim store reads as no claims HERE only because
+	 *  nothing here writes: a shared-write grant still has to take its lease (executeIsolation),
+	 *  and that take fails closed. */
+	private planIsolation(repo: RepoConfig, extras: SpawnExtras, now = Date.now()): IsolationPlan {
 		const roleSlug = sessionRoleSlug(extras.roleSlug, false);
 		const rungCeiling = rungCeilingOf(loadRoleAuthority(this.deps.roleLibrary?.path, roleSlug));
-		const checkout = { id: path.resolve(repo.path).replace(/\\/g, '/').toLowerCase(), path: repo.path, primary: true };
+		const checkout = { id: checkoutIdOf(repo.path), path: repo.path, primary: true };
 		const intent = resolveIntent({ taskClass: extras.taskClass, writes: extras.writes, requested: extras.isolation }, checkout, rungCeiling);
-		const ctx: IsolationContext = { now, claims: [], policy: this.deps.isolation ?? DEFAULT_POLICY, rungCeiling, role: roleSlug };
+		let claims: Claim[] = [];
+		try { claims = readClaims(claimsDirOf(this.coordDir)).map(claimOf); } catch { /* see above */ }
+		const ctx: IsolationContext = { now, claims, policy: this.deps.isolation ?? DEFAULT_POLICY, rungCeiling, role: roleSlug };
 		return { intent, ctx, decision: decideIsolation(intent, ctx) };
 	}
 
@@ -2163,7 +2225,7 @@ export class TerminalsGrid {
 
 	/** Build a tile with all the grid callbacks wired. `resume` → claude --continue.
 	 *  `folder` → a plain-folder target (no worktree, no branch). */
-	private makeTile(worktree: WorktreeInfo, repoName: string, repoPath: string, baseBranch: string, resume: boolean, name: string | undefined, model: string | undefined, effort: string | undefined, folder: boolean | undefined, roleSlug: string | undefined, identity: SessionIdentity, isolation?: Mode): TerminalTile {
+	private makeTile(worktree: WorktreeInfo, repoName: string, repoPath: string, baseBranch: string, resume: boolean, name: string | undefined, model: string | undefined, effort: string | undefined, folder: boolean | undefined, roleSlug: string | undefined, identity: SessionIdentity, isolation?: Mode, gate: SpawnGate = {}): TerminalTile {
 		return new TerminalTile({
 			tileId: this.nextTileId++, // a display handle, reissued every launch — identity is the stable one
 			identity,
@@ -2173,6 +2235,9 @@ export class TerminalsGrid {
 			roleLibraryPath: this.deps.roleLibrary?.path,
 			roleSlug,
 			isolation,
+			isolationPolicy: this.deps.isolation ?? DEFAULT_POLICY,
+			...(gate.taskClass ? { taskClass: gate.taskClass } : {}),
+			...(gate.rungCeiling ? { rungCeiling: gate.rungCeiling } : {}),
 			sessionEnv: this.deps.sessionEnv,
 			resume,
 			bypassPermissions: this.deps.bypassPermissions,
@@ -2183,7 +2248,7 @@ export class TerminalsGrid {
 			onRequestRename: (t, cur) => {
 				void this.deps.promptForTopic('Rename terminal', 'New name', cur, 'Rename').then((name) => { if (name && name.trim()) t.setName(name.trim()); });
 			},
-			onClosed: (t) => { this.idleTiles.delete(t.tileId); if (this.lockedTileId === t.tileId) this.lockedTileId = null; if (this.centeredId === t.tileId) this.centeredId = null; this.q = rqClose(this.q, t.tileId).state; this.tiles = this.tiles.filter((x) => x !== t); void this.persist(); this.applyLayout(); this.autoCenter(); },
+			onClosed: (t) => { this.idleTiles.delete(t.tileId); if (this.lockedTileId === t.tileId) this.lockedTileId = null; if (this.centeredId === t.tileId) this.centeredId = null; this.q = rqClose(this.q, t.tileId).state; this.tiles = this.tiles.filter((x) => x !== t); void this.persist(); this.applyLayout(); this.autoCenter(); void this.releaseLeases(t); },
 			onCloseKept: (t, r) => this.deps.toast(`${t.name} closed — ${r.branch === 'kept' ? `branch ${t.branch} kept` : 'branch deleted'}${r.worktree === 'kept' ? ', worktree kept' : ''}: ${r.reason}${r.parked ? '. Its uncommitted work was committed onto the branch first' : ''}`, 'warn'),
 			onHide: (t) => this.hideTile(t),
 			onLock: (t) => this.toggleLockById(t.tileId),
@@ -2372,7 +2437,7 @@ export class TerminalsGrid {
 			let exists = false;
 			try { await fs.access(rec.worktreePath); exists = true; } catch { exists = false; }
 			if (!exists) { this.unrestored.push(rec); return; } // retained — retried next launch
-			const tile = this.makeTile({ worktreePath: rec.worktreePath, branch: rec.branch }, rec.repoName, rec.repoPath, rec.baseBranch, true, rec.name, rec.model, rec.effort, rec.folder, rec.roleSlug, restoreIdentity(rec), parseMode(rec.isolation));
+			const tile = this.makeTile({ worktreePath: rec.worktreePath, branch: rec.branch }, rec.repoName, rec.repoPath, rec.baseBranch, true, rec.name, rec.model, rec.effort, rec.folder, rec.roleSlug, restoreIdentity(rec), parseMode(rec.isolation), { taskClass: parseTaskClass(rec.taskClass), rungCeiling: parseRungCeiling(rec.rungCeiling) });
 			if (this.stageEl) tile.render(this.stageEl);
 			if (rec.hidden) { tile.setHidden(true); this.hidden.push(tile); }
 			else this.tiles.push(tile);

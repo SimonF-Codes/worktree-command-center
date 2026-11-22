@@ -83,13 +83,20 @@ describe('the decision the spawn path executes', () => {
 		const b = await spawnViaCli(['app', '--task', 'research', '--role', 'researcher', '--class', 'small-fix', '--writes', 'repo']);
 		expect(plan(spawnExtrasOf(b.msg), lib, 'cheap-readonly')).toMatchObject({ ok: false, holder: 'researcher', path: 'C:/dev/app' });
 	});
-	it('--isolation shared-write is refused under every policy, naming a holder and a path', async () => {
+	it('--isolation shared-write is refused under every policy but cheapest-safe, naming a holder and a path', async () => {
 		const { msg } = await spawnViaCli(['app', '--task', 'fix', '--isolation', 'shared-write']);
 		for (const policy of ['worktree-always', 'cheap-readonly'] as const) {
 			const d = plan(spawnExtrasOf(msg), undefined, policy);
 			expect(d.ok).toBe(false);
 			if (!d.ok) { expect(d.holder).toContain(policy); expect(d.path).toBe('C:/dev/app'); }
 		}
+		expect(plan(spawnExtrasOf(msg), undefined, 'cheapest-safe')).toMatchObject({ ok: true, mode: 'shared-write', acquire: ['write:c:/dev/app'] });
+	});
+	it('cheapest-safe: --class small-fix gets shared-write, a feature still gets a worktree', async () => {
+		const a = await spawnViaCli(['app', '--task', 'one-line fix', '--class', 'small-fix']);
+		expect(plan(spawnExtrasOf(a.msg), undefined, 'cheapest-safe')).toMatchObject({ ok: true, mode: 'shared-write' });
+		const b = await spawnViaCli(['app', '--task', 'build X']);
+		expect(plan(spawnExtrasOf(b.msg), undefined, 'cheapest-safe')).toMatchObject({ ok: true, mode: 'worktree' });
 	});
 });
 

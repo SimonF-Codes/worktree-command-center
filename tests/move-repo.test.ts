@@ -514,3 +514,34 @@ describe('nestButton — counts what git lists under the old root, never the fol
 		expect(b.show && b.title).toMatch(/could not list/);
 	});
 });
+
+// ---- Write leases (V2 step 9): a live lease refuses a move OR a relayout, like a live terminal;
+// a stale one is no refusal (executeMove re-points it).
+describe('planMove — write leases', () => {
+	const NOW = 10_000_000;
+	const lease = (p: string, over: Partial<{ ts: number; ttlMs: number; holder: string }> = {}) => ({ path: p, holder: 'fix-auth', ts: NOW - 60_000, ttlMs: 600_000, ...over });
+	it('a live lease on the repo refuses a move, naming the holder and the path', () => {
+		const p = planMove(facts({ leases: [lease(FROM)], now: NOW }));
+		expect(p.refusals.map((r) => r.code)).toEqual(['live-lease']);
+		expect(p.refusals[0]!.path).toBe(FROM);
+		expect(p.refusals[0]!.message).toContain('fix-auth');
+	});
+	it('a live lease refuses a relayout too — even one on the repo checkout the relayout leaves in place', () => {
+		expect(codes(facts({ to: FROM, leases: [lease(FROM)], now: NOW }))).toEqual(['live-lease']);
+	});
+	it('a stale lease is no refusal', () => {
+		expect(codes(facts({ leases: [lease(FROM, { ts: NOW - 600_001 })], now: NOW }))).toEqual([]);
+	});
+	it('a lease on another repo is no refusal', () => {
+		expect(codes(facts({ leases: [lease(path.join(R, 'Other'))], now: NOW }))).toEqual([]);
+	});
+	it('an unreadable lease store refuses: it cannot show nobody holds one', () => {
+		expect(codes(facts({ leases: null, now: NOW }))).toEqual(['live-lease']);
+	});
+	it('no clock given reads every lease as live — the safe way round', () => {
+		expect(codes(facts({ leases: [lease(FROM, { ts: 0 })] }))).toEqual(['live-lease']);
+	});
+	it('a caller that reads no leases plans exactly as before', () => {
+		expect(codes(facts())).toEqual([]);
+	});
+});

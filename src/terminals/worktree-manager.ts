@@ -99,18 +99,24 @@ export async function listBranches(repoPath: string): Promise<string[]> {
 	return r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
 }
 
+/** The file tools the write gate sees. A shell redirect or a build script is not one of them —
+ *  the gate is cooperative, not a sandbox (docs/api.md, "Write claims"). */
+export const WRITE_TOOLS_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit';
+
 /** The session settings content: the .cos-ready marker hook (Stop/Notification), the
  *  coordination hooks (PreToolUse acquire / PostToolUse release) on Bash, a Task-matcher hook
  *  that logs background Task/Agent runs to the board (for the Coordination panel's
- *  background-tasks list), and a pre-approval of `cos-coord` so agents chat/coordinate with
- *  each other without prompting. */
+ *  background-tasks list), the write gate on Claude's file tools (V2 step 9: PreToolUse tests the
+ *  write against the `_claims/` store, PostToolUse re-stamps the session's lease), and a
+ *  pre-approval of `cos-coord` so agents chat/coordinate with each other without prompting. */
 export function worktreeSettingsJson(notifyScriptAbsPath: string, coordHookAbsPath: string): string {
 	const ready = [{ hooks: [{ type: 'command', command: `node "${notifyScriptAbsPath}"` }] }];
 	const coord = (extra: string) => ({ matcher: 'Bash', hooks: [{ type: 'command', command: `node "${coordHookAbsPath}"${extra}` }] });
 	const task = (extra: string) => ({ matcher: 'Task', hooks: [{ type: 'command', command: `node "${coordHookAbsPath}" --task${extra}` }] });
+	const write = (extra: string) => ({ matcher: WRITE_TOOLS_MATCHER, hooks: [{ type: 'command', command: `node "${coordHookAbsPath}" --write${extra}` }] });
 	return JSON.stringify({
 		permissions: { allow: ['Bash(cos-coord:*)'] }, // chatting/coordinating never needs approval
-		hooks: { Stop: ready, Notification: ready, PreToolUse: [coord(''), task('')], PostToolUse: [coord(' --release'), task(' --release')] },
+		hooks: { Stop: ready, Notification: ready, PreToolUse: [coord(''), task(''), write('')], PostToolUse: [coord(' --release'), task(' --release'), write(' --renew')] },
 	}, null, 2);
 }
 

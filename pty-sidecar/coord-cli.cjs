@@ -40,6 +40,16 @@ function requireArgs(cmd, ok, usage) {
   process.exit(2);
 }
 
+// One line per write lease in the machine-wide store (lenient read: this is a display).
+function leaseLines(claimsDir, now) {
+  const claimsStore = require('./claims-store.cjs');
+  const me = env('COS_SESSION_ID', '');
+  return claimsStore.readClaims(claimsDir).map((c) => {
+    const st = core.lockStatus(c, now);
+    return `coord: write lease ${c.path} — ${c.holder} (${c.mode || 'shared-write'}) · ${ageStr(now - c.ts)}${st === 'stale' ? ' [stale]' : ''}${me && c.sessionId === me ? ' [yours]' : ''}`;
+  });
+}
+
 function newTabFail(reason, code = 2) {
   console.error(`coord: new-tab ${reason}`);
   process.exit(code);
@@ -73,6 +83,30 @@ function newTab(dir) {
   process.exit(0);
 }
 
+// Not fail-open: a release either happened or it did not, and the exit code says which.
+function lease(dir, resource) {
+  const claimsStore = require('./claims-store.cjs');
+  const cc = require('./claims-core.cjs');
+  const claimsDir = env('COS_CLAIMS_DIR') || (dir ? claimsStore.claimsDirOf(dir) : '');
+  if (!claimsDir) { console.error('coord: lease needs COS_CLAIMS_DIR or COS_COORD_DIR — run it from a session the app opened'); process.exit(2); }
+  if (resource !== 'release') {
+    const lines = leaseLines(claimsDir, Date.now());
+    console.log(lines.length ? lines.join('\n') : 'coord: no write leases');
+    process.exit(0);
+  }
+  const sessionId = env('COS_SESSION_ID', '');
+  const checkout = env('COS_CHECKOUT', '');
+  if (!sessionId || !checkout) { console.error('coord: lease release needs a shared session the app opened (COS_SESSION_ID and COS_CHECKOUT)'); process.exit(2); }
+  const held = claimsStore.claimsOf(claimsDir, sessionId).find((c) => cc.checkoutId(c.path) === cc.checkoutId(checkout));
+  if (!held) { console.error(`coord: this session holds no write lease on ${checkout} — nothing released`); process.exit(2); }
+  const st = require('child_process').spawnSync('git', ['status', '--porcelain'], { cwd: checkout, encoding: 'utf8', timeout: 15000 });
+  const refusal = cc.releaseRefusal(st.status === 0 ? st.stdout : null, checkout);
+  if (refusal) { console.error(`coord: lease release refused — ${refusal}`); process.exit(2); }
+  if (!claimsStore.releaseClaim(claimsDir, checkout, sessionId, { boardDir: dir })) { console.error(`coord: the lease on ${checkout} changed hands before it could be released`); process.exit(2); }
+  console.log(`coord: released the write lease on ${checkout}`);
+  process.exit(0);
+}
+
 function main() {
   const dir = env('COS_COORD_DIR');
   const terminal = env('COS_TERMINAL_NAME', `pid${process.pid}`);
@@ -80,6 +114,13 @@ function main() {
   // Who is asking, for the outbox's `from`. Set by the app per spawn path; attribution only.
   const from = env('COS_SESSION_ID', '');
   if (process.argv[2] === 'new-tab') { try { return newTab(dir); } catch (e) { return newTabFail(`failed: ${e.message}`); } }
+  // `cos-coord lease` lists the machine-wide write leases; `cos-coord lease release` gives up this
+  // session's lease on its checkout — refused (exit 2) unless the checkout is clean, and refused
+  // loudly when this session holds none: a release that silently did nothing is B3 again. Before
+  // the fail-open exit below, for the same reason.
+  if (process.argv[2] === 'lease') {
+    try { return lease(dir, process.argv[3]); } catch (e) { console.error(`coord: lease ${process.argv[3] || ''} failed — ${e.message}`); process.exit(2); }
+  }
   if (!dir) { process.exit(0); } // coordination not configured → allow
   const [cmd, resource, ...rest] = process.argv.slice(2);
 
@@ -91,6 +132,8 @@ function main() {
       const st = core.lockStatus(l, now);
       console.log(`coord: ${l.resource} — ${l.holder}${l.reason ? ` (${l.reason})` : ''} · ${ageStr(now - l.ts)}${st === 'stale' ? ' [stale]' : ''}`);
     }
+    // Write leases are machine-wide (every workspace's sessions), so they are listed too.
+    try { for (const line of leaseLines(env('COS_CLAIMS_DIR') || require('./claims-store.cjs').claimsDirOf(dir), now)) console.log(line); } catch { /* a display: lenient */ }
     process.exit(0);
   }
 
@@ -203,7 +246,7 @@ function main() {
     process.exit(0);
   }
 
-  console.error('usage: cos-coord <status|acquire|release|note|chat|tell|watch|spawn|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--class <task-class>] [--writes <none|repo|outside>] [--isolation <mode>] [--to "…"]');
+  console.error('usage: cos-coord <status|lease [release]|acquire|release|note|chat|tell|watch|spawn|rename|close|personality|new-tab> [resource] [--reason "…"] [--ttl <sec>] [--note "…"] [--base <branch>] [--task "…"] [--model <model>] [--effort <level>] [--name "…"] [--workstream <id>] [--role <slug>] [--class <task-class>] [--writes <none|repo|outside>] [--isolation <mode>] [--to "…"]');
   process.exit(0);
 }
 

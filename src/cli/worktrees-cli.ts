@@ -5,6 +5,7 @@ import { planPrune, describePrunePlan, stillPrunable, type PrunePlan } from '../
 import { gatherPruneFacts, executePrune, describePruneResults, type PruneGatherContext } from '../prune-worktrees-io';
 import { planMove, describeMovePlan, describeRefusals, remapSessionRecords, remapRepoLinks, samePath, type MovePlan, type PathedRecord } from '../move-repo';
 import { gatherMoveFacts, executeMove, describeMoveResult, defaultProjectsDir, probeRenameCode } from '../move-repo-io';
+import { claimsDirUnder } from '../../pty-sidecar/claims-store.cjs';
 import { WORKTREES_EXCLUDE } from '../terminals/worktree-manager';
 import type { RepoConfig } from '../terminals/terminals-grid';
 import { appIsRunning, APP_RUNNING_REASON } from './app-guard';
@@ -197,13 +198,15 @@ async function printHeldDiagnoses(plan: PrunePlan, e: Env): Promise<void> {
 async function relayout(a: Args, targets: RepoConfig[], repos: RepoConfig[], e: Env): Promise<number> {
 	if (e.running) e.err('wcc-worktrees: note — the app is running, so its live terminals cannot be seen from here and are not checked in this dry run. --apply refuses until it is closed.');
 	const journalDir = path.join(e.userData, 'repo-moves');
+	// The machine-wide write leases (V2 step 9): a live one refuses the relayout, like a live terminal.
+	const claimsDir = claimsDirUnder(path.join(e.userData, '.coordination'));
 	let status: number = EXIT.ok;
 	for (const t of targets) {
 		let cfg: unknown;
 		try { cfg = readJson(e.configFile); } catch { cfg = undefined; }
 		let plan: MovePlan;
 		try {
-			plan = planMove(await gatherMoveFacts(t, t.path, { livePaths: [], targets: repos, config: cfg, projectsDir: e.projectsDir, journalDir, caseInsensitive: e.ci, probe: a.probe }));
+			plan = planMove(await gatherMoveFacts(t, t.path, { livePaths: [], targets: repos, config: cfg, projectsDir: e.projectsDir, journalDir, claimsDir, caseInsensitive: e.ci, probe: a.probe }));
 		} catch (err) {
 			e.err(`wcc-worktrees: ${t.name}: could not be read — ${(err as Error).message}`);
 			status = EXIT.failed;
@@ -232,7 +235,7 @@ async function relayout(a: Args, targets: RepoConfig[], repos: RepoConfig[], e: 
 		}
 		if (!a.apply) { e.out(`\nDry run — nothing was moved. Re-run with --apply to do it.`); continue; }
 
-		const result = await executeMove(plan, { journalDir, projectsDir: e.projectsDir, applyAppState: (p) => applyFiles(p, e) });
+		const result = await executeMove(plan, { journalDir, projectsDir: e.projectsDir, claimsDir, caseInsensitive: e.ci, applyAppState: (p) => applyFiles(p, e) });
 		e.out('');
 		e.out(describeMoveResult(result).replace(/run Move again with the same destination/, `re-run \`wcc-worktrees relayout ${t.name} --apply\``));
 		if (!result.ok) {

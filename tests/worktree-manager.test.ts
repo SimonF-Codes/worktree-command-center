@@ -46,7 +46,7 @@ describe('shouldRemoveWorktree', () => {
 import * as fs from 'fs';
 import * as os from 'os';
 import * as nodePath from 'path';
-import { worktreeSettingsJson, worktreeSettingsPath, writeWorktreeSettings, terminalSystemPrompt, folderSystemPrompt } from '../src/terminals/worktree-manager';
+import { worktreeSettingsJson, WRITE_TOOLS_MATCHER, worktreeSettingsPath, writeWorktreeSettings, terminalSystemPrompt, folderSystemPrompt } from '../src/terminals/worktree-manager';
 
 describe('terminalSystemPrompt', () => {
 	it('states identity, parallelism, and the cross-repo worktree rule', () => {
@@ -96,6 +96,25 @@ describe('worktreeSettingsJson', () => {
 		const postTask = cfg.hooks.PostToolUse.find((g) => g.matcher === 'Task');
 		expect(postTask?.hooks[0]!.command).toContain('--task');
 		expect(postTask?.hooks[0]!.command).toContain('--release');
+	});
+});
+
+describe('worktreeSettingsJson — the write gate (V2 step 9)', () => {
+	const cfg = (): { hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>> } =>
+		JSON.parse(worktreeSettingsJson('C:/p/notify-ready.cjs', 'C:/p/coord-hook.cjs'));
+	const matches = (tool: string) => new RegExp('^(' + WRITE_TOOLS_MATCHER + ')$').test(tool);
+	it('PreToolUse runs coord-hook --write on every file tool', () => {
+		const pre = cfg().hooks.PreToolUse.find((g) => g.matcher === WRITE_TOOLS_MATCHER);
+		expect(pre?.hooks[0]!.command).toMatch(/coord-hook.cjs" --write$/);
+		for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']) expect(matches(tool)).toBe(true);
+		expect(matches('Bash')).toBe(false);
+	});
+	it('PostToolUse renews the lease after the write', () => {
+		const post = cfg().hooks.PostToolUse.find((g) => g.matcher === WRITE_TOOLS_MATCHER);
+		expect(post?.hooks[0]!.command).toMatch(/--write --renew$/);
+	});
+	it('leaves the Bash and Task hooks first and unchanged', () => {
+		expect(cfg().hooks.PreToolUse.map((g) => g.matcher)).toEqual(['Bash', 'Task', WRITE_TOOLS_MATCHER]);
 	});
 });
 

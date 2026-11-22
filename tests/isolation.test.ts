@@ -231,10 +231,12 @@ describe('rungCeilingOf — from the role file authority:', () => {
 });
 
 describe('parseIsolationPolicy — config.json `isolation`, default worktree-always', () => {
-	it('only cheap-readonly switches it on', () => {
+	it('cheap-readonly and cheapest-safe switch it on; anything else is the default', () => {
 		expect(parseIsolationPolicy('cheap-readonly')).toBe('cheap-readonly');
 		expect(parseIsolationPolicy(' Cheap-Readonly ')).toBe('cheap-readonly');
-		for (const v of [undefined, null, '', 'worktree-always', 'cheapest-safe', 42, {}]) expect(parseIsolationPolicy(v)).toBe('worktree-always');
+		expect(parseIsolationPolicy('cheapest-safe')).toBe('cheapest-safe');
+		expect(parseIsolationPolicy(' Cheapest-Safe ')).toBe('cheapest-safe');
+		for (const v of [undefined, null, '', 'worktree-always', 'cheapest', 'shared-write', 42, {}]) expect(parseIsolationPolicy(v)).toBe('worktree-always');
 	});
 });
 
@@ -292,5 +294,52 @@ describe('sessionMode — what the session row shows', () => {
 		expect(used.length).toBeGreaterThan(0);
 		for (const v of used) expect(css).toMatch(new RegExp(`^[ \\t]*${v}:`, 'm'));
 		expect(rules).not.toMatch(/color-(green|red)/); // never a state colour
+	});
+});
+
+describe('the write gate\'s environment (V2 step 9)', () => {
+	it('a session with no mode gets none of it — its hook runs fail-open, checking only others\' leases', async () => {
+		const { writeGateEnv } = await import('../src/core/isolation');
+		expect(writeGateEnv(undefined, { checkout: 'C:/dev/app', claimsDir: 'C:/x/_claims', policy: 'cheap-readonly' })).toEqual({});
+	});
+	it('a moded session gets its mode, checkout, store and policy, plus the escalation facts when known', async () => {
+		const { writeGateEnv } = await import('../src/core/isolation');
+		expect(writeGateEnv('shared-readonly', { checkout: 'C:/dev/app', claimsDir: 'C:/x/_claims', policy: 'cheap-readonly', rungCeiling: 'write', taskClass: 'investigate' })).toEqual({
+			COS_ISOLATION: 'shared-readonly', COS_CHECKOUT: 'C:/dev/app', COS_CLAIMS_DIR: 'C:/x/_claims', COS_ISOLATION_POLICY: 'cheap-readonly', COS_RUNG: 'write', COS_TASK_CLASS: 'investigate',
+		});
+		expect(writeGateEnv('worktree', { checkout: 'C:/wt', claimsDir: 'C:/x/_claims', policy: 'worktree-always' })).not.toHaveProperty('COS_RUNG');
+	});
+	it('every env name it sets is a COS_* the session-env sanitizer strips from inherited env', async () => {
+		const { writeGateEnv } = await import('../src/core/isolation');
+		const { isParentSessionVar } = await import('../src/terminals/session-env');
+		for (const k of Object.keys(writeGateEnv('shared-write', { checkout: 'c', claimsDir: 'd', policy: 'cheap-readonly', rungCeiling: 'write', taskClass: 'config' }))) expect(isParentSessionVar(k)).toBe(true);
+	});
+	it('checkoutIdOf is the hook\'s own spelling of the id', async () => {
+		const { checkoutIdOf } = await import('../src/core/isolation');
+		const cc = require('../pty-sidecar/claims-core.cjs');
+		for (const p of ['C:\\Dev\\App\\', 'c:/dev/app', 'C:/dev/app/.claude-worktrees/wt-1']) expect(checkoutIdOf(p)).toBe(cc.checkoutId(p));
+	});
+});
+
+describe('the instruction now says what is enforced, and what is not', () => {
+	it('shared-readonly: the hook denies file-tool writes, and shell writes are named as the hole', async () => {
+		const { isolationInstruction } = await import('../src/core/isolation');
+		const t = isolationInstruction('shared-readonly')!;
+		expect(t).toMatch(/write hook denies file-tool writes/);
+		expect(t).toMatch(/shell command that writes/);
+		expect(t).toMatch(/not caught by it/);
+		expect(t).not.toMatch(/lease/);
+	});
+	it('shared-readonly that may escalate: told about the lease and to commit before finishing', async () => {
+		const { isolationInstruction } = await import('../src/core/isolation');
+		const t = isolationInstruction('shared-readonly', { escalates: true })!;
+		expect(t).toMatch(/exclusive write lease/);
+		expect(t).toMatch(/Commit your change before you finish/);
+		expect(t).toMatch(/not caught by it/);
+	});
+	it('scratch names the hook and the shell hole too', async () => {
+		const { isolationInstruction } = await import('../src/core/isolation');
+		expect(isolationInstruction('scratch')).toMatch(/write hook denies/);
+		expect(isolationInstruction('scratch')).toMatch(/not caught by it/);
 	});
 });
