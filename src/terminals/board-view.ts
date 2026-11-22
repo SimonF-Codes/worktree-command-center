@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { parseBoardLine, lockStatus, mergeEvents, isEvent, POLL_MS, type BoardEvent, type RawLine, type LockHolder } from './coordination';
+import { claimsDirOf, readGitLocks } from '../../pty-sidecar/claims-store.cjs';
 
 /** A background Task/Agent run derived from board.md: a `task:<tileId>:<taskId>` resource
  *  whose latest event is still START (no matching DONE has landed yet). */
@@ -77,15 +78,18 @@ export class BoardView {
 		try { return fs.readFileSync(path.join(this.coordDir, 'worktrees.md'), 'utf8').split('\n'); } catch { return []; }
 	}
 
-	private readLocks(): LockHolder[] {
+	/** This workspace's explicit locks (`locks/`), plus the automatic git locks, which are
+	 *  machine-wide since Q12 (`_claims/`, shared by every workspace that has the repo). */
+	private readLocks(): Pick<LockHolder, 'resource' | 'holder' | 'reason' | 'ts' | 'ttlMs'>[] {
 		const dir = path.join(this.coordDir, 'locks');
 		let names: string[] = [];
-		try { names = fs.readdirSync(dir); } catch { return []; }
-		const out: LockHolder[] = [];
+		try { names = fs.readdirSync(dir); } catch { names = []; }
+		const out: Pick<LockHolder, 'resource' | 'holder' | 'reason' | 'ts' | 'ttlMs'>[] = [];
 		for (const n of names) {
 			if (!n.endsWith('.json')) continue;
 			try { out.push(JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')) as LockHolder); } catch { /* skip */ }
 		}
+		for (const g of readGitLocks(claimsDirOf(this.coordDir))) out.push({ resource: g.resource, holder: g.holder, reason: g.reason ?? '', ts: g.ts, ttlMs: g.ttlMs });
 		return out;
 	}
 

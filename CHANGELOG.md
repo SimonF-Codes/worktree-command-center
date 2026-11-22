@@ -17,6 +17,10 @@ landed on `main`.
 - **`cos-coord lease` / `lease release`**, and leases in `cos-coord status`. A release, and a
   session's end, give a lease up only from a clean checkout.
 - **Moves** refuse while a live lease is inside the repo (`live-lease`) and re-point stale ones.
+- **The automatic `push` / `worktree add` locks are machine-wide and per repository (Q12).** They
+  were per workspace, so two tabs could push one repo at once — and named after the session's
+  folder, so two worktrees of one repo never contended at all. Now they live in `_claims/`, keyed
+  on the git common dir, owned by the session id, and listed in every tab.
 - **Fixed:** a stale lock could be taken over twice at once — the second taker deleted the first's
   fresh lock. Every unlink and rewrite of a lock now happens under a guard.
 - It is a cooperative guarantee, **not a sandbox**: shell writes are not seen

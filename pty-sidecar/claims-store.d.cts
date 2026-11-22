@@ -13,3 +13,10 @@ export function renewClaim(dir: string, checkout: string, sessionId: string, opt
 export function releaseClaim(dir: string, checkout: string, sessionId: string, opts?: { boardDir?: string }): ClaimRecord | null;
 export function claimsOf(dir: string, sessionId: string): ClaimRecord[];
 export function remapClaims(dir: string, remap: (p: string) => string): { changed: number; conflicts: string[] };
+import type { RepoIdentity } from './claims-core.cjs';
+/** An automatic git lock (`push:<repo>` / `worktree:<repo>`) as stored in `_claims/`. */
+export interface GitLockRecord { v?: number; resource: string; repo: string; holder: string; holderId: string; reason?: string; pid?: number; ts: number; ttlMs: number }
+export function gitLockPath(dir: string, kind: string, key: string): string;
+export function takeGitLock(dir: string, kind: 'push' | 'worktree', repo: RepoIdentity, who: { holderId: string; holder?: string }, opts?: { waitMs?: number; pollMs?: number; now?: number; ttlMs?: number; reason?: string; boardDir?: string }): { ok: true; mine?: true } | { ok: false; holder: GitLockRecord | null };
+export function releaseGitLock(dir: string, kind: 'push' | 'worktree', repo: RepoIdentity, holderId: string, opts?: { boardDir?: string }): GitLockRecord | null;
+export function readGitLocks(dir: string): GitLockRecord[];

@@ -1,6 +1,7 @@
 'use strict';
 // Pre/PostToolUse hook, three independent modes:
-//  - Bash matcher (default): auto-lock `git push` / `git worktree add` per repo.
+//  - Bash matcher (default): auto-lock `git push` / `git worktree add` per REPOSITORY, machine-wide
+//    (the locks live in `_claims/`, keyed on the git common dir — Q12, V2 step 9).
 //    PreToolUse (no arg): acquire; deny via JSON if held; allow (exit 0) otherwise.
 //    PostToolUse (--release): release if we hold it.
 //  - Task matcher (--task): log a background-task START/DONE board event (--task --release
@@ -122,16 +123,39 @@ function main() {
   const op = core.parseGitOp(command);
   if (!op) process.exit(0);
 
-  const resource = core.gitResource(op, command, cwd);
-  if (release) { store.release(dir, resource, holderId); process.exit(0); }
+  // Q12: the git locks are machine-wide (`_claims/`, beside the write leases) and keyed on the
+  // repository, so every tab and every worktree of one repo share one push lock and one
+  // worktree-add lock. Owned by the session id: tile ids repeat across workspaces. Still
+  // fail-open — a missing store throws, and the catch below allows.
+  const cc = require('./claims-core.cjs');
+  const claimsStore = require('./claims-store.cjs');
+  const claimsDir = env('COS_CLAIMS_DIR') || claimsStore.claimsDirOf(dir);
+  const kind = cc.gitLockKind(op);
+  const repo = repoOf(cc, core, command, cwd);
+  const owner = env('COS_SESSION_ID') || `${dir}#${holderId}`;
+  if (release) { claimsStore.releaseGitLock(claimsDir, kind, repo, owner, { boardDir: dir }); process.exit(0); }
 
   const waitMs = Number(env('COS_COORD_WAIT_MS', String(core.WAIT_MS)));
-  const r = store.acquire(dir, resource, { holderId, terminal }, { reason: op, ttlMs: core.GIT_TTL_MS, waitMs });
+  const r = claimsStore.takeGitLock(claimsDir, kind, repo, { holderId: owner, holder: terminal }, { reason: op, ttlMs: core.GIT_TTL_MS, waitMs, boardDir: dir });
   if (r.ok) process.exit(0); // allow
   const who = r.holder ? r.holder.holder : 'another terminal';
-  const reason = `Coordination: ${resource} is held by ${who}. Wait a few seconds and retry the ${op}.`;
+  const reason = `Coordination: ${kind}:${repo.name} is held by ${who}. Wait a few seconds and retry the ${op}.`;
   denyJson(reason);
   process.exit(0);
+}
+
+// Which repository a git command acts on: its -C / `cd X &&` target (coord-core
+// resolveTargetPath), else the cwd, named by its git common dir. Only when git cannot say — not a
+// repo, an unexpanded `$d` — is it named the old way, by the target folder's name.
+function repoOf(cc, core, command, cwd) {
+  const path = require('path');
+  const { spawnSync } = require('child_process');
+  const target = core.resolveTargetPath(command, cwd);
+  for (const where of [path.resolve(cwd, String(target)), cwd]) {
+    const r = spawnSync('git', ['-C', where, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    if (r.status === 0 && r.stdout && r.stdout.trim()) return cc.repoIdentity(r.stdout, where);
+  }
+  return cc.legacyRepoIdentity(core.baseName(target));
 }
 
 module.exports = { failurePolicyFor };

@@ -126,14 +126,18 @@ function main() {
 
   if (cmd === 'status') {
     const now = Date.now();
-    const locks = store.readLocks(dir);
+    // This workspace's explicit locks, then the machine-wide ones every workspace shares: the
+    // automatic git locks (Q12) and the write leases.
+    const claimsDir = env('COS_CLAIMS_DIR') || require('./claims-store.cjs').claimsDirOf(dir);
+    let gitLocks = [];
+    try { gitLocks = require('./claims-store.cjs').readGitLocks(claimsDir); } catch { /* a display: lenient */ }
+    const locks = [...store.readLocks(dir), ...gitLocks];
     if (!locks.length) console.log('coord: no active locks');
     for (const l of locks) {
       const st = core.lockStatus(l, now);
       console.log(`coord: ${l.resource} — ${l.holder}${l.reason ? ` (${l.reason})` : ''} · ${ageStr(now - l.ts)}${st === 'stale' ? ' [stale]' : ''}`);
     }
-    // Write leases are machine-wide (every workspace's sessions), so they are listed too.
-    try { for (const line of leaseLines(env('COS_CLAIMS_DIR') || require('./claims-store.cjs').claimsDirOf(dir), now)) console.log(line); } catch { /* a display: lenient */ }
+    try { for (const line of leaseLines(claimsDir, now)) console.log(line); } catch { /* a display: lenient */ }
     process.exit(0);
   }
 

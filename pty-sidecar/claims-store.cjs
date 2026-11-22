@@ -163,6 +163,72 @@ function remapClaims(dir, remap) {
   return out;
 }
 
+// ---- The automatic git locks (Q12): `push:<repo>` and `worktree:<repo>`, taken by the git hook
+// around a `git push` / `git worktree add`. Same directory, same acquireAt, same guard as a lease —
+// they used to live in each workspace's locks/, so two tabs could push one repo at once (E1 again).
+// `repo` is claims-core repoIdentity: keyed on the repository, so every worktree of it shares one.
+// `who.holderId` is the session id (tile ids repeat across workspaces, so they cannot own a
+// machine-wide lock). A holder taking its own lock again re-stamps it instead of waiting on itself.
+
+const GIT_LOCK_FILE = /^git-(push|worktree)-[0-9a-f]{40}\.json$/;
+
+function gitLockPath(dir, kind, key) { return path.join(dir, cc.gitLockFileName(kind, key)); }
+
+/** → { ok: true } | { ok: true, mine: true } | { ok: false, holder }. opts: waitMs, pollMs, now,
+ *  ttlMs, reason, boardDir (the session's own workspace feed, which gets START as before). */
+function takeGitLock(dir, kind, repo, who, opts = {}) {
+  const file = gitLockPath(dir, kind, repo.key);
+  const stamp = () => (opts.now != null ? opts.now : Date.now());
+  const resource = `${kind}:${repo.name}`;
+  const payload = () => JSON.stringify({
+    v: 1, resource, repo: repo.key, holder: who.holder || String(who.holderId), holderId: who.holderId,
+    reason: opts.reason || kind, pid: process.pid, ts: stamp(), ttlMs: opts.ttlMs != null ? opts.ttlMs : cc.CLAIM_TTL_MS,
+  });
+  const r = store.acquireAt(file, payload, { waitMs: opts.waitMs, pollMs: opts.pollMs, now: opts.now, isMine: (h) => h.holderId === who.holderId });
+  if (r.ok && r.mine) {
+    store.withGuard(file, () => {
+      const s = store.readFileState(file, 0);
+      if (s.state === 'ok' && s.holder.holderId === who.holderId) store.writeAtomic(file, JSON.stringify({ ...s.holder, ts: stamp(), pid: process.pid }));
+    });
+    return { ok: true, mine: true };
+  }
+  if (r.ok && opts.boardDir) {
+    try { store.appendBoard(opts.boardDir, { ts: stamp(), terminal: who.holder, resource, status: 'START', detail: opts.reason || kind }); } catch { /* the feed is a courtesy */ }
+  }
+  return r;
+}
+
+/** Release a git lock this holder owns (under the guard). → the released record, or null. */
+function releaseGitLock(dir, kind, repo, holderId, opts = {}) {
+  const file = gitLockPath(dir, kind, repo.key);
+  const s0 = store.readFileState(file);
+  if (s0.state !== 'ok' || s0.holder.holderId !== holderId) return null;
+  const cur = store.withGuard(file, () => {
+    const s = store.readFileState(file, 0);
+    if (s.state !== 'ok' || s.holder.holderId !== holderId) return null;
+    fs.unlinkSync(file);
+    return s.holder;
+  });
+  if (cur && opts.boardDir) {
+    try { store.appendBoard(opts.boardDir, { ts: Date.now(), terminal: cur.holder, resource: cur.resource, status: 'DONE', detail: cur.reason || '-' }); } catch { /* courtesy */ }
+  }
+  return cur;
+}
+
+/** Every git lock on the machine (lenient: a display). */
+function readGitLocks(dir) {
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    if (!GIT_LOCK_FILE.test(n)) continue;
+    const s = store.readFileState(path.join(dir, n));
+    if (s.state === 'ok') out.push(s.holder);
+  }
+  return out;
+}
+
 module.exports = {
+  takeGitLock, releaseGitLock, readGitLocks, gitLockPath,
   claimsDirUnder, claimsDirOf, claimPath, ensureClaimsDir, readClaims, takeClaim, renewClaim, releaseClaim, claimsOf, remapClaims,
 };
