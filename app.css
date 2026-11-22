@@ -405,6 +405,10 @@ html, body {
 .wcc-has-sidebar > .wcc-tabs { grid-column: 2; grid-row: 3; }
 .wcc-has-sidebar > .wcc-grid-container { grid-column: 2; grid-row: 4; min-width: 0; }
 .wcc-has-sidebar > .wcc-sidebar { grid-column: 1; grid-row: 3 / span 2; }
+/* `v2.hideTabs`: the sidebar replaces the tab strip. The app only sets wcc-tabs-hidden while the
+   sidebar is on (tabsHidden in sidebar-model.ts); the selector requires both as well, so the strip
+   can never vanish with no sidebar beside it. Row 3 is then empty and collapses to nothing. */
+.wcc-has-sidebar.wcc-tabs-hidden > .wcc-tabs { display: none; }
 
 .wcc-sidebar {
 	min-height: 0;
@@ -425,7 +429,34 @@ html, body {
 }
 .wcc-sb-group.active .wcc-sb-head { color: var(--text-normal); }
 .wcc-sb-head:hover, .wcc-sb-row:hover { background: var(--background-modifier-hover); }
-.wcc-sb-caret { flex: 0 0 auto; width: 10px; color: var(--text-faint); font-size: 10px; }
+/* The caret is its own button (it alone collapses; the header switches), so it resets the
+   button chrome and takes a slightly wider hit area than the glyph. */
+.wcc-sb-caret {
+	flex: 0 0 auto; width: 14px; height: 18px; padding: 0; margin: 0 -2px;
+	background: transparent; border: 0; border-radius: 3px;
+	color: var(--text-faint); font: inherit; font-size: 10px; line-height: 1; cursor: pointer;
+}
+.wcc-sb-caret:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.wcc-sb-caret:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: 0; }
+/* Collapse all / expand all: one quiet control at the top of the sidebar. */
+.wcc-sb-tools { display: flex; justify-content: flex-end; padding: 0 8px 4px; }
+.wcc-sb-tool {
+	background: transparent; border: 0; border-radius: 4px; padding: 2px 6px;
+	color: var(--text-faint); font: inherit; font-size: 11px; cursor: pointer;
+}
+.wcc-sb-tool:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.wcc-sb-tool:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: -1px; }
+/* The tab strip's × close, on the workspace header. Shown on hover or keyboard focus; opacity
+   rather than visibility so it stays in the tab order and :focus-within can reveal it. */
+.wcc-sb-close {
+	flex: 0 0 auto; padding: 0 3px; background: transparent; border: 0; border-radius: 3px;
+	color: var(--text-faint); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; opacity: 0;
+}
+.wcc-sb-head:hover .wcc-sb-close, .wcc-sb-head:focus-within .wcc-sb-close { opacity: 1; }
+.wcc-sb-close:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.wcc-sb-close:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: 0; }
+/* The tab strip's + add and ↩ Recently closed, at the foot of the sidebar. */
+.wcc-sb-foot { display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 8px 0; margin-top: 4px; border-top: 1px solid var(--background-modifier-border); }
 .wcc-sb-ws { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wcc-sb-counts { flex: 0 0 auto; display: flex; gap: 6px; font-size: 11px; font-weight: 400; color: var(--text-faint); font-family: var(--font-monospace); }
 .wcc-sb-count.needs { color: var(--text-normal); }

@@ -297,3 +297,38 @@ export function buildSidebar(workspaces: SidebarWorkspaceInput[], collapsed: Rea
 export function sidebarSignature(groups: SidebarGroup[]): string {
 	return JSON.stringify(groups);
 }
+
+/** The sidebar's one collapse-all / expand-all control. While anything is expanded it collapses
+ *  everything; once every group is collapsed it expands them all. */
+export function collapseAllAction(groupIds: readonly string[], collapsed: ReadonlySet<string>): 'collapse' | 'expand' {
+	return groupIds.some((id) => !collapsed.has(id)) ? 'collapse' : 'expand';
+}
+
+/** What `collapsed` becomes when that control is pressed: every rendered group, or none. */
+export function applyCollapseAll(groupIds: readonly string[], collapsed: ReadonlySet<string>): Set<string> {
+	return collapseAllAction(groupIds, collapsed) === 'collapse' ? new Set(groupIds) : new Set();
+}
+
+/** The tab strip's rules for its own affordances, shared with the sidebar so the two can never
+ *  disagree. A workspace can be closed only while it is not the last one. */
+export function canCloseWorkspace(workspaceCount: number): boolean {
+	return workspaceCount > 1;
+}
+
+/** The Recently closed button's label, or null to hide it — it hides at zero. */
+export function recentlyClosedLabel(closedCount: number): string | null {
+	return closedCount > 0 ? `↩ Recently closed (${closedCount})` : null;
+}
+
+/** config.json `v2.hideTabs`. Default OFF, same rule as `v2.sidebar`: only an explicit `true`. */
+export function parseHideTabs(v2: unknown): boolean {
+	if (!v2 || typeof v2 !== 'object') return false;
+	return (v2 as { hideTabs?: unknown }).hideTabs === true;
+}
+
+/** Whether the tab strip is hidden. `hideTabs` does nothing while the sidebar is off: hiding the
+ *  tabs with no sidebar up would leave no way to change workspace at all. This is the only place
+ *  that decision is made — the app hides the strip from its result and nothing else. */
+export function tabsHidden(opts: { sidebar: boolean; hideTabs: boolean }): boolean {
+	return opts.sidebar && opts.hideTabs;
+}

@@ -3,7 +3,7 @@ import { newDestinationId } from '../terminals/convert-destinations';
 import { promptForChoice, promptForTopic, promptForConfirm } from './prompt-dialog';
 import type { ToastVariant } from './toast-queue';
 import { parseAutoClose, thresholdLabel, AUTO_CLOSE_CHOICES } from '../terminals/auto-close';
-import { parseSidebarEnabled, parseTeamView } from './sidebar-model';
+import { parseHideTabs, parseSidebarEnabled, parseTeamView } from './sidebar-model';
 import { parseManagersEnabled } from '../core/delegation';
 import { parseProjectPanelEnabled } from '../core/project-panel';
 import type { RepoConfig } from '../terminals/terminals-grid';
@@ -21,6 +21,9 @@ export interface SettingsPanelDeps {
 	onAutoCloseChange?: (raw: unknown) => void;
 	/** Show or hide the V2 sidebar live — the value just saved as `v2.sidebar`. */
 	onSidebarChange?: (enabled: boolean) => void;
+	/** Hide or show the tab strip live — the value just saved as `v2.hideTabs`. The app applies it
+	 *  only while the sidebar is on (sidebar-model.ts tabsHidden). */
+	onHideTabsChange?: (enabled: boolean) => void;
 	/** Switch the sidebar's team view live — the value just saved as `v2.teamView`. */
 	onTeamViewChange?: (enabled: boolean) => void;
 	/** Turn manager delegation on or off live — the value just saved as `v2.managers`. */
@@ -203,8 +206,9 @@ export class SettingsPanel {
 		label.append(' Show the sidebar');
 		s.createDiv({
 			cls: 'wcc-settings-note',
-			text: 'Read-only: a second view of the same state the tabs and the ⚠ queue show. Click a session to bring its '
-				+ 'tile up. Collapsing a workspace keeps its worst state on the header. The tab strip stays as it is.',
+			text: 'A second view of the same state the tabs and the ⚠ queue show. Click a workspace to switch to it, a session '
+				+ 'to bring its tile up; the caret collapses a workspace, which keeps its worst state on the header. × closes, '
+				+ '+ add and Recently closed sit at the foot.',
 		});
 		box.addEventListener('change', () => {
 			void (async () => {
@@ -214,6 +218,30 @@ export class SettingsPanel {
 				await this.deps.setConfig({ ...cfg, v2: { ...prev, sidebar: on } });
 				this.deps.onSidebarChange?.(on);
 				this.deps.toast(on ? 'Sidebar on' : 'Sidebar off', 'success');
+			})();
+		});
+
+		// The sidebar replaces the tab strip. Its own key, default OFF — and it does nothing while the
+		// sidebar is off (the app enforces that in tabsHidden), so it can never strand you without either.
+		const hrow = s.createDiv({ cls: 'wcc-settings-row' });
+		const hlabel = hrow.createEl('label', { cls: 'wcc-settings-row-label' });
+		const hbox = hlabel.createEl('input', { attr: { type: 'checkbox' } }) as HTMLInputElement;
+		hbox.checked = parseHideTabs(v2);
+		hlabel.append(' Hide the tab strip — the sidebar replaces it');
+		s.createDiv({
+			cls: 'wcc-settings-note',
+			text: 'Only while the sidebar is shown: with the sidebar off the tab strip always stays, so there is always a way to '
+				+ 'change workspace.',
+		});
+		hbox.addEventListener('change', () => {
+			void (async () => {
+				const on = hbox.checked;
+				const cfg = await this.deps.getConfig();
+				const prev = cfg.v2 && typeof cfg.v2 === 'object' ? (cfg.v2 as Record<string, unknown>) : {};
+				await this.deps.setConfig({ ...cfg, v2: { ...prev, hideTabs: on } });
+				this.deps.onHideTabsChange?.(on);
+				const sidebarOn = parseSidebarEnabled(prev);
+				this.deps.toast(on ? (sidebarOn ? 'Tab strip hidden — the sidebar replaces it' : 'Saved — the tab strip hides once the sidebar is on') : 'Tab strip shown', 'success');
 			})();
 		});
 

@@ -1,10 +1,20 @@
 import type { RoleLookup } from '../core/delegation';
-import { buildSidebar, liveRanks, parseTeamSort, ResortClock, sidebarSignature, TEAM_SORTS, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from './sidebar-model';
+import { applyCollapseAll, buildSidebar, canCloseWorkspace, collapseAllAction, liveRanks, recentlyClosedLabel, parseTeamSort, ResortClock, sidebarSignature, TEAM_SORTS, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from './sidebar-model';
 
 export interface SidebarDeps {
 	/** The workspaces, in tab order — the same list the tab strip draws. */
 	workspaces: () => Array<{ id: string; name: string; repo?: string }>;
 	activeId: () => string;
+	/** A workspace header was clicked: switch to it — what a tab click does. */
+	onSwitch: (workspaceId: string) => void;
+	/** The × on a workspace header (shown on hover/focus, never on the last workspace). */
+	onClose: (workspaceId: string) => void;
+	/** The footer's + add — what the tab strip's + add does. */
+	onAdd: () => void;
+	/** How many closed workspaces sit in the archive; the footer's Recently closed hides at zero. */
+	closedCount: () => number;
+	/** Open the Recently closed picker. */
+	onRecentlyClosed: () => void;
 	/** One workspace's floor: its grid's floorState() and whether its sessions are restored yet.
 	 *  Null when the workspace has no grid. */
 	floor: (workspaceId: string) => { live: boolean; sessions: SidebarSession[]; lineage?: SidebarLineage[]; proposals?: Record<string, number> } | null;
@@ -26,9 +36,10 @@ const REFRESH_MS = 1500;
 const SORT_KEY = 'wcc-team-sort';
 const DOT_TITLE: Record<DotState, string> = { needs: 'Needs you', refused: 'Wants help — looks errored', running: 'Running', idle: 'Done — idle' };
 
-/** V2 UI step 2: a read-only sidebar beside the tab strip. A second VIEW of floorState(), never a
- *  second source of truth — it holds nothing but which groups the viewer collapsed. Clicking a row
- *  reveals that tile; there is no other action. */
+/** V2 UI step 2: a sidebar beside (or, with `v2.hideTabs`, instead of) the tab strip. A second VIEW
+ *  of floorState(), never a second source of truth — it holds nothing but which groups the viewer
+ *  collapsed. Clicking a workspace header switches to it; only its caret collapses it. Clicking a
+ *  row reveals that tile. */
 export class Sidebar {
 	private el: HTMLElement | null = null;
 	private timer: number | null = null;
@@ -72,42 +83,74 @@ export class Sidebar {
 		const ranks = teamView && this.sort !== 'lineage' ? this.clock.ranks(liveRanks(inputs), Date.now()) : undefined;
 		const delegation = teamView ? this.deps.delegation?.() : undefined;
 		const groups = buildSidebar(inputs, this.collapsed, { teamView, sort: this.sort, ranks, delegation });
-		const sig = `${teamView ? this.sort : 'flat'}|${sidebarSignature(groups)}`;
+		const closed = this.deps.closedCount();
+		const sig = `${teamView ? this.sort : 'flat'}|${closed}|${sidebarSignature(groups)}`;
 		if (sig === this.lastSig) return; // nothing shown changed → leave the DOM (and hover) alone
 		this.lastSig = sig;
-		this.render(groups, teamView);
+		this.render(groups, teamView, closed);
 	}
 
-	private render(groups: SidebarGroup[], teamView: boolean): void {
+	private render(groups: SidebarGroup[], teamView: boolean, closed: number): void {
 		const el = this.el!;
 		const scroll = el.scrollTop;
 		el.empty();
+		this.tools(el, groups);
 		if (teamView) this.sortControl(el);
-		for (const g of groups) this.renderGroup(el, g);
+		const closable = canCloseWorkspace(groups.length);
+		for (const g of groups) this.renderGroup(el, g, closable);
+		this.footer(el, closed);
 		el.scrollTop = scroll;
 	}
 
-	private renderGroup(parent: HTMLElement, g: SidebarGroup): void {
+	/** The tab strip's + add and ↩ Recently closed, so the sidebar can stand in for it. */
+	private footer(parent: HTMLElement, closed: number): void {
+		const foot = parent.createDiv({ cls: 'wcc-sb-foot' });
+		const add = foot.createEl('button', { cls: 'wcc-sb-tool', text: '+ add', attr: { type: 'button', title: 'Add a workspace' } });
+		add.addEventListener('click', () => this.deps.onAdd());
+		const label = recentlyClosedLabel(closed);
+		if (label) {
+			const recent = foot.createEl('button', {
+				cls: 'wcc-sb-tool', text: label,
+				attr: { type: 'button', title: 'Reopen a closed workspace — its terminals come back saved, not started' },
+			});
+			recent.addEventListener('click', () => this.deps.onRecentlyClosed());
+		}
+	}
+
+	private renderGroup(parent: HTMLElement, g: SidebarGroup, closable: boolean): void {
 		const box = parent.createDiv({ cls: 'wcc-sb-group' });
 		box.toggleClass('active', g.active);
-		const head = box.createDiv({ cls: 'wcc-sb-head', attr: { role: 'button', tabindex: '0', 'aria-expanded': String(!g.collapsed) } });
-		head.createSpan({ cls: 'wcc-sb-caret', text: g.collapsed ? '▸' : '▾' });
+		const head = box.createDiv({ cls: 'wcc-sb-head', attr: { role: 'button', tabindex: '0', title: `Switch to ${g.name}` } });
+		// The caret is its own button and the only thing that collapses; the header switches.
+		const verb = g.collapsed ? 'Expand' : 'Collapse';
+		const caret = head.createEl('button', {
+			cls: 'wcc-sb-caret', text: g.collapsed ? '▸' : '▾',
+			attr: { type: 'button', 'aria-expanded': String(!g.collapsed), 'aria-label': `${verb} ${g.name}`, title: `${verb} ${g.name}` },
+		});
+		this.ownButton(caret, () => {
+			if (this.collapsed.has(g.id)) this.collapsed.delete(g.id); else this.collapsed.add(g.id);
+			this.refresh();
+		});
 		// A collapsed group keeps its worst state on the header: collapsing never hides that
 		// something needs you.
 		if (g.collapsed && g.worst) this.dot(head, g.worst);
 		head.createSpan({ cls: 'wcc-sb-ws', text: g.name });
-		if (g.repo) head.setAttribute('title', `${g.name} — linked to ${g.repo}`);
+		if (g.repo) head.setAttribute('title', `Switch to ${g.name} — linked to ${g.repo}`);
 		if (g.collapsed) {
 			const c = head.createSpan({ cls: 'wcc-sb-counts' });
 			if (g.counts.needs) c.createSpan({ cls: 'wcc-sb-count needs', text: `⏳${g.counts.needs}` });
 			if (g.counts.done) c.createSpan({ cls: 'wcc-sb-count', text: `✓${g.counts.done}` });
 		}
-		const toggle = (): void => {
-			if (this.collapsed.has(g.id)) this.collapsed.delete(g.id); else this.collapsed.add(g.id);
-			this.refresh();
-		};
-		head.addEventListener('click', toggle);
-		head.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+		if (closable) {
+			const x = head.createEl('button', {
+				cls: 'wcc-sb-close', text: '×',
+				attr: { type: 'button', 'aria-label': `Close ${g.name}`, title: `Close ${g.name}` },
+			});
+			this.ownButton(x, () => this.deps.onClose(g.id));
+		}
+		const go = (): void => this.deps.onSwitch(g.id);
+		head.addEventListener('click', go);
+		head.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
 		if (g.collapsed) return;
 
 		if (g.repo) box.createDiv({ cls: 'wcc-sb-repo', text: `repo: ${g.repo}`, attr: { title: g.repo } });
@@ -137,6 +180,32 @@ export class Sidebar {
 				attr: g.live ? {} : { title: 'Its saved sessions are restored the first time you switch to this workspace' },
 			});
 		}
+	}
+
+	/** The sidebar's own header area: one collapse-all / expand-all button whose label follows
+	 *  whether anything is still expanded. */
+	private tools(parent: HTMLElement, groups: SidebarGroup[]): void {
+		const bar = parent.createDiv({ cls: 'wcc-sb-tools' });
+		const ids = groups.map((g) => g.id);
+		const collapse = collapseAllAction(ids, this.collapsed) === 'collapse';
+		const b = bar.createEl('button', {
+			cls: 'wcc-sb-tool', text: collapse ? '▾ Collapse all' : '▸ Expand all',
+			attr: { type: 'button', title: collapse ? 'Collapse every workspace — each keeps its worst state on its header' : 'Expand every workspace' },
+		});
+		b.addEventListener('click', () => {
+			const next = applyCollapseAll(ids, this.collapsed);
+			this.collapsed.clear();
+			for (const id of next) this.collapsed.add(id);
+			this.refresh();
+		});
+	}
+
+	/** A real <button> nested in the clickable header: its click and its Enter/Space are its own,
+	 *  never the header's. Enter/Space are left to the button's native activation (which fires its
+	 *  click) and only kept from bubbling to the header, so one key press acts exactly once. */
+	private ownButton(b: HTMLElement, act: () => void): void {
+		b.addEventListener('click', (e) => { e.stopPropagation(); act(); });
+		b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); });
 	}
 
 	/** Lineage · Triage · Needs-you pinned. Choosing a mode re-sorts at once — that reorder is
