@@ -3,7 +3,7 @@ import { newDestinationId } from '../terminals/convert-destinations';
 import { promptForChoice, promptForTopic, promptForConfirm } from './prompt-dialog';
 import type { ToastVariant } from './toast-queue';
 import { parseAutoClose, thresholdLabel, AUTO_CLOSE_CHOICES } from '../terminals/auto-close';
-import { parseSidebarEnabled } from './sidebar-model';
+import { parseSidebarEnabled, parseTeamView } from './sidebar-model';
 import type { RepoConfig } from '../terminals/terminals-grid';
 import type { NestButton } from '../move-repo';
 import * as fs from 'fs';
@@ -19,6 +19,8 @@ export interface SettingsPanelDeps {
 	onAutoCloseChange?: (raw: unknown) => void;
 	/** Show or hide the V2 sidebar live — the value just saved as `v2.sidebar`. */
 	onSidebarChange?: (enabled: boolean) => void;
+	/** Switch the sidebar's team view live — the value just saved as `v2.teamView`. */
+	onTeamViewChange?: (enabled: boolean) => void;
 	/** The registered targets and what can be done to one. Read from the APP, never from config:
 	 *  persist() rewrites the whole `repos` key from the app's memory, so the app has to make
 	 *  these edits itself or they are overwritten. Each action resolves once it is finished or
@@ -206,6 +208,28 @@ export class SettingsPanel {
 				await this.deps.setConfig({ ...cfg, v2: { ...prev, sidebar: on } });
 				this.deps.onSidebarChange?.(on);
 				this.deps.toast(on ? 'Sidebar on' : 'Sidebar off', 'success');
+			})();
+		});
+
+		// V2 Team Floor step 7: the team view. Its own key, default OFF — off is the flat status order.
+		const trow = s.createDiv({ cls: 'wcc-settings-row' });
+		const tlabel = trow.createEl('label', { cls: 'wcc-settings-row-label' });
+		const tbox = tlabel.createEl('input', { attr: { type: 'checkbox' } }) as HTMLInputElement;
+		tbox.checked = parseTeamView(v2);
+		tlabel.append(' Team view — nest sessions under the session that spawned them');
+		s.createDiv({
+			cls: 'wcc-settings-note',
+			text: "Built from each session's recorded parent, never from where its tile sits. A session with no live parent "
+				+ 'is listed under Unassigned with the reason. Needs the sidebar on to show.',
+		});
+		tbox.addEventListener('change', () => {
+			void (async () => {
+				const on = tbox.checked;
+				const cfg = await this.deps.getConfig();
+				const prev = cfg.v2 && typeof cfg.v2 === 'object' ? (cfg.v2 as Record<string, unknown>) : {};
+				await this.deps.setConfig({ ...cfg, v2: { ...prev, teamView: on } });
+				this.deps.onTeamViewChange?.(on);
+				this.deps.toast(on ? 'Team view on' : 'Team view off', 'success');
 			})();
 		});
 	}

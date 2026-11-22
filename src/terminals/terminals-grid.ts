@@ -51,6 +51,8 @@ import { ensureSessionIds, newIdentity, readLineage, restoreIdentity, type Sessi
 export interface RepoConfig { name: string; path: string; remote?: string; group?: string; folder?: boolean; }
 
 export interface RemoteTerminal { id: number; name: string; repo: string; branch: string; state: string; output: string; remoteOn: boolean; }
+/** One row of sessionLineage(): who a session is, what role it runs on, and who spawned it. */
+export type SessionLineageRow = { sessionId: string; tileId: number; name: string; role: string } & SessionLineage;
 
 interface TellResult { ok: boolean; reason?: string; }
 // A tell that doesn't land gets retried on this cadence — not because we expect it to land
@@ -1057,15 +1059,18 @@ export class TerminalsGrid {
 	}
 
 	/** Snapshot of which terminals need attention, for the topbar queue. */
-	/** Every live terminal session's identity and the lineage the setting lets a reader see.
-	 *  The input the team tree (step 7) builds from; with `v2.recordLineage` off the lineage is
-	 *  empty here while the records still carry it. */
-	sessionLineage(): Array<{ sessionId: string; tileId: number; name: string } & SessionLineage> {
+	/** Every live session's identity, role, and the lineage the setting lets a reader see — the
+	 *  input the team tree (src/core/team.ts) builds from. The overseer console is included as
+	 *  tileId -1 (floorState's id for it) on role `alpha`, so what it spawned nests under it.
+	 *  With `v2.recordLineage` off the lineage is empty here while the records still carry it. */
+	sessionLineage(): SessionLineageRow[] {
 		const on = this.deps.recordLineage ?? true;
-		return [...this.tiles, ...this.hidden].filter((t) => !t.isJournal).map((t) => {
+		const out: SessionLineageRow[] = [...this.tiles, ...this.hidden].filter((t) => !t.isJournal).map((t) => {
 			const tt = t as TerminalTile;
-			return { sessionId: tt.sessionId, tileId: tt.tileId, name: tt.name, ...readLineage(tt.identity, on) };
+			return { sessionId: tt.sessionId, tileId: tt.tileId, name: tt.name, role: tt.role, ...readLineage(tt.identity, on) };
 		});
+		if (this.godConsole) out.unshift({ sessionId: this.godConsole.sessionId, tileId: -1, name: this.overseerName, role: 'alpha' });
+		return out;
 	}
 
 	attentionItems(): AttentionItem[] {

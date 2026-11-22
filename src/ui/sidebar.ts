@@ -1,4 +1,4 @@
-import { buildSidebar, sidebarSignature, type DotState, type SidebarGroup, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput } from './sidebar-model';
+import { buildSidebar, sidebarSignature, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine } from './sidebar-model';
 
 export interface SidebarDeps {
 	/** The workspaces, in tab order — the same list the tab strip draws. */
@@ -6,7 +6,9 @@ export interface SidebarDeps {
 	activeId: () => string;
 	/** One workspace's floor: its grid's floorState() and whether its sessions are restored yet.
 	 *  Null when the workspace has no grid. */
-	floor: (workspaceId: string) => { live: boolean; sessions: SidebarSession[] } | null;
+	floor: (workspaceId: string) => { live: boolean; sessions: SidebarSession[]; lineage?: SidebarLineage[] } | null;
+	/** `v2.teamView`, read on every refresh so the setting applies live. */
+	teamView?: () => boolean;
 	/** A row was clicked: bring that tile up (switching workspace first when it is elsewhere). */
 	onReveal: (workspaceId: string, tileId: number) => void;
 }
@@ -50,10 +52,10 @@ export class Sidebar {
 			const f = this.deps.floor(w.id);
 			return {
 				id: w.id, name: w.name, repo: w.repo, active: w.id === active,
-				live: f?.live ?? false, sessions: f?.sessions ?? [],
+				live: f?.live ?? false, sessions: f?.sessions ?? [], lineage: f?.lineage,
 			};
 		});
-		const groups = buildSidebar(inputs, this.collapsed);
+		const groups = buildSidebar(inputs, this.collapsed, { teamView: this.deps.teamView?.() ?? false });
 		const sig = sidebarSignature(groups);
 		if (sig === this.lastSig) return; // nothing shown changed → leave the DOM (and hover) alone
 		this.lastSig = sig;
@@ -92,6 +94,13 @@ export class Sidebar {
 		if (g.collapsed) return;
 
 		if (g.repo) box.createDiv({ cls: 'wcc-sb-repo', text: `repo: ${g.repo}`, attr: { title: g.repo } });
+		if (g.team) {
+			for (const l of g.team.tree) this.teamLine(box, g, l);
+			if (g.team.unassigned.length) {
+				box.createDiv({ cls: 'wcc-sb-section', text: `Unassigned · ${g.team.unassigned.length}`, attr: { title: 'Sessions with no live parent to sit under — shown, never hidden' } });
+				for (const l of g.team.unassigned) this.teamLine(box, g, l);
+			}
+		}
 		for (const r of g.overseers) this.row(box, g, r);
 		for (const s of g.sections) {
 			box.createDiv({ cls: 'wcc-sb-section', text: s.title });
@@ -106,8 +115,20 @@ export class Sidebar {
 		}
 	}
 
-	private row(parent: HTMLElement, g: SidebarGroup, r: SidebarRow): void {
-		const row = parent.createDiv({ cls: 'wcc-sb-row', attr: { role: 'button', tabindex: '0', title: `${r.name} · ${r.branch} · ${DOT_TITLE[r.dot]}` } });
+	/** A team-tree row: indentation (12px a level) is the only depth cue — no connector lines, no
+	 *  chevrons on leaves. An unassigned root carries its reason on the line below it. */
+	private teamLine(parent: HTMLElement, g: SidebarGroup, l: TeamLine): void {
+		const row = this.row(parent, g, l.row, l.reason);
+		row.style.setProperty('--sb-depth', String(l.depth));
+		if (l.reason) {
+			const why = parent.createDiv({ cls: 'wcc-sb-reason', text: `↳ ${l.reason}` });
+			why.style.setProperty('--sb-depth', String(l.depth));
+		}
+	}
+
+	private row(parent: HTMLElement, g: SidebarGroup, r: SidebarRow, reason?: string): HTMLElement {
+		const title = `${r.name} · ${r.branch} · ${DOT_TITLE[r.dot]}${reason ? ` · unassigned: ${reason}` : ''}`;
+		const row = parent.createDiv({ cls: 'wcc-sb-row', attr: { role: 'button', tabindex: '0', title } });
 		row.toggleClass('overseer', r.overseer);
 		this.dot(row, r.dot);
 		row.createSpan({ cls: 'wcc-sb-name', text: r.name });
@@ -116,6 +137,7 @@ export class Sidebar {
 		const go = (): void => this.deps.onReveal(g.id, r.id);
 		row.addEventListener('click', go);
 		row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+		return row;
 	}
 
 	private dot(parent: HTMLElement, state: DotState): void {

@@ -143,6 +143,9 @@ export class TerminalTile implements StageTile {
 	get sessionId(): string { return this.opts.identity.sessionId; }
 	/** Identity plus lineage, as written. Readers go through lineage.ts readLineage. */
 	get identity(): SessionIdentity { return this.opts.identity; }
+	/** The role slug this session runs on (role-library sessionRoleSlug). For display only —
+	 *  nothing checks it against what a parent may spawn until step 10. */
+	get role(): string { return sessionRoleSlug(this.opts.roleSlug, this.opts.folder); }
 
 	render(parent: HTMLElement): void {
 		this.el = parent.createDiv({ cls: 'cos-term-tile' });

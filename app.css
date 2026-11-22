@@ -28,6 +28,7 @@
 	--color-red: #f0623a;
 	--color-cyan: #6fa0c8;
 	--color-yellow: #e0b53a;
+	--attn-halo: rgba(224, 181, 58, 0.22); /* the needs-you dot's ring — never the row hover fill */
 	--font-monospace: 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New', monospace;
 	--vscode-scrollbar-shadow: rgba(0, 0, 0, 0.45);
 }
@@ -436,7 +437,7 @@ html, body {
 .wcc-sb-empty { font-size: 11px; line-height: 20px; font-style: italic; }
 .wcc-sb-row {
 	display: flex; align-items: center; gap: 6px;
-	height: 20px; padding: 0 10px 0 24px; /* 12px past the header: one level */
+	height: 20px; padding: 0 10px 0 calc(24px + var(--sb-depth, 0) * 12px); /* 12px past the header, +12px a team level */
 	cursor: pointer; white-space: nowrap;
 }
 .wcc-sb-row:focus-visible, .wcc-sb-head:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: -1px; }
@@ -451,7 +452,15 @@ html, body {
 .wcc-sb-dot.dot-running { background: var(--color-green); }
 .wcc-sb-dot.dot-refused { background: var(--color-red); }
 /* Only "needs you" gets the halo — it is the one state meant to survive peripheral vision. */
-.wcc-sb-dot.dot-needs { background: var(--color-yellow); box-shadow: 0 0 0 3px var(--background-modifier-hover); }
+/* Bound to attn-halo, not the hover fill: on the hover fill the ring vanished on exactly the row
+   you were reaching for. */
+.wcc-sb-dot.dot-needs { background: var(--color-yellow); box-shadow: 0 0 0 3px var(--attn-halo); }
+/* Team view: why an UNASSIGNED root is unassigned, one quiet line under it, aligned to its name. */
+.wcc-sb-reason {
+	padding: 0 10px 0 calc(37px + var(--sb-depth, 0) * 12px); margin-top: -3px;
+	font-family: var(--font-monospace); font-size: 10px; line-height: 14px; color: var(--text-faint);
+	white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* Theme switcher select in the top bar. */
 .wcc-topbar select.wcc-theme-sel {
@@ -492,6 +501,7 @@ html, body {
 	--color-red: #ff3a2f;
 	--color-cyan: #2b5cff;
 	--color-yellow: #b8930a;
+	--attn-halo: rgba(184, 147, 10, 0.25); /* the needs-you dot's ring — never the row hover fill */
 }
 :root[data-theme="olympus"] .wcc-topbar {
 	background: #ffde2e !important;
@@ -563,6 +573,7 @@ html, body {
 	--color-red: #ff7070;
 	--color-cyan: #71d4e8;
 	--color-yellow: #f0b864;
+	--attn-halo: rgba(240, 184, 100, 0.22); /* the needs-you dot's ring — never the row hover fill */
 }
 :root[data-theme="hades"] .cos-terminals-stage {
 	background-image: radial-gradient(circle at 1px 1px, rgba(113, 212, 232, 0.08) 1px, transparent 1px);
@@ -628,6 +639,7 @@ html, body {
 	--color-red: #ff5c7a;
 	--color-cyan: #24d3ff;
 	--color-yellow: #ffd166;
+	--attn-halo: rgba(255, 209, 102, 0.22); /* the needs-you dot's ring — never the row hover fill */
 }
 :root[data-theme="iris"] .wcc-topbar {
 	background: linear-gradient(90deg, #2b0f54, #4a1580) !important;

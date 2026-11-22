@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSidebar, dotFor, parseSidebarEnabled, sidebarSignature, OVERSEER_ID, type SidebarSession, type SidebarWorkspaceInput } from '../src/ui/sidebar-model';
+import { buildSidebar, dotFor, parseSidebarEnabled, parseTeamView, sidebarSignature, OVERSEER_ID, type SidebarLineage, type SidebarSession, type SidebarWorkspaceInput, type TeamLine } from '../src/ui/sidebar-model';
 
 const s = (id: number, state: string, over: Partial<SidebarSession> = {}): SidebarSession =>
 	({ id, name: `t${id}`, branch: `wt/${id}`, state, remoteOn: false, ...over });
@@ -138,5 +138,74 @@ describe('sidebarSignature', () => {
 		expect(sidebarSignature(a)).toBe(sidebarSignature(b));
 		expect(sidebarSignature(a)).not.toBe(sidebarSignature(c));
 		expect(sidebarSignature(a)).not.toBe(sidebarSignature(d));
+	});
+});
+
+// ---- V2 Team Floor step 7: the team view.
+
+const lin = (tileId: number, parent?: number, role = 'worker-terminal'): SidebarLineage =>
+	({ tileId, sessionId: `s${tileId}`, role, ...(parent !== undefined ? { parentSessionId: `s${parent}` } : {}) });
+const teamOf = (sessions: SidebarSession[], lineage: SidebarLineage[]) =>
+	buildSidebar([ws('w', sessions, { lineage })], new Set(), { teamView: true })[0]!;
+const lines = (ls: TeamLine[]) => ls.map((l) => [l.row.id, l.depth]);
+
+describe('parseTeamView', () => {
+	it('is off unless v2.teamView is exactly true', () => {
+		expect(parseTeamView(undefined)).toBe(false);
+		expect(parseTeamView({})).toBe(false);
+		expect(parseTeamView({ teamView: 'true' })).toBe(false);
+		expect(parseTeamView({ sidebar: true })).toBe(false);
+		expect(parseTeamView({ teamView: true })).toBe(true);
+	});
+});
+
+describe('buildSidebar — team view', () => {
+	const sessions = [s(OVERSEER_ID, 'running', { name: 'Alpha' }), s(1, 'idle'), s(2, 'prompt'), s(3, 'running'), s(4, 'running')];
+	const lineage = [lin(OVERSEER_ID, undefined, 'alpha'), lin(1, OVERSEER_ID), lin(2, 1), lin(3), lin(4, 77)];
+
+	it('off: exactly the flat status order the sidebar ships with — lineage is ignored', () => {
+		const withLineage = buildSidebar([ws('w', sessions, { lineage })], new Set());
+		const without = buildSidebar([ws('w', sessions)], new Set());
+		expect(withLineage[0]!.team).toBeNull();
+		expect(sidebarSignature(withLineage)).toBe(sidebarSignature(without));
+	});
+
+	it('on: the overseer first, what it spawned nested 12px a level below it', () => {
+		const g = teamOf(sessions, lineage);
+		expect(g.sections).toEqual([]);
+		expect(g.overseers).toEqual([]);
+		expect(lines(g.team!.tree)).toEqual([[OVERSEER_ID, 0], [1, 1], [2, 2]]);
+	});
+
+	it('on: sessions with no live parent are UNASSIGNED, visible, with the reason in words', () => {
+		const g = teamOf(sessions, lineage);
+		expect(lines(g.team!.unassigned)).toEqual([[3, 0], [4, 0]]);
+		expect(g.team!.unassigned.map((l) => l.reason)).toEqual(['no parent — opened by hand', 'parent session is closed']);
+	});
+
+	it('on: every session appears exactly once, even one with no lineage row at all', () => {
+		const g = teamOf([...sessions, s(9, 'running')], lineage);
+		const ids = [...g.team!.tree, ...g.team!.unassigned].map((l) => l.row.id).sort((a, b) => a - b);
+		expect(ids).toEqual([OVERSEER_ID, 1, 2, 3, 4, 9]);
+		expect(g.team!.unassigned.find((l) => l.row.id === 9)!.reason).toMatch(/no parent/);
+	});
+
+	it('on: the overseer is pinned on its tile id even without a lineage row', () => {
+		const g = teamOf([s(OVERSEER_ID, 'running'), s(1, 'running')], [lin(1, OVERSEER_ID)]);
+		expect(lines(g.team!.tree)).toEqual([[OVERSEER_ID, 0]]);
+		expect(lines(g.team!.unassigned)).toEqual([[1, 0]]); // its parent id (s-1) is unknown without the row
+	});
+
+	it('on: rows keep their live dot and the roll-up is unchanged', () => {
+		const g = teamOf(sessions, lineage);
+		expect(g.team!.tree.find((l) => l.row.id === 2)!.row.dot).toBe('needs');
+		expect(g.worst).toBe('needs');
+		expect(g.counts).toEqual({ needs: 1, running: 3, done: 1 });
+	});
+
+	it('on, collapsed: no tree, the roll-up stays', () => {
+		const g = buildSidebar([ws('w', sessions, { lineage })], new Set(['w']), { teamView: true })[0]!;
+		expect(g.team).toBeNull();
+		expect(g.worst).toBe('needs');
 	});
 });
