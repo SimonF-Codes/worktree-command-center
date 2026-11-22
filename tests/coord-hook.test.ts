@@ -63,6 +63,26 @@ describe('coord-hook', () => {
     expect(fs.readdirSync(claimsDir)).toEqual([]);
     expect(fs.existsSync(path.join(dir, 'locks'))).toBe(false);
   });
+  it('a command carrying a placeholder target takes no lock and is allowed (doc text, not a git op)', () => {
+    // What a session WRITING about worktrees sends through Bash: the hook sees `git … worktree add`
+    // in the text. Before this, it locked "worktree:<repo>" — a lock that outlived the session.
+    const doc = { tool_name: 'Bash', tool_input: { command: "cat > notes.md <<'EOF'\nRun: git -C <repo> worktree add -b <branch> <path> <base>\nEOF" }, cwd: '/repo/foo' };
+    expect(run(doc, [], '1').trim()).toBe('');
+    expect(run(doc, [], '2').trim()).toBe(''); // and again from another session: nothing is held
+    expect(run(doc, ['--release'], '1').trim()).toBe('');
+    expect(fs.readdirSync(claimsDir)).toEqual([]);
+    expect(fs.existsSync(path.join(dir, 'board.md'))).toBe(false);
+  });
+  it('a normal `git worktree add` on a real path still locks exactly as before', () => {
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'RealRepo-')); // a real folder, not a git repo
+    const add = { tool_name: 'Bash', tool_input: { command: `git -C "${target}" worktree add ../x` }, cwd: '/repo/foo' };
+    expect(run(add, [], '1').trim()).toBe('');
+    const lock = path.join(claimsDir, cc.gitLockFileName('worktree', `name:${path.basename(target).toLowerCase()}`));
+    expect(JSON.parse(fs.readFileSync(lock, 'utf8'))).toMatchObject({ resource: `worktree:${path.basename(target)}`, holder: 't1' });
+    expect(run(add, [], '2')).toContain('"permissionDecision":"deny"');
+    run(add, ['--release'], '1');
+    expect(fs.existsSync(lock)).toBe(false);
+  });
   it('stays fail-open: a missing machine-wide store allows the push (and is not created)', () => {
     fs.rmSync(claimsDir, { recursive: true });
     expect(run(push, [], '1').trim()).toBe('');

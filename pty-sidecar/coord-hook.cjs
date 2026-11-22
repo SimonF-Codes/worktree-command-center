@@ -122,6 +122,11 @@ function main() {
   const cwd = input.cwd || process.cwd();
   const op = core.parseGitOp(command);
   if (!op) process.exit(0);
+  // A placeholder target (`git -C <repo> worktree add …` written into a doc or a heredoc) is not a
+  // real git operation: allow it and take no lock. A lock taken on "<repo>" outlives the session
+  // that only wrote about it, and in the machine-wide store (Q12) every tab sees it. Allow, not
+  // deny: these locks are fail-open for worktree sessions (D5). The release side declines too.
+  if (!core.isPlausibleTarget(core.resolveTargetPath(command, cwd))) process.exit(0);
 
   // Q12: the git locks are machine-wide (`_claims/`, beside the write leases) and keyed on the
   // repository, so every tab and every worktree of one repo share one push lock and one

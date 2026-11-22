@@ -38,9 +38,21 @@ function resolveTargetPath(command, cwd) {
   return cwd;
 }
 
+// Could the target a git command was parsed to act on be a real path? The hook reads the TEXT of a
+// Bash command, so a session that merely writes about `git -C <repo> worktree add …` — in a
+// heredoc, a fixture, a doc example — looks like a git operation on the folder "<repo>". Angle
+// brackets are the placeholder signature and are never valid in a Windows path; an empty target is
+// never valid anywhere. Deliberately narrow: this does not ask whether the path exists on disk.
+function isPlausibleTarget(target) {
+  const t = String(target == null ? '' : target).trim();
+  return t !== '' && !/[<>]/.test(t);
+}
+
+// null when the target is not a plausible path: there is no real git operation to lock.
 function gitResource(op, command, cwd) {
-  const repo = baseName(resolveTargetPath(command, cwd));
-  return (op === 'push' ? 'push:' : 'worktree:') + repo;
+  const target = resolveTargetPath(command, cwd);
+  if (!isPlausibleTarget(target)) return null;
+  return (op === 'push' ? 'push:' : 'worktree:') + baseName(target);
 }
 
 function lockStatus(holder, now) {
@@ -118,7 +130,7 @@ function spawnOutcome(r, opts = {}) {
 
 module.exports = {
   WAIT_MS, POLL_MS, CLI_TTL_MS, GIT_TTL_MS, TELL_WAIT_MS, SEP, spawnOutcome,
-  slug, parseGitOp, baseName, resolveTargetPath, gitResource,
+  slug, parseGitOp, baseName, resolveTargetPath, isPlausibleTarget, gitResource,
   lockStatus, formatBoardLine, parseBoardLine, mergeEvents, taskLabel,
   formatChatLine, parseChatLine,
 };

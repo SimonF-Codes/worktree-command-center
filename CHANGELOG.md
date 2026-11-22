@@ -21,6 +21,10 @@ landed on `main`.
   were per workspace, so two tabs could push one repo at once — and named after the session's
   folder, so two worktrees of one repo never contended at all. Now they live in `_claims/`, keyed
   on the git common dir, owned by the session id, and listed in every tab.
+- **Fixed:** a session that only *wrote about* `git -C <repo> worktree add …` (a heredoc, a doc
+  example) took a real lock on the literal folder `<repo>`, which outlived it — and with Q12 every
+  tab would see it. A target carrying `<`/`>`, or an empty one, is not a path: the hook now allows
+  the command and takes no lock.
 - **Fixed:** a stale lock could be taken over twice at once — the second taker deleted the first's
   fresh lock. Every unlink and rewrite of a lock now happens under a guard.
 - It is a cooperative guarantee, **not a sandbox**: shell writes are not seen
