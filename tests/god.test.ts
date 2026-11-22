@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { spawnReceipt } from '../src/terminals/god';
 import {
   parseOutboxMessage, resolveTellTarget, slug,
   formatFloorSnapshot, formatFloorIndex, godSystemPrompt, EFFORT_LEVELS, remapWatchers, parseGodSelfImprove,
   planClose, closeResultText, type CloseCandidate,
 } from '../src/terminals/god';
+// The CLI half of the spawn-receipt contract.
+const coordCore = require('../pty-sidecar/coord-core.cjs');
 
 describe('parseOutboxMessage', () => {
   it('parses a tell (and treats an untagged target+message as tell)', () => {
@@ -244,5 +247,33 @@ describe('godSystemPrompt folder targets', () => {
     expect(p).toContain('- notes → /notes   [plain folder — no git]');
     expect(p).toContain('- app → /repos/app\n'); // git repos stay unmarked
     expect(p).toContain('--base is ignored');
+  });
+});
+
+
+describe('spawn receipts (app side → CLI side)', () => {
+  it('a spawned session\'s receipt carries its terminal, branch and new sessionId, and the CLI prints them', () => {
+    const r = spawnReceipt({ name: 'wt-main-7', branch: 'wt/main-7', sessionId: 'sess-abc' }, 'unused');
+    expect(r).toEqual({ ok: true, spawned: { terminal: 'wt-main-7', branch: 'wt/main-7', sessionId: 'sess-abc' } });
+    const o = coordCore.spawnOutcome(JSON.parse(JSON.stringify(r)), { repo: 'app', waitMs: 45000 });
+    expect(o).toEqual({ code: 0, out: 'coord: spawned "wt-main-7" on wt/main-7 — session sess-abc' });
+  });
+
+  it('a folder session has no branch, and says so', () => {
+    const o = coordCore.spawnOutcome(spawnReceipt({ name: 'Vault', branch: '', sessionId: 's' }, ''), { repo: 'vault' });
+    expect(o.out).toContain('(folder — no branch)');
+  });
+
+  it('a failed spawn\'s receipt names the reason, and the CLI exits 2 with it', () => {
+    const r = spawnReceipt(null, 'couldn\'t create a worktree in app: boom');
+    expect(r).toEqual({ ok: false, reason: 'couldn\'t create a worktree in app: boom' });
+    const o = coordCore.spawnOutcome(r, { repo: 'app' });
+    expect(o.code).toBe(2);
+    expect(o.err).toContain('boom');
+  });
+
+  it('no receipt: 2 when withdrawn (never ran), 3 when the app took it (may still run)', () => {
+    expect(coordCore.spawnOutcome({ ok: false, timedOut: true }, { repo: 'app', waitMs: 45000, withdrawn: true }).code).toBe(2);
+    expect(coordCore.spawnOutcome({ ok: false, timedOut: true }, { repo: 'app', waitMs: 45000, withdrawn: false }).code).toBe(3);
   });
 });

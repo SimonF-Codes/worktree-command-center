@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { ensureSessionIds, restoreIdentity, newIdentity, identityFields, mintSessionId, parseRecordLineage, readLineage } from '../src/terminals/lineage';
 import { godRecords, godIndexOf } from '../src/terminals/god-sessions';
-import { execFileSync } from 'node:child_process';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseOutboxMessage, spawnExtrasOf } from '../src/terminals/god';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
+import { runSpawn, accepted } from './spawn-harness';
 import { sessionRoleSlug } from '../src/terminals/role-library';
 import { isParentSessionVar } from '../src/terminals/session-env';
 const store = require('../pty-sidecar/coord-store.cjs');
@@ -98,24 +98,21 @@ describe('sessionId (E6)', () => {
 // ---- The spawn chain, end to end minus the window: cos-coord argv → god-outbox file →
 // parseOutboxMessage → the extras the grid hands spawnFromName → the record the tile writes.
 
-const CLI = path.join(__dirname, '..', 'pty-sidecar', 'coord-cli.cjs');
-
-/** Run `cos-coord spawn …` as Kane and return the one outbox message it dropped, parsed. */
-function spawnViaCli(args: string[], extraEnv: Record<string, string> = {}) {
+/** Run `cos-coord spawn …` as Kane, with a fake app accepting it, and return the request it sent. */
+async function spawnViaCli(args: string[], extraEnv: Record<string, string> = {}) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lineage-'));
-	const env = { ...sanitizeSessionEnv(process.env), COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Kane', COS_ROLE: 'god', ...extraEnv };
-	execFileSync('node', [CLI, 'spawn', ...args], { env, encoding: 'utf8' });
-	const files = fs.readdirSync(path.join(dir, 'god-outbox')).filter((f) => f.endsWith('.json'));
-	expect(files).toHaveLength(1);
-	const raw = fs.readFileSync(path.join(dir, 'god-outbox', files[0]!), 'utf8');
-	const msg = parseOutboxMessage(raw);
-	if (!msg || msg.kind !== 'spawn') throw new Error(`not a spawn: ${raw}`);
-	return { raw: JSON.parse(raw) as Record<string, unknown>, msg };
+	const env = { ...sanitizeSessionEnv(process.env), COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Kane', COS_ROLE: 'god', COS_COORD_SPAWN_WAIT_MS: '10000', ...extraEnv };
+	const run = await runSpawn(dir, args, env, accepted());
+	expect(run.code).toBe(0);
+	const raw = run.request!;
+	const msg = parseOutboxMessage(JSON.stringify(raw));
+	if (!msg || msg.kind !== 'spawn') throw new Error(`not a spawn: ${JSON.stringify(raw)}`);
+	return { raw, msg };
 }
 
 describe('spawn --workstream', () => {
-	it('reaches the spawned session\'s record, and survives a restore', () => {
-		const { raw, msg } = spawnViaCli(['app', '--task', 'do X', '--workstream', 'ws-12']);
+	it('reaches the spawned session\'s record, and survives a restore', async () => {
+		const { raw, msg } = await spawnViaCli(['app', '--task', 'do X', '--workstream', 'ws-12']);
 		expect(raw.workstream).toBe('ws-12');
 		const extras = spawnExtrasOf(msg);
 		expect(extras).toEqual({ workstreamId: 'ws-12' });
@@ -123,8 +120,8 @@ describe('spawn --workstream', () => {
 		expect(restoreIdentity(rec)).toMatchObject({ workstreamId: 'ws-12' });
 	});
 
-	it('omitted, it is null in the request and absent from the record', () => {
-		const { raw, msg } = spawnViaCli(['app', '--task', 'do X']);
+	it('omitted, it is null in the request and absent from the record', async () => {
+		const { raw, msg } = await spawnViaCli(['app', '--task', 'do X']);
 		expect(raw.workstream).toBeNull();
 		expect(identityFields(newIdentity(spawnExtrasOf(msg)))).not.toHaveProperty('workstreamId');
 	});
@@ -140,8 +137,8 @@ describe('lineage fields on the record', () => {
 });
 
 describe('spawn --role (E4)', () => {
-	it('reaches the tile\'s resolved role slug, and the record keeps it', () => {
-		const { raw, msg } = spawnViaCli(['app', '--task', 'research X', '--role', 'researcher']);
+	it('reaches the tile\'s resolved role slug, and the record keeps it', async () => {
+		const { raw, msg } = await spawnViaCli(['app', '--task', 'research X', '--role', 'researcher']);
 		expect(raw.role).toBe('researcher');
 		const extras = spawnExtrasOf(msg);
 		expect(extras.roleSlug).toBe('researcher');
@@ -149,31 +146,31 @@ describe('spawn --role (E4)', () => {
 		expect(sessionRoleSlug(extras.roleSlug, false)).toBe('researcher');
 	});
 
-	it('without --role a spawned worktree session is still a Worker Terminal, a folder one a Folder Terminal', () => {
-		const { raw, msg } = spawnViaCli(['app', '--task', 'do X']);
+	it('without --role a spawned worktree session is still a Worker Terminal, a folder one a Folder Terminal', async () => {
+		const { raw, msg } = await spawnViaCli(['app', '--task', 'do X']);
 		expect(raw.role).toBeNull();
 		expect(sessionRoleSlug(spawnExtrasOf(msg).roleSlug, false)).toBe('worker-terminal');
 		expect(sessionRoleSlug(undefined, true)).toBe('folder-terminal');
 		expect(sessionRoleSlug('  ', false)).toBe('worker-terminal');
 	});
 
-	it('an unknown slug is passed through unvalidated — the role loader is what falls back', () => {
-		const { msg } = spawnViaCli(['app', '--task', 'x', '--role', 'no-such-role']);
+	it('an unknown slug is passed through unvalidated — the role loader is what falls back', async () => {
+		const { msg } = await spawnViaCli(['app', '--task', 'x', '--role', 'no-such-role']);
 		expect(sessionRoleSlug(spawnExtrasOf(msg).roleSlug, false)).toBe('no-such-role');
 	});
 });
 
 describe('from on outbox requests (E5)', () => {
-	it('a spawn request carries its sender\'s COS_SESSION_ID, and it becomes the child\'s parentSessionId', () => {
-		const { raw, msg } = spawnViaCli(['app', '--task', 'do X'], { COS_SESSION_ID: 'kane-sess-1' });
+	it('a spawn request carries its sender\'s COS_SESSION_ID, and it becomes the child\'s parentSessionId', async () => {
+		const { raw, msg } = await spawnViaCli(['app', '--task', 'do X'], { COS_SESSION_ID: 'kane-sess-1' });
 		expect(raw.from).toBe('kane-sess-1');
 		expect(msg.from).toBe('kane-sess-1');
 		const child = restoreIdentity(JSON.parse(JSON.stringify(identityFields(newIdentity(spawnExtrasOf(msg))))));
 		expect(child.parentSessionId).toBe('kane-sess-1');
 	});
 
-	it('with no COS_SESSION_ID, from is null and the child has no parent', () => {
-		const { raw, msg } = spawnViaCli(['app', '--task', 'do X']);
+	it('with no COS_SESSION_ID, from is null and the child has no parent', async () => {
+		const { raw, msg } = await spawnViaCli(['app', '--task', 'do X']);
 		expect(raw.from).toBeNull();
 		expect(spawnExtrasOf(msg)).not.toHaveProperty('parentSessionId');
 	});
@@ -210,10 +207,10 @@ describe('v2.recordLineage', () => {
 		expect(parseRecordLineage({ recordLineage: false })).toBe(false);
 	});
 
-	it('off: the fields are still WRITTEN, and simply not read', () => {
+	it('off: the fields are still WRITTEN, and simply not read', async () => {
 		const off = parseRecordLineage({ recordLineage: false });
 		// The whole write path, unchanged by the setting: CLI → outbox → extras → record → disk.
-		const { msg } = spawnViaCli(['app', '--task', 'x', '--workstream', 'ws-9'], { COS_SESSION_ID: 'kane-1' });
+		const { msg } = await spawnViaCli(['app', '--task', 'x', '--workstream', 'ws-9'], { COS_SESSION_ID: 'kane-1' });
 		const onDisk = JSON.parse(JSON.stringify(identityFields(newIdentity(spawnExtrasOf(msg)))));
 		expect(onDisk).toMatchObject({ parentSessionId: 'kane-1', workstreamId: 'ws-9' });
 		// ...and survives a restore with the setting off, so turning it back on finds it intact.

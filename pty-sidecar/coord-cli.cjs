@@ -138,8 +138,16 @@ function main() {
     const workstream = flag(rest, '--workstream') || '';
     const role = flag(rest, '--role') || ''; // passed through; the app's role loader decides what it resolves to
     requireArgs('spawn', Boolean(repo && task), '<repo> --task "<task>"');
-    store.spawn(dir, repo, base, task, model, effort, name, { workstream, role, from });
-    process.exit(0);
+    // Block for the app's receipt, the way tell does: success prints the terminal, its branch and
+    // the sessionId it was given; anything else exits non-zero with the reason (core.spawnOutcome).
+    const file = store.spawn(dir, repo, base, task, model, effort, name, { workstream, role, from });
+    const id = path.basename(file, '.json');
+    const waitMs = Number(env('COS_COORD_SPAWN_WAIT_MS', String(core.TELL_WAIT_MS)));
+    const r = store.waitForTellReceipt(dir, id, { waitMs });
+    const o = core.spawnOutcome(r, { repo, waitMs, withdrawn: r.timedOut ? store.withdraw(file) : false });
+    if (o.out) console.log(o.out);
+    if (o.err) console.error(o.err);
+    process.exit(o.code);
   }
 
   if (cmd === 'rename') {

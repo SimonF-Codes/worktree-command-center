@@ -24,7 +24,7 @@ import { SPAWN_MODELS } from './spawn-models';
 import { normalizeToolbarState, type ToolbarState } from './toolbar-state';
 import { GodConsole } from './god-console';
 import { godIndexOf, godRecords, highestGodIndex, PRIMARY_GOD_INDEX } from './god-sessions';
-import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, spawnExtrasOf, resolveTellTarget, remapWatchers, planClose, closeResultText, EFFORT_LEVELS, type OutboxMessage, type CloseCandidate, type GodSelfImprove } from './god';
+import { slug as godSlug, formatFloorSnapshot, formatFloorIndex, parseOutboxMessage, spawnExtrasOf, spawnReceipt, type SpawnReceipt, resolveTellTarget, remapWatchers, planClose, closeResultText, EFFORT_LEVELS, type OutboxMessage, type CloseCandidate, type GodSelfImprove } from './god';
 import { buildFloorState, renderFloorState, FLOOR_STATE_FILE } from './floor-state';
 import { evaluateConnectorRequest, receiptFilename, isReceiptStale, type ConnectorConfig, type ConnectorReceipt } from './connectors';
 import { parseNewTabFields, newTabSummary, type NewTabFields, type NewTabOutcome } from '../new-tab';
@@ -619,11 +619,12 @@ export class TerminalsGrid {
 	/** Spawn core for a FOLDER target: no `git worktree add`, no branch — the tile's working
 	 *  directory IS the folder. Mirrors spawnWorktree's tile/persist/layout tail so both kinds of
 	 *  terminal behave identically once they exist. */
-	private async spawnFolder(repo: RepoConfig, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage }): Promise<TerminalTile | null> {
+	private async spawnFolder(repo: RepoConfig, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage; onFail?: (reason: string) => void }): Promise<TerminalTile | null> {
 		try {
 			await fs.access(repo.path); // a moved/unmounted folder should say so, not spawn into nothing
 		} catch {
 			this.deps.toast(`Folder unreachable — ${repo.path} is missing or on a disconnected drive`, 'error');
+			opts.onFail?.(`folder unreachable — ${repo.path} is missing or on a disconnected drive`);
 			return null;
 		}
 		const model = opts.model ?? (this.modelSel?.value || undefined);
@@ -639,7 +640,7 @@ export class TerminalsGrid {
 
 	/** Shared spawn core: create a worktree + tile, render, persist, layout. Optionally queue an
 	 *  initial task to send once the new session is first ready. Returns the tile (or null). */
-	private async spawnWorktree(repo: RepoConfig, base: string, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage }): Promise<TerminalTile | null> {
+	private async spawnWorktree(repo: RepoConfig, base: string, opts: { task?: string; model?: string; effort?: string; name?: string; roleSlug?: string; lineage?: SessionLineage; onFail?: (reason: string) => void }): Promise<TerminalTile | null> {
 		try {
 			const branches = await listBranches(repo.path);
 			const branch = this.pendingNewBranch ?? nextWorktreeBranch(branches, base);
@@ -657,20 +658,25 @@ export class TerminalsGrid {
 			return tile;
 		} catch (e) {
 			this.deps.toast(`Couldn't create a worktree in ${repo.name}: ${(e as Error).message}`, 'error');
+			opts.onFail?.(`couldn't create a worktree in ${repo.name}: ${(e as Error).message}`);
 			return null;
 		}
 	}
 
 	/** Kane asked to spawn a terminal: resolve the repo by name, validate the effort, default the
 	 *  base branch, start it on the given task. Invalid effort → error note, no spawn. */
-	private async spawnFromKane(repoName: string, base: string | null, task: string, model: string | null = null, effort: string | null = null, name: string | null = null, extras: SpawnExtras = {}): Promise<void> {
+	private async spawnFromKane(repoName: string, base: string | null, task: string, model: string | null = null, effort: string | null = null, name: string | null = null, extras: SpawnExtras = {}, id?: string): Promise<void> {
+		// Every outcome files a receipt `cos-coord spawn` is blocked on — a refusal as much as a success.
+		const refuse = (reason: string) => { this.writeGodInbox(`cannot spawn — ${reason}`); if (id) this.writeTellReceipt(id, spawnReceipt(null, reason)); };
 		const known = this.repos.some((r) => r.name === repoName || r.name.toLowerCase() === repoName.toLowerCase());
-		if (!known) { this.writeGodInbox(`cannot spawn — unknown repo "${repoName}". Known: ${this.repos.map((r) => r.name).join(', ') || '(none)'}`); return; }
+		if (!known) { refuse(`unknown repo "${repoName}". Known: ${this.repos.map((r) => r.name).join(', ') || '(none)'}`); return; }
 		if (effort !== null && !(EFFORT_LEVELS as readonly string[]).includes(effort)) {
-			this.writeGodInbox(`cannot spawn — invalid --effort "${effort}". Valid: ${EFFORT_LEVELS.join(', ')}`);
+			refuse(`invalid --effort "${effort}". Valid: ${EFFORT_LEVELS.join(', ')}`);
 			return;
 		}
-		await this.spawnFromName(repoName, base, task, model ?? undefined, effort ?? undefined, name ?? undefined, extras);
+		let failReason = `couldn't spawn in "${repoName}"`;
+		const tile = await this.spawnFromName(repoName, base, task, model ?? undefined, effort ?? undefined, name ?? undefined, extras, (r) => { failReason = r; });
+		if (id) this.writeTellReceipt(id, spawnReceipt(tile ? { name: tile.name, branch: tile.branch, sessionId: tile.sessionId } : null, failReason));
 	}
 
 	/** Spawn a new journal tile, center it, and persist. */
@@ -1112,17 +1118,23 @@ export class TerminalsGrid {
 	/** Spawn a worktree terminal for a repo by name, on a base, with a kickoff task. Model/effort
 	 *  override the toolbar dropdowns when given (spawnWorktree applies the fallback); name
 	 *  overrides the default branch-derived terminal name. */
-	async spawnFromName(repoName: string, base: string | null, task: string, model?: string, effort?: string, name?: string, extras: SpawnExtras = {}): Promise<TerminalTile | null> {
+	async spawnFromName(repoName: string, base: string | null, task: string, model?: string, effort?: string, name?: string, extras: SpawnExtras = {}, onFail?: (reason: string) => void): Promise<TerminalTile | null> {
 		const lineage: SessionLineage = { parentSessionId: extras.parentSessionId, workstreamId: extras.workstreamId };
 		const repo = this.repos.find((r) => r.name === repoName)
 			?? this.repos.find((r) => r.name.toLowerCase() === repoName.toLowerCase());
-		if (!repo) return null;
+		if (!repo) { onFail?.(`unknown repo "${repoName}"`); return null; }
 		// roleSlug is passed through as given: an unknown or inactive slug falls back to the compiled
 		// default inside role-loader, with the reason logged. Checking it against `spawns:` is step 10.
 		const roleSlug = extras.roleSlug;
-		if (repo.folder) return this.spawnFolder(repo, { task, model, effort, name, roleSlug, lineage }); // --base is meaningless here
-		const baseBranch = base ?? (defaultBranch(await listBranches(repo.path)) ?? 'main');
-		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name, roleSlug, lineage });
+		if (repo.folder) return this.spawnFolder(repo, { task, model, effort, name, roleSlug, lineage, onFail }); // --base is meaningless here
+		let baseBranch: string;
+		try { baseBranch = base ?? (defaultBranch(await listBranches(repo.path)) ?? 'main'); } catch (e) {
+			// Unhandled, this rejected past every caller — and a waiting `cos-coord spawn` got no receipt.
+			this.deps.toast(`Couldn't read the branches of ${repo.name}: ${(e as Error).message}`, 'error');
+			onFail?.(`couldn't read the branches of ${repo.name}: ${(e as Error).message}`);
+			return null;
+		}
+		return this.spawnWorktree(repo, baseBranch, { task, model, effort, name, roleSlug, lineage, onFail });
 	}
 
 	/** Spawn a terminal on a NAMED role, in a folder that need not be one of the floor's repos.
@@ -1461,7 +1473,7 @@ export class TerminalsGrid {
 		} else if (msg.kind === 'new-tab') {
 			void this.newTabFromKane(msg.request, id);
 		} else {
-			void this.spawnFromKane(msg.repo, msg.base, msg.task, msg.model, msg.effort, msg.name, spawnExtrasOf(msg));
+			void this.spawnFromKane(msg.repo, msg.base, msg.task, msg.model, msg.effort, msg.name, spawnExtrasOf(msg), id);
 		}
 	}
 
@@ -1743,7 +1755,7 @@ export class TerminalsGrid {
 	 *  `waitForTellReceipt`) can report it honestly instead of assuming the outbox drop succeeded.
 	 *  New: no receipt existed for any command before this — see coord-store.cjs's comment.
 	 *  `close` files its outcome here too; `message` is the success line the CLI prints. */
-	private writeTellReceipt(id: string, r: TellResult & { message?: string; newTab?: unknown; leftOnDisk?: string }): void {
+	private writeTellReceipt(id: string, r: (TellResult & { message?: string; newTab?: unknown; leftOnDisk?: string }) | SpawnReceipt): void {
 		try {
 			const dir = path.join(this.outboxDir(), '.receipts');
 			fsSync.mkdirSync(dir, { recursive: true });

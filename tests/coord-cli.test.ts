@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
+import { runSpawn, accepted } from './spawn-harness';
 
 const CLI = path.join(__dirname, '..', 'pty-sidecar', 'coord-cli.cjs');
 // The outer shell's COS_* must not leak in: run from a worker the app spawned before the
@@ -127,24 +128,62 @@ describe('cos-coord CLI', () => {
     expect(result.stderr).toContain('mid-/compact');
   });
 
-  it('watch/spawn are god-only and drop tagged files', () => {
+  it('watch/spawn are god-only and drop tagged files', async () => {
     // No role → refused (exit 2), nothing written
     const denied = run(['watch', 'A', '--note', 'x'], '1', 'x');
     expect(denied.code).toBe(2);
     expect(fs.existsSync(path.join(dir, 'god-outbox'))).toBe(false);
+    expect(run(['spawn', 'app', '--task', 'x'], '1', 'x').code).toBe(2);
+    expect(fs.existsSync(path.join(dir, 'god-outbox'))).toBe(false);
     // As god → files appear
-    const god = { ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Able', COS_ROLE: 'god' };
+    const god = { ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Able', COS_ROLE: 'god', COS_COORD_SPAWN_WAIT_MS: '10000' };
     execFileSync('node', [CLI, 'watch', 'A', '--note', 'run tests'], { env: god, encoding: 'utf8' });
-    execFileSync('node', [CLI, 'spawn', 'app', '--base', 'main', '--task', 'do X'], { env: god, encoding: 'utf8' });
-    execFileSync('node', [CLI, 'spawn', 'app', '--base', 'main', '--task', 'do Y', '--model', 'opus', '--effort', 'max', '--name', 'Linehaul'], { env: god, encoding: 'utf8' });
     execFileSync('node', [CLI, 'rename', 'wt-1', '--to', 'Linehaul fix'], { env: god, encoding: 'utf8' });
     const msgs = fs.readdirSync(path.join(dir, 'god-outbox')).filter((f) => f.endsWith('.json'))
       .map((f) => JSON.parse(fs.readFileSync(path.join(dir, 'god-outbox', f), 'utf8')));
     expect(msgs.find((m) => m.kind === 'watch')).toMatchObject({ target: 'A', note: 'run tests' });
-    expect(msgs.find((m) => m.kind === 'spawn')).toMatchObject({ repo: 'app', base: 'main', task: 'do X' });
-    expect(msgs.find((m) => m.kind === 'spawn' && m.task === 'do X')).toMatchObject({ model: null, effort: null, name: null });
-    expect(msgs.find((m) => m.kind === 'spawn' && m.task === 'do Y')).toMatchObject({ model: 'opus', effort: 'max', name: 'Linehaul' });
     expect(msgs.find((m) => m.kind === 'rename')).toMatchObject({ target: 'wt-1', name: 'Linehaul fix' });
+    // spawn blocks on the app's receipt, so these run against a fake app (spawn-harness).
+    for (const f of fs.readdirSync(path.join(dir, 'god-outbox')).filter((x) => x.endsWith('.json'))) fs.unlinkSync(path.join(dir, 'god-outbox', f));
+    const x = await runSpawn(dir, ['app', '--base', 'main', '--task', 'do X'], god, accepted());
+    expect(x.request).toMatchObject({ kind: 'spawn', repo: 'app', base: 'main', task: 'do X', model: null, effort: null, name: null });
+    const y = await runSpawn(dir, ['app', '--base', 'main', '--task', 'do Y', '--model', 'opus', '--effort', 'max', '--name', 'Linehaul'], god, accepted());
+    expect(y.request).toMatchObject({ kind: 'spawn', task: 'do Y', model: 'opus', effort: 'max', name: 'Linehaul' });
+  });
+
+  describe('spawn receipts', () => {
+    const godEnv = (waitMs: string) => ({ ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Kane', COS_ROLE: 'god', COS_SESSION_ID: 'kane-1', COS_COORD_SPAWN_WAIT_MS: waitMs });
+
+    it('a receipt is written and the CLI reports success with the terminal, its branch and the new identity', async () => {
+      const r = await runSpawn(dir, ['app', '--task', 'do X'], godEnv('10000'), accepted('sess-abc', 'wt-main-7', 'wt/main-7'));
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('"wt-main-7"');
+      expect(r.stdout).toContain('wt/main-7');
+      expect(r.stdout).toContain('sess-abc');
+      expect(r.request).toMatchObject({ kind: 'spawn', from: 'kane-1' });
+      expect(fs.readdirSync(path.join(dir, 'god-outbox', '.receipts'))).toEqual([]); // the CLI cleans its receipt up
+    });
+
+    it('a request that is never accepted exits non-zero with the reason, and is withdrawn so it cannot run late', async () => {
+      const r = await runSpawn(dir, ['app', '--task', 'do X'], godEnv('600')); // no app is running
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain('WITHDRAWN');
+      expect(r.stderr).toContain('nothing was spawned');
+      expect(fs.readdirSync(path.join(dir, 'god-outbox')).filter((f) => f.endsWith('.json'))).toEqual([]);
+    });
+
+    it('the app refusing exits 2 with the app\'s own reason', async () => {
+      const r = await runSpawn(dir, ['ghost', '--task', 'do X'], godEnv('10000'), () => ({ ok: false, reason: 'unknown repo "ghost"' }));
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain('did NOT happen');
+      expect(r.stderr).toContain('unknown repo "ghost"');
+    });
+
+    it('the app claiming it but never answering exits 3: it may still appear', async () => {
+      const r = await runSpawn(dir, ['app', '--task', 'do X'], godEnv('600'), () => null);
+      expect(r.code).toBe(3);
+      expect(r.stderr).toContain('NOT confirmed');
+    });
   });
   describe('close', () => {
     const godEnv = (waitMs: string) => ({ ...BASE_ENV, COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Kane', COS_ROLE: 'god', COS_COORD_CLOSE_WAIT_MS: waitMs });

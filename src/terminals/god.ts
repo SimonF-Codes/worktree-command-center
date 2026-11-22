@@ -28,6 +28,19 @@ export type OutboxMessage =
 	// field comes back on the receipt `cos-coord new-tab` blocks on rather than as a silent drop.
 	| { kind: 'new-tab'; request: Record<string, unknown> };
 
+/** What the app files on god-outbox/.receipts/<id>.json for a `spawn`, read by coord-core's
+ *  spawnOutcome. `spawned` carries the identity the caller just created. */
+export type SpawnReceipt =
+	| { ok: true; spawned: { terminal: string; branch: string; sessionId: string } }
+	| { ok: false; reason: string };
+
+/** Pure: the receipt for one spawn attempt — the new session, or why there is none. */
+export function spawnReceipt(spawned: { name: string; branch: string; sessionId: string } | null, failReason: string): SpawnReceipt {
+	return spawned
+		? { ok: true, spawned: { terminal: spawned.name, branch: spawned.branch, sessionId: spawned.sessionId } }
+		: { ok: false, reason: failReason };
+}
+
 /** Pure: what a parsed spawn request asks the app to record about the session it creates. */
 export function spawnExtrasOf(msg: Extract<OutboxMessage, { kind: 'spawn' }>): { workstreamId?: string; roleSlug?: string; parentSessionId?: string } {
 	return {
@@ -232,6 +245,9 @@ export function godSystemPrompt(repos: GodRepo[], coordDir: string, overseerName
 		'    --base is optional (defaults to the repo\'s main). --model takes an alias (opus, sonnet, haiku,',
 		'    fable) or a full model id. Flags you omit inherit the user\'s toolbar dropdowns. Target names +',
 		'    paths are listed below.',
+		'    It CONFIRMS before returning: exit 0 prints the new terminal\'s name, its branch and its session',
+		'    id; a non-zero exit means it was refused, or never picked up (2), or not confirmed (3) — do not',
+		'    re-run a spawn that exited 3 until floor/INDEX.md shows it did not appear, or you get a duplicate.',
 		'    A target marked [plain folder — no git] is NOT a repo: its terminal runs directly in that',
 		'    folder with no worktree and no branch, so --base is ignored and edits there are not isolated.',
 		'  - To rename a worker terminal, run:  cos-coord rename "<exact terminal name>" --to "<new name>"',
