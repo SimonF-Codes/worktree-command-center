@@ -127,7 +127,7 @@ here:
 
 | path | written by | what it is |
 | --- | --- | --- |
-| `locks/<resource>.json` | `cos-coord acquire`/`release`, the git hook | one file per held lock (`<area>:<thing>`) |
+| `locks/<resource>.json` | `cos-coord acquire`/`release` | one file per held lock (`<area>:<thing>`). The git hook's automatic locks moved to the machine-wide `_claims/` (below) |
 | `board.md` | `cos-coord`, the git hook | append-only feed of lock, note and task events |
 | `chat.md` | `cos-coord chat` | the agent group chat |
 | `worktrees.md` | the app, every worktree scan (30 s) | every worktree's branch, owner, dirty/ahead/parked state |
@@ -143,8 +143,9 @@ here:
 The parent `<userData>/.coordination/` also holds `floor-report.json` / `.md`, a cross-workspace
 report (`src/terminals/floor-report.ts`), `.god/`, Kane's own home directories, and `_claims/`, the
 machine-wide write leases on shared checkouts (one `write-<sha1>.json` per checkout root; V2 step 9,
-[api.md](api.md#write-claims-the-lease-and-the-write-hook)). It is machine-wide because a checkout
-is shared across tabs while `locks/` is per workspace.
+[api.md](api.md#write-claims-the-lease-and-the-write-hook)) and the git hook's automatic `push:` /
+`worktree:` locks (`git-<kind>-<sha1>.json`, keyed on the repository's git common dir). It is
+machine-wide because a repo is shared across tabs while `locks/` is per workspace.
 
 **The floor feed** (snapshots, `INDEX.md`, `state.json`) is one timer and one pass, so the markdown
 and the JSON always describe the same moment. It runs while the workspace has an overseer console

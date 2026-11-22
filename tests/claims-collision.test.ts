@@ -344,3 +344,129 @@ describe('spawn-time lease (the app) and write-time gate (the hook) on one store
 		expect(claims.takeClaim(claimsDir, checkout, { sessionId: 'A', holder: 'fix-auth' }).ok).toBe(true);
 	});
 });
+
+// ---- 7. Q12: the automatic git locks are machine-wide too, and keyed on the REPOSITORY.
+//
+// Before: per workspace (two tabs could both hold push:<repo>), and named after the basename of the
+// session's cwd — so every worktree session had its own push lock and none of them ever contended.
+
+describe('Q12: push / worktree-add locks — two tabs, two worktrees, one repository', () => {
+	const gitEnv = () => { const e: Record<string, string> = {}; for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.toUpperCase().startsWith('GIT_') && !k.toUpperCase().startsWith('COS_')) e[k] = v; return e; };
+	const git = (cwd: string, ...args: string[]) => spawnSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' });
+	let repo: string, wtA: string, wtB: string, other: string, wsA: string, wsB: string;
+	beforeEach(() => {
+		repo = path.join(root, 'shared-repo');
+		fs.mkdirSync(repo);
+		git(repo, 'init', '-q', '-b', 'main');
+		git(repo, 'config', 'user.email', 't@example.invalid'); git(repo, 'config', 'user.name', 't');
+		fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+		git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'init');
+		wtA = path.join(repo, '.claude-worktrees', 'wt-main-1');
+		wtB = path.join(repo, '.claude-worktrees', 'wt-main-2');
+		expect(git(repo, 'worktree', 'add', '-q', '-b', 'wt/main-1', wtA, 'main').status).toBe(0);
+		expect(git(repo, 'worktree', 'add', '-q', '-b', 'wt/main-2', wtB, 'main').status).toBe(0);
+		other = path.join(root, 'other-repo');
+		fs.mkdirSync(other);
+		git(other, 'init', '-q', '-b', 'main');
+		wsA = path.join(root, '.coordination', 'tab-a'); wsB = path.join(root, '.coordination', 'tab-b');
+		fs.mkdirSync(wsA, { recursive: true }); fs.mkdirSync(wsB, { recursive: true });
+	});
+
+	interface GitSession { ws: string; tile: string; sessionId?: string; name: string }
+	const gitEnvOf = (s: GitSession): Record<string, string> => ({
+		...gitEnv(), COS_COORD_DIR: s.ws, COS_CLAIMS_DIR: claimsDir, COS_TERMINAL_ID: s.tile, COS_TERMINAL_NAME: s.name, COS_COORD_WAIT_MS: '0',
+		...(s.sessionId ? { COS_SESSION_ID: s.sessionId } : {}),
+	});
+	const bash = (command: string, cwd: string) => JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd });
+	const run = (s: GitSession, command: string, cwd: string, release = false): Verdict => {
+		const r = spawnSync('node', [HOOK, ...(release ? ['--release'] : [])], { input: bash(command, cwd), env: gitEnvOf(s), encoding: 'utf8' });
+		return parse(r.stdout, r.status);
+	};
+	const runAsync = (s: GitSession, command: string, cwd: string): Promise<Verdict> => new Promise((resolve, reject) => {
+		const c = spawn('node', [HOOK], { env: gitEnvOf(s) });
+		let out = '';
+		c.stdout.on('data', (d) => { out += d; });
+		c.on('error', reject);
+		c.on('close', (code) => { try { resolve(parse(out, code)); } catch (e) { reject(e); } });
+		c.stdin.end(bash(command, cwd));
+	});
+	// Two sessions in two TABS (workspaces), with the SAME tile id — tile ids repeat across tabs.
+	const sa = (): GitSession => ({ ws: wsA, tile: '1', sessionId: 'sess-A', name: 'tab-a/wt-main-1' });
+	const sb = (): GitSession => ({ ws: wsB, tile: '1', sessionId: 'sess-B', name: 'tab-b/wt-main-2' });
+	const gitLocks = () => claims.readGitLocks(claimsDir);
+
+	it('two worktrees of one repo, in two tabs: the second push is refused, naming the first', () => {
+		expect(run(sa(), 'git push', wtA).allowed).toBe(true);
+		const b = run(sb(), 'git push', wtB);
+		expect(b.allowed).toBe(false);
+		expect(b.reason).toContain('push:shared-repo');
+		expect(b.reason).toContain('tab-a/wt-main-1');
+		expect(gitLocks()).toHaveLength(1);
+		expect(gitLocks()[0]).toMatchObject({ resource: 'push:shared-repo', holderId: 'sess-A' });
+	});
+	it('the primary checkout and a worktree share the lock too', () => {
+		expect(run(sa(), 'git push', repo).allowed).toBe(true);
+		expect(run(sb(), 'git push origin wt/main-2', wtB).allowed).toBe(false);
+	});
+	it('the race: two tabs push one repo at the same instant — exactly one is allowed (10 rounds)', async () => {
+		for (let round = 0; round < 10; round++) {
+			for (const f of fs.readdirSync(claimsDir)) fs.rmSync(path.join(claimsDir, f));
+			const [a, b] = await Promise.all([runAsync(sa(), 'git push', wtA), runAsync(sb(), 'git push', wtB)]);
+			expect([a, b].filter((v) => v.allowed), JSON.stringify([a, b])).toHaveLength(1);
+		}
+	});
+	it('after the holder\'s PostToolUse release, the other tab can push', () => {
+		run(sa(), 'git push', wtA);
+		run(sa(), 'git push', wtA, true);
+		expect(gitLocks()).toHaveLength(0);
+		expect(run(sb(), 'git push', wtB).allowed).toBe(true);
+	});
+	it('the same tile id in another tab is NOT the same holder: it cannot release, and it is refused', () => {
+		run(sa(), 'git push', wtA);
+		run(sb(), 'git push', wtB, true); // tile 1 in tab B "releases"
+		expect(gitLocks()).toHaveLength(1);
+		expect(run(sb(), 'git push', wtB).allowed).toBe(false);
+	});
+	it('without session ids the owner is workspace + tile, so equal tile ids in two tabs still differ', () => {
+		const a = { ...sa(), sessionId: undefined }, b = { ...sb(), sessionId: undefined };
+		expect(run(a, 'git push', wtA).allowed).toBe(true);
+		expect(run(b, 'git push', wtB).allowed).toBe(false);
+	});
+	it('re-entrant: the holder pushing again (its PostToolUse never ran) is not refused by its own lock', () => {
+		run(sa(), 'git push', wtA);
+		expect(run(sa(), 'git push', wtA).allowed).toBe(true);
+		expect(gitLocks()).toHaveLength(1);
+	});
+	it('a stale git lock is reclaimable', () => {
+		run(sa(), 'git push', wtA);
+		const f = claims.gitLockPath(claimsDir, 'push', gitLocks()[0].repo);
+		fs.writeFileSync(f, JSON.stringify({ ...gitLocks()[0], ts: Date.now() - 11 * 60_000 }));
+		expect(run(sb(), 'git push', wtB).allowed).toBe(true);
+		expect(gitLocks()[0].holderId).toBe('sess-B');
+	});
+	it('push and worktree-add are separate locks; worktree-add is exclusive across tabs too', () => {
+		expect(run(sa(), 'git push', wtA).allowed).toBe(true);
+		expect(run(sb(), 'git worktree add ../x -b x main', wtB).allowed).toBe(true);
+		expect(run(sa(), 'git worktree add ../y -b y main', wtA).allowed).toBe(false);
+	});
+	it('different repositories never contend', () => {
+		expect(run(sa(), 'git push', wtA).allowed).toBe(true);
+		expect(run(sb(), 'git push', other).allowed).toBe(true);
+	});
+	it('git -C <repo> locks the repo it names, not the cwd\'s', () => {
+		expect(run(sa(), `git -C "${other}" push`, wtA).allowed).toBe(true);
+		expect(run(sb(), 'git push', other).allowed).toBe(false);
+		expect(run(sb(), 'git push', wtB).allowed).toBe(true); // shared-repo was never locked
+	});
+	it('each tab\'s board feed still gets its own START', () => {
+		run(sa(), 'git push', wtA);
+		expect(fs.readFileSync(path.join(wsA, 'board.md'), 'utf8')).toMatch(/push:shared-repo\tSTART/);
+		expect(fs.existsSync(path.join(wsB, 'board.md'))).toBe(false);
+	});
+	it('cos-coord status in either tab lists the machine-wide git lock', () => {
+		run(sa(), 'git push', wtA);
+		const CLI = path.join(__dirname, '..', 'pty-sidecar', 'coord-cli.cjs');
+		const out = spawnSync('node', [CLI, 'status'], { env: gitEnvOf(sb()), encoding: 'utf8' }).stdout;
+		expect(out).toMatch(/push:shared-repo — tab-a\/wt-main-1/);
+	});
+});

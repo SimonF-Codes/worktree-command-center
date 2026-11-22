@@ -6,38 +6,67 @@ import * as path from 'node:path';
 
 const HOOK = path.join(__dirname, '..', 'pty-sidecar', 'coord-hook.cjs');
 let dir: string;
-beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-')); });
+let claimsDir: string;
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-'));
+  claimsDir = path.join(dir, '_claims');
+  fs.mkdirSync(claimsDir);
+});
 
+// The runner's own COS_* never leak in: run from a session the app opened, an inherited
+// COS_SESSION_ID would make every "different" holder below the same one.
+const cleanEnv = (): Record<string, string> => {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.toUpperCase().startsWith('COS_')) env[k] = v;
+  return env;
+};
 function run(input: object, args: string[], id: string) {
   const out = execFileSync('node', [HOOK, ...args], {
     input: JSON.stringify(input),
-    env: { ...process.env, COS_COORD_DIR: dir, COS_TERMINAL_ID: id, COS_TERMINAL_NAME: 't' + id, COS_COORD_WAIT_MS: '0' },
+    env: { ...cleanEnv(), COS_COORD_DIR: dir, COS_CLAIMS_DIR: claimsDir, COS_TERMINAL_ID: id, COS_TERMINAL_NAME: 't' + id, COS_COORD_WAIT_MS: '0' },
     encoding: 'utf8',
   });
   return out;
 }
+// '/repo/foo' is not a git repo, so the lock is named the pre-Q12 way, by the folder name.
 const push = { tool_name: 'Bash', tool_input: { command: 'git push' }, cwd: '/repo/foo' };
+const pushLock = () => path.join(claimsDir, cc.gitLockFileName('push', 'name:foo'));
+const cc = require('../pty-sidecar/claims-core.cjs');
 
 describe('coord-hook', () => {
-  it('allows (empty output) and locks on a free push', () => {
+  it('allows (empty output) and locks on a free push — in the machine-wide _claims/, not locks/', () => {
     const out = run(push, [], '1');
     expect(out.trim()).toBe('');
-    expect(fs.existsSync(path.join(dir, 'locks', 'push-foo.json'))).toBe(true);
+    expect(fs.existsSync(pushLock())).toBe(true);
+    expect(JSON.parse(fs.readFileSync(pushLock(), 'utf8'))).toMatchObject({ resource: 'push:foo', holder: 't1' });
+    expect(fs.existsSync(path.join(dir, 'locks'))).toBe(false);
+  });
+  it('writes START to the workspace board as before', () => {
+    run(push, [], '1');
+    expect(fs.readFileSync(path.join(dir, 'board.md'), 'utf8')).toMatch(/push:foo\tSTART/);
   });
   it('denies a second push while held', () => {
     run(push, [], '1');
     const out = run(push, [], '2');
     expect(out).toContain('"permissionDecision":"deny"');
   });
-  it('release removes the lock', () => {
+  it('release removes the lock; a non-holder\'s release does not', () => {
     run(push, [], '1');
+    run(push, ['--release'], '2');
+    expect(fs.existsSync(pushLock())).toBe(true);
     run(push, ['--release'], '1');
-    expect(fs.existsSync(path.join(dir, 'locks', 'push-foo.json'))).toBe(false);
+    expect(fs.existsSync(pushLock())).toBe(false);
   });
   it('ignores non-git commands (empty output, no lock)', () => {
     const out = run({ tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: '/repo/foo' }, [], '1');
     expect(out.trim()).toBe('');
+    expect(fs.readdirSync(claimsDir)).toEqual([]);
     expect(fs.existsSync(path.join(dir, 'locks'))).toBe(false);
+  });
+  it('stays fail-open: a missing machine-wide store allows the push (and is not created)', () => {
+    fs.rmSync(claimsDir, { recursive: true });
+    expect(run(push, [], '1').trim()).toBe('');
+    expect(fs.existsSync(claimsDir)).toBe(false);
   });
 });
 

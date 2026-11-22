@@ -26,3 +26,8 @@ export function failClosedMessage(mode: string | undefined, target: string, err:
 export function releaseRefusal(porcelain: string | null, checkout: string): string | null;
 export function toolTarget(input: unknown): string;
 export function ageStr(ms: number): string;
+export interface RepoIdentity { key: string; name: string }
+export function gitLockKind(op: string): 'push' | 'worktree';
+export function repoIdentity(commonDirOut: string, ranIn: string): RepoIdentity;
+export function legacyRepoIdentity(name: string): RepoIdentity;
+export function gitLockFileName(kind: string, key: string): string;

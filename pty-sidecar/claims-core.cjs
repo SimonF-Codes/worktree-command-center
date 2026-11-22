@@ -175,6 +175,34 @@ function releaseRefusal(porcelain, checkout) {
   return `${checkout} has ${lines.length} uncommitted change${lines.length === 1 ? '' : 's'} (${sample}) — commit or discard them first; the lease is kept until then (or until it expires).`;
 }
 
+// ---------------------------------------------------------------------------------------------
+// The automatic git locks (Q12): `push` and `worktree add`, machine-wide like the write leases.
+//
+// Keyed on the REPOSITORY — its git common dir — not on the directory the command ran in. Before
+// this, the lock was named after the basename of the session's cwd, so every worktree session got
+// its own (push:wt-main-53, push:wt-main-45, …) and two sessions pushing one repo never contended.
+
+/** push → 'push'; worktree-add → 'worktree' (the resource prefixes coord-core gitResource uses). */
+function gitLockKind(op) { return op === 'push' ? 'push' : 'worktree'; }
+
+/** A repository's identity from `git rev-parse --git-common-dir`, run in `ranIn` (git prints it
+ *  relative to there). Every worktree of one repo shares the common dir, so they share the key.
+ *  `name` is the repo's folder, for the human-readable resource (`push:<name>`). */
+function repoIdentity(commonDirOut, ranIn) {
+  const common = path.resolve(String(ranIn), String(commonDirOut).trim());
+  const root = path.basename(common).toLowerCase() === '.git' ? path.dirname(common) : common;
+  return { key: checkoutId(common), name: path.basename(root) };
+}
+
+/** Used only when git cannot name the repository (not a repo, an unexpanded `$d`): the lock is
+ *  named as it was before Q12, by the target folder's name. */
+function legacyRepoIdentity(name) { return { key: `name:${String(name).toLowerCase()}`, name: String(name) }; }
+
+/** `git-<kind>-<sha1(key)>.json`, beside the write leases in `_claims/`. */
+function gitLockFileName(kind, key) {
+  return `git-${kind}-${crypto.createHash('sha1').update(String(key)).digest('hex')}.json`;
+}
+
 /** The file path a file tool writes, from its hook input. NotebookEdit names it notebook_path. */
 function toolTarget(input) {
   const ti = (input && input.tool_input) || {};
@@ -187,4 +215,5 @@ module.exports = {
   CLAIM_TTL_MS, WORKTREES_DIR, MODES,
   checkoutId, writeResource, claimFileName, isInside, claimCovers, claimIsLive,
   canEscalate, decideWrite, heldMessage, failClosedMessage, releaseRefusal, toolTarget, ageStr,
+  gitLockKind, repoIdentity, legacyRepoIdentity, gitLockFileName,
 };

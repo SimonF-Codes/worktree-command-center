@@ -654,7 +654,7 @@ worker tiles once inherited `COS_ROLE=god` and ran with god authority.
 | variable | set for | value | used for |
 | --- | --- | --- | --- |
 | `COS_COORD_DIR` | every session | the workspace's coordination directory | where every request, lock and note goes |
-| `COS_TERMINAL_ID` | every session | a tile id (`0` for the primary Kane, `-N` for a duplicate). **Reissued every launch** | lock ownership within one run |
+| `COS_TERMINAL_ID` | every session | a tile id (`0` for the primary Kane, `-N` for a duplicate). **Reissued every launch**, and repeated across tabs | ownership of this workspace's explicit `cos-coord acquire` locks within one run |
 | `COS_TERMINAL_NAME` | every session | the tile's display name | board and chat attribution |
 | `COS_ROLE` | Kane consoles only | `god` | the gate on `tell`, `watch`, `spawn`, `rename`, `close`, `personality`, `new-tab` |
 | `COS_SESSION_ID` | every terminal and Kane console | the session's `sessionId`: a uuid minted once and **stable across restarts** | the `from` on every outbox request (attribution only), and the **owner of a write lease** — see [Write claims](#write-claims-the-lease-and-the-write-hook) |
@@ -847,6 +847,21 @@ app does, at start.
 (`git status --porcelain` empty). A dirty one keeps its lease, the app says so, and the lease then
 expires by its TTL. `cos-coord lease release` gives a lease up early under the same rule, and exits
 2 when it releases nothing. `cos-coord lease` (and `status`) lists every lease on the machine.
+
+**The automatic git locks live here too (Q12).** The git hook's `push:<repo>` and
+`worktree:<repo>` locks, taken around a `git push` / `git worktree add` and released after it, are
+files `git-push-<sha1>.json` / `git-worktree-<sha1>.json` in `_claims/` — machine-wide, so two tabs
+can no longer push one repo at the same moment. They are keyed on the **repository**: the git
+common dir of the command's target (`git -C <dir>`, `cd <dir> &&`, else the cwd), which every
+worktree of a repo shares. Before this they were named after the basename of the session's cwd, so
+each worktree session had a lock of its own and two sessions pushing one repo never contended. Only
+when git cannot name the repository (not a repo, an unexpanded `$d`) is the lock named the old
+way, by the target folder's name. Owner: the session's `COS_SESSION_ID` (tile ids repeat across
+tabs), or workspace + tile id without one; a holder taking its own lock again re-stamps it rather
+than waiting on itself. TTL 10 minutes. Still **fail-open**, like every Bash-hook lock: a missing
+store allows the command. `START`/`DONE` still go to the session's own `board.md`, and `cos-coord
+status` and the Coordination panel list them in every tab. Explicit `cos-coord acquire` locks are
+unchanged: per workspace, in `locks/`.
 
 **Moves.** A live lease inside a repo refuses its Move and its relayout (`live-lease`), as a live
 terminal does; an unreadable store refuses too. Stale leases are re-pointed with the rest of the
