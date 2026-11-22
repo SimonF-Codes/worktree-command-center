@@ -3,6 +3,7 @@ import type { ClaimRecord } from './claims-core.cjs';
 export type { ClaimRecord };
 export interface ClaimHolder { sessionId: string; holder?: string; mode?: string; reason?: string }
 export type TakeResult = { ok: true; acquired: true } | { ok: true; renewed: true } | { ok: false; holder: ClaimRecord | null };
+export function claimsDirUnder(coordRoot: string): string;
 export function claimsDirOf(coordDir: string): string;
 export function claimPath(dir: string, checkoutId: string): string;
 export function ensureClaimsDir(dir: string): string;

@@ -20,8 +20,11 @@ const cc = require('./claims-core.cjs');
 
 const CLAIM_FILE = /^write-[0-9a-f]{40}\.json$/;
 
-/** The machine-wide claims directory for a workspace's coordination directory: its sibling. */
-function claimsDirOf(coordDir) { return path.join(path.dirname(path.resolve(coordDir)), '_claims'); }
+/** The machine-wide claims directory under the coordination root (<userData>/.coordination). */
+function claimsDirUnder(coordRoot) { return path.join(path.resolve(coordRoot), '_claims'); }
+
+/** The same directory, from one workspace's coordination directory: its sibling. */
+function claimsDirOf(coordDir) { return claimsDirUnder(path.dirname(path.resolve(coordDir))); }
 
 function claimPath(dir, checkoutId) { return path.join(dir, cc.claimFileName(checkoutId)); }
 
@@ -161,5 +164,5 @@ function remapClaims(dir, remap) {
 }
 
 module.exports = {
-  claimsDirOf, claimPath, ensureClaimsDir, readClaims, takeClaim, renewClaim, releaseClaim, claimsOf, remapClaims,
+  claimsDirUnder, claimsDirOf, claimPath, ensureClaimsDir, readClaims, takeClaim, renewClaim, releaseClaim, claimsOf, remapClaims,
 };

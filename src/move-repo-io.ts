@@ -6,6 +6,7 @@ import { snapshotProcesses } from './terminals/process-snapshot';
 import { projectDirName } from './terminals/resume-target';
 import { ensureWorktreesExcluded, WORKTREES_EXCLUDE } from './terminals/worktree-manager';
 import type { RepoConfig } from './terminals/terminals-grid';
+import { readClaims, remapClaims } from '../pty-sidecar/claims-store.cjs';
 import {
 	planMove, plannedDestinations, isInside, remapPath, parseWorktreePorcelain, parseGitmodulesPaths, gitdirOf, isAbsoluteGitdir,
 	configPathRefs, type MoveFacts, type MovePlan, type WorktreeFact, type PathMove,
@@ -22,6 +23,9 @@ export interface GatherContext {
 	livePaths: string[];
 	/** Every registered target. */
 	targets: RepoConfig[];
+	/** The machine-wide write-lease store (claims-store claimsDirUnder). Given, its live leases refuse
+	 *  the move and the rest are re-pointed by executeMove. */
+	claimsDir?: string;
 	/** The current config.json, scanned for other paths inside the repo. */
 	config?: unknown;
 	projectsDir?: string;
@@ -82,6 +86,7 @@ export async function gatherMoveFacts(target: RepoConfig, to: string, ctx: Gathe
 		worktrees: [], remotes: [], absoluteSubmodules: [], submoduleWorktrees: [], livePaths: ctx.livePaths, heldOpen: [],
 		transcriptDirs: [], existing: [], targets: ctx.targets,
 		configRefs: ctx.config ? configPathRefs(ctx.config, from, ci) : [], caseInsensitive: ci,
+		...(ctx.claimsDir ? { leases: gatherLeases(ctx.claimsDir), now: Date.now() } : {}),
 	};
 	if (kind !== 'repo' || target.folder) return facts;
 	if (ctx.journalDir) facts.priorRelocations = readOpenJournal(ctx.journalDir, from, to)?.relocations ?? [];
@@ -151,6 +156,13 @@ export async function gatherMoveFacts(target: RepoConfig, to: string, ctx: Gathe
 		}
 	}
 	return facts;
+}
+
+/** The write leases, or null when the store cannot be read (which refuses the move). A store
+ *  that was never made has none. */
+function gatherLeases(claimsDir: string): MoveFacts['leases'] {
+	try { return readClaims(claimsDir, { strict: true }); }
+	catch (e) { return (e as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null; }
 }
 
 const HELD_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
@@ -235,6 +247,11 @@ export interface ExecuteDeps {
 	 *  running app, and read it back. The app has to do this itself: persist() rewrites the whole
 	 *  `repos` key from memory, so an edit from outside is overwritten. */
 	applyAppState: (plan: MovePlan) => Promise<{ ok: boolean; detail: string }>;
+	/** The machine-wide write-lease store: every lease whose path the move changed is re-pointed
+	 *  with remapPath over plan.pathMap — the same rewrite the sessions file gets. */
+	claimsDir?: string;
+	/** Compare paths case-insensitively when re-pointing leases (default: on Windows). */
+	caseInsensitive?: boolean;
 }
 
 interface Journal {
@@ -345,6 +362,18 @@ export async function executeMove(plan: MovePlan, deps: ExecuteDeps): Promise<Mo
 		try { r = await deps.applyAppState(plan); } catch (e) { r = { ok: false, detail: (e as Error).message }; }
 		if (!r.ok) return stop(label, r.detail);
 		steps.push({ label, ok: true, detail: r.detail });
+	}
+
+	// --- 5b. write leases (V2 step 9). A live one refused the plan, so these are stale; re-pointed
+	// anyway, exactly as the sessions file is, so nothing in _claims/ names a path that is gone.
+	// Idempotent: a lease already re-pointed maps to itself.
+	if (deps.claimsDir && plan.pathMap.length) {
+		const label = 'Re-pointing write leases (_claims/)';
+		const ci = deps.caseInsensitive ?? process.platform === 'win32';
+		let r: { changed: number; conflicts: string[] };
+		try { r = remapClaims(deps.claimsDir, (p) => remapPath(p, plan.pathMap, ci)); }
+		catch (e) { return stop(label, (e as Error).message); }
+		steps.push({ label, ok: true, detail: `${r.changed} re-pointed${r.conflicts.length ? `; left alone: ${r.conflicts.join('; ')}` : ''}` });
 	}
 
 	// --- 6. the old worktree root, if the move emptied it. rmdir, never rm: it only ever

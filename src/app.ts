@@ -10,6 +10,7 @@ import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, forgetRepo, retargetRepo, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
 import { planMove, describeMovePlan, describeRefusals, remapRepoLinks, samePath, isInside, legacyWorktreeRootFor, nestButton, type PathMove } from './move-repo';
 import { gatherMoveFacts, executeMove, describeMoveResult } from './move-repo-io';
+import { claimsDirUnder } from '../pty-sidecar/claims-store.cjs';
 import { planPrune, describePrunePlan, stillPrunable } from './prune-worktrees';
 import { gatherPruneFacts, executePrune, describePruneResults } from './prune-worktrees-io';
 import { runCommand } from './command-runner';
@@ -1022,12 +1023,13 @@ async function main(): Promise<void> {
 			const relayout = samePath(r.path, to, caseInsensitive);
 			const verb = relayout ? 'nest the worktrees of' : 'move';
 			const journalDir = path.join(userData, 'repo-moves');
+			const claimsDir = claimsDirUnder(path.join(userData, '.coordination')); // V2 step 9: leases refuse / are re-pointed
 			for (;;) {
 				toast(`Checking ${r.name}: worktrees, uncommitted work, open handles, transcripts…`, 'info');
 				let plan;
 				try {
 					const cfgNow = await window.wcc.getConfig();
-					plan = planMove(await gatherMoveFacts(r, to, { livePaths: allLivePaths(), targets: repos, config: cfgNow, journalDir }));
+					plan = planMove(await gatherMoveFacts(r, to, { livePaths: allLivePaths(), targets: repos, config: cfgNow, journalDir, claimsDir }));
 				} catch (e) { toast(`Couldn't read ${r.name}: ${(e as Error).message}`, 'error'); return; }
 				if (plan.refusals.length) {
 					const told = plan.warnings.length ? `\n\n${plan.warnings.map((w) => `⚠ ${w}`).join('\n')}` : '';
@@ -1038,6 +1040,7 @@ async function main(): Promise<void> {
 				if (!await promptForConfirm(relayout ? `Nest ${r.name}'s worktrees inside it?` : `Move ${r.name}?`, describeMovePlan(plan), go)) return;
 				const result = await executeMove(plan, {
 					journalDir,
+					claimsDir,
 					applyAppState: (p) => applyPathMap(p.from, p.to, p.pathMap),
 				});
 				console.info(`[wcc] repo ${relayout ? 'relayout' : 'move'}`, r.name, result);

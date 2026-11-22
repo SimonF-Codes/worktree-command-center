@@ -2,6 +2,7 @@ import * as path from 'path';
 import { projectDirName } from './terminals/resume-target';
 import { worktreeRootFor, legacyWorktreeRootFor } from './terminals/worktree-manager';
 import type { RepoConfig } from './terminals/terminals-grid';
+import { lockStatus } from './terminals/coordination';
 
 // Moving a repo — the PURE half. Given what is on disk (gathered by move-repo-io.ts), compute
 // the whole plan and every reason to refuse it, before a byte is touched.
@@ -71,6 +72,12 @@ export interface MoveFacts {
 	priorRelocations?: PathMove[];
 	/** Working directory of every live terminal in the app, any workspace. */
 	livePaths: string[];
+	/** Every write lease in the machine-wide `_claims/` (V2 step 9) — or null when the store could
+	 *  not be read, which refuses the move: an unreadable store cannot show that nobody holds one.
+	 *  Absent (a caller that does not read it) is treated as no leases. */
+	leases?: { path: string; holder: string; ts: number; ttlMs: number }[] | null;
+	/** The clock leases are judged against. Absent = 0, which reads every lease as live — the safe way round. */
+	now?: number;
 	/** Directories that cannot be renamed because a process holds them open. */
 	heldOpen: { path: string; holders: string[] }[];
 	/** Directory names in ~/.claude/projects. */
@@ -94,7 +101,7 @@ export interface TranscriptRename extends PathMove { done: boolean }
 export type RefusalCode =
 	| 'same-path' | 'inside-itself' | 'cross-volume' | 'missing' | 'destination-exists'
 	| 'not-primary' | 'not-a-repo' | 'folder-target' | 'target-taken'
-	| 'dirty' | 'live-terminal' | 'held-open' | 'locked-worktree' | 'worktree-destination-exists'
+	| 'dirty' | 'live-terminal' | 'live-lease' | 'held-open' | 'locked-worktree' | 'worktree-destination-exists'
 	| 'absolute-submodule' | 'submodule-worktree' | 'transcript-conflict' | 'nothing-to-relayout';
 
 export interface Refusal { code: RefusalCode; path?: string; message: string }
@@ -366,6 +373,17 @@ export function planMove(f: MoveFacts): MovePlan {
 		: [f.from, f.to, ...f.worktrees.map((w) => w.path), ...plan.worktreeMoves.map((m) => m.to)];
 	for (const live of f.livePaths) {
 		if (touched.some((t) => isInside(live, t, ci))) refuse('live-terminal', `A terminal is running in ${live}. Close it first — moving a directory out from under a running session is the worst case.`, live);
+	}
+
+	// --- live write leases (V2 step 9): a session holding a checkout of this repo is mid-write. The
+	// same rule as a live terminal, and for a relayout as much as a move: a lease records its
+	// checkout's PATH, and nothing about a lease survives that path changing under its holder.
+	// A stale lease is no refusal — it is re-pointed with everything else (remapPath, executeMove).
+	if (f.leases === null) refuse('live-lease', 'The write-lease store (_claims/) could not be read, so it cannot be shown that no session holds a lease in this repo. Nothing was moved.');
+	const leaseScope = [f.from, f.to, ...touched];
+	for (const l of f.leases ?? []) {
+		if (lockStatus(l, f.now ?? 0) !== 'held') continue;
+		if (leaseScope.some((t) => isInside(l.path, t, ci))) refuse('live-lease', `${l.path} is held by ${l.holder} under a write lease. Let it finish (the lease is released when its session ends, or lapses 10 minutes after its last write) — moving a checkout out from under a writer is the worst case.`, l.path);
 	}
 
 	for (const h of f.heldOpen) {
