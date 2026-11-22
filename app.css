@@ -387,6 +387,72 @@ html, body {
    out as one unit (PrivateApi.shellHosts / hideTerminal). */
 .wcc-terminal-root { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 
+/* V2 UI step 2 — the sidebar (Settings → Sidebar, default off). Only while it is on does the
+   terminal root become a two-column grid: the top bar and the claude warning span the window,
+   the sidebar takes the left column, and the tab strip + grid sit beside it unchanged. Off, none
+   of these rules match and the layout is exactly the flex column above.
+   Row anatomy and dot rules follow the design system (components/SessionRow, StateDot): 12px text
+   on a 20px line, a 7px dot, indentation as the only depth cue (12px a level), hover as the only
+   row fill, the name the only thing that truncates. No new custom properties. */
+.wcc-terminal-root.wcc-has-sidebar {
+	display: grid;
+	grid-template-columns: 248px minmax(0, 1fr);
+	grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+.wcc-has-sidebar > .wcc-topbar,
+.wcc-has-sidebar > .wcc-claude-warn-host { grid-column: 1 / -1; }
+.wcc-has-sidebar > .wcc-tabs { grid-column: 2; grid-row: 3; }
+.wcc-has-sidebar > .wcc-grid-container { grid-column: 2; grid-row: 4; min-width: 0; }
+.wcc-has-sidebar > .wcc-sidebar { grid-column: 1; grid-row: 3 / span 2; }
+
+.wcc-sidebar {
+	min-height: 0;
+	overflow: auto; /* a branch is never cut short — a long one scrolls the sidebar instead */
+	background: var(--background-secondary);
+	border-right: 1px solid var(--background-modifier-border);
+	padding: 6px 0 10px;
+	font-size: 12px;
+	color: var(--text-normal);
+	user-select: none;
+}
+.wcc-sb-group { padding: 2px 0 6px; border-left: 2px solid transparent; }
+.wcc-sb-group.active { border-left-color: var(--cos-accent); }
+.wcc-sb-head {
+	display: flex; align-items: center; gap: 6px;
+	height: 22px; padding: 0 10px 0 8px;
+	cursor: pointer; color: var(--text-muted); font-weight: 600;
+}
+.wcc-sb-group.active .wcc-sb-head { color: var(--text-normal); }
+.wcc-sb-head:hover, .wcc-sb-row:hover { background: var(--background-modifier-hover); }
+.wcc-sb-caret { flex: 0 0 auto; width: 10px; color: var(--text-faint); font-size: 10px; }
+.wcc-sb-ws { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wcc-sb-counts { flex: 0 0 auto; display: flex; gap: 6px; font-size: 11px; font-weight: 400; color: var(--text-faint); font-family: var(--font-monospace); }
+.wcc-sb-count.needs { color: var(--text-normal); }
+.wcc-sb-repo,
+.wcc-sb-section,
+.wcc-sb-empty { padding: 0 10px 0 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-faint); }
+.wcc-sb-repo { font-size: 11px; line-height: 18px; }
+.wcc-sb-section { margin-top: 4px; font-size: 10px; line-height: 18px; text-transform: uppercase; letter-spacing: .5px; }
+.wcc-sb-empty { font-size: 11px; line-height: 20px; font-style: italic; }
+.wcc-sb-row {
+	display: flex; align-items: center; gap: 6px;
+	height: 20px; padding: 0 10px 0 24px; /* 12px past the header: one level */
+	cursor: pointer; white-space: nowrap;
+}
+.wcc-sb-row:focus-visible, .wcc-sb-head:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: -1px; }
+.wcc-sb-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wcc-sb-row.overseer .wcc-sb-name { font-weight: 600; }
+.wcc-sb-branch { flex: 0 0 auto; font-family: var(--font-monospace); font-size: 11px; color: var(--text-faint); }
+.wcc-sb-chip {
+	flex: 0 0 auto; font-size: 10px; line-height: 14px; padding: 0 4px;
+	border: 1px solid var(--background-modifier-border); border-radius: 4px; color: var(--text-muted);
+}
+.wcc-sb-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+.wcc-sb-dot.dot-running { background: var(--color-green); }
+.wcc-sb-dot.dot-refused { background: var(--color-red); }
+/* Only "needs you" gets the halo — it is the one state meant to survive peripheral vision. */
+.wcc-sb-dot.dot-needs { background: var(--color-yellow); box-shadow: 0 0 0 3px var(--background-modifier-hover); }
+
 /* Theme switcher select in the top bar. */
 .wcc-topbar select.wcc-theme-sel {
 	background: var(--background-secondary-alt);
@@ -891,3 +957,23 @@ html, body {
 }
 .wcc-autoclose-actions button:hover { background: var(--background-modifier-border); border-color: var(--text-normal); }
 .wcc-autoclose-keep { border-color: var(--text-normal) !important; font-weight: 600 !important; }
+
+/* ---- Sidebar, per theme. The token remap above already re-tints it; these match each theme's
+   own personality the way its top bar and tabs do. Olympus is the one that needs care: it is
+   light and draws with near-black rules rather than fills. ---- */
+:root[data-theme="olympus"] .wcc-sidebar {
+	border-right: 3px solid #0b0b0b;
+	font-family: 'JetBrains Mono', Consolas, monospace;
+}
+:root[data-theme="olympus"] .wcc-sb-head { text-transform: uppercase; font-weight: 700; color: #0b0b0b; }
+:root[data-theme="olympus"] .wcc-sb-group { border-left-width: 4px; }
+:root[data-theme="olympus"] .wcc-sb-chip { border: 2px solid #0b0b0b; border-radius: 0; color: #0b0b0b; font-weight: 700; }
+:root[data-theme="hades"] .wcc-sidebar {
+	background: #0a1929;
+	border-right: 2px solid #2c5179;
+	font-family: 'JetBrains Mono', Consolas, monospace;
+}
+:root[data-theme="hades"] .wcc-sb-head { text-transform: uppercase; }
+:root[data-theme="hades"] .wcc-sb-chip { border-radius: 0; border-color: #2c5179; }
+:root[data-theme="iris"] .wcc-sidebar { border-right: 1px solid #6d3fd1; }
+:root[data-theme="iris"] .wcc-sb-group.active { border-left-color: #ff4fd8; }
