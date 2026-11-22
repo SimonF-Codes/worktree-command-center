@@ -73,9 +73,18 @@ describe('takeClaim', () => {
 		expect(claims.takeClaim(dir, 'C:/dev/app', who('s1')).ok).toBe(true);
 		expect(claims.takeClaim(dir, 'C:/dev/other', who('s2')).ok).toBe(true);
 	});
-	it('the same checkout spelled differently is the same claim', () => {
+	// Windows spellings only collapse on Windows: on Linux a drive-letter path with backslashes is
+	// a relative filename, so path.resolve makes it a different checkout and the second take
+	// succeeds. The platform-independent half of the same property is the case fold, which
+	// claims-core applies on every platform on purpose — over-exclusion is the safe direction.
+	it.runIf(process.platform === 'win32')('the same checkout spelled differently is the same claim (Windows spellings)', () => {
 		claims.takeClaim(dir, 'C:\\dev\\App\\', who('s1'));
 		expect(claims.takeClaim(dir, 'c:/dev/app', who('s2')).ok).toBe(false);
+	});
+	it('a checkout differing only in case is the same claim — checkoutId lower-cases everywhere', () => {
+		const mixed = path.resolve(path.sep + 'dev', 'App');
+		expect(claims.takeClaim(dir, mixed, who('s1')).ok).toBe(true);
+		expect(claims.takeClaim(dir, mixed.toLowerCase(), who('s2')).ok).toBe(false);
 	});
 	it('writes START to the workspace board feed when it acquires, not when it renews', () => {
 		claims.takeClaim(dir, checkout, who('s1'), { now: 1000, boardDir: board });
