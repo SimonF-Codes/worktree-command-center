@@ -1,10 +1,12 @@
 import type { RoleLookup } from '../core/delegation';
-import { buildSidebar, liveRanks, parseTeamSort, ResortClock, sidebarSignature, TEAM_SORTS, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from './sidebar-model';
+import { applyCollapseAll, buildSidebar, collapseAllAction, liveRanks, parseTeamSort, ResortClock, sidebarSignature, TEAM_SORTS, type DotState, type SidebarGroup, type SidebarLineage, type SidebarRow, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from './sidebar-model';
 
 export interface SidebarDeps {
 	/** The workspaces, in tab order — the same list the tab strip draws. */
 	workspaces: () => Array<{ id: string; name: string; repo?: string }>;
 	activeId: () => string;
+	/** A workspace header was clicked: switch to it — what a tab click does. */
+	onSwitch: (workspaceId: string) => void;
 	/** One workspace's floor: its grid's floorState() and whether its sessions are restored yet.
 	 *  Null when the workspace has no grid. */
 	floor: (workspaceId: string) => { live: boolean; sessions: SidebarSession[]; lineage?: SidebarLineage[]; proposals?: Record<string, number> } | null;
@@ -26,9 +28,10 @@ const REFRESH_MS = 1500;
 const SORT_KEY = 'wcc-team-sort';
 const DOT_TITLE: Record<DotState, string> = { needs: 'Needs you', refused: 'Wants help — looks errored', running: 'Running', idle: 'Done — idle' };
 
-/** V2 UI step 2: a read-only sidebar beside the tab strip. A second VIEW of floorState(), never a
- *  second source of truth — it holds nothing but which groups the viewer collapsed. Clicking a row
- *  reveals that tile; there is no other action. */
+/** V2 UI step 2: a sidebar beside (or, with `v2.hideTabs`, instead of) the tab strip. A second VIEW
+ *  of floorState(), never a second source of truth — it holds nothing but which groups the viewer
+ *  collapsed. Clicking a workspace header switches to it; only its caret collapses it. Clicking a
+ *  row reveals that tile. */
 export class Sidebar {
 	private el: HTMLElement | null = null;
 	private timer: number | null = null;
@@ -82,6 +85,7 @@ export class Sidebar {
 		const el = this.el!;
 		const scroll = el.scrollTop;
 		el.empty();
+		this.tools(el, groups);
 		if (teamView) this.sortControl(el);
 		for (const g of groups) this.renderGroup(el, g);
 		el.scrollTop = scroll;
@@ -90,24 +94,30 @@ export class Sidebar {
 	private renderGroup(parent: HTMLElement, g: SidebarGroup): void {
 		const box = parent.createDiv({ cls: 'wcc-sb-group' });
 		box.toggleClass('active', g.active);
-		const head = box.createDiv({ cls: 'wcc-sb-head', attr: { role: 'button', tabindex: '0', 'aria-expanded': String(!g.collapsed) } });
-		head.createSpan({ cls: 'wcc-sb-caret', text: g.collapsed ? '▸' : '▾' });
+		const head = box.createDiv({ cls: 'wcc-sb-head', attr: { role: 'button', tabindex: '0', title: `Switch to ${g.name}` } });
+		// The caret is its own button and the only thing that collapses; the header switches.
+		const verb = g.collapsed ? 'Expand' : 'Collapse';
+		const caret = head.createEl('button', {
+			cls: 'wcc-sb-caret', text: g.collapsed ? '▸' : '▾',
+			attr: { type: 'button', 'aria-expanded': String(!g.collapsed), 'aria-label': `${verb} ${g.name}`, title: `${verb} ${g.name}` },
+		});
+		this.ownButton(caret, () => {
+			if (this.collapsed.has(g.id)) this.collapsed.delete(g.id); else this.collapsed.add(g.id);
+			this.refresh();
+		});
 		// A collapsed group keeps its worst state on the header: collapsing never hides that
 		// something needs you.
 		if (g.collapsed && g.worst) this.dot(head, g.worst);
 		head.createSpan({ cls: 'wcc-sb-ws', text: g.name });
-		if (g.repo) head.setAttribute('title', `${g.name} — linked to ${g.repo}`);
+		if (g.repo) head.setAttribute('title', `Switch to ${g.name} — linked to ${g.repo}`);
 		if (g.collapsed) {
 			const c = head.createSpan({ cls: 'wcc-sb-counts' });
 			if (g.counts.needs) c.createSpan({ cls: 'wcc-sb-count needs', text: `⏳${g.counts.needs}` });
 			if (g.counts.done) c.createSpan({ cls: 'wcc-sb-count', text: `✓${g.counts.done}` });
 		}
-		const toggle = (): void => {
-			if (this.collapsed.has(g.id)) this.collapsed.delete(g.id); else this.collapsed.add(g.id);
-			this.refresh();
-		};
-		head.addEventListener('click', toggle);
-		head.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+		const go = (): void => this.deps.onSwitch(g.id);
+		head.addEventListener('click', go);
+		head.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
 		if (g.collapsed) return;
 
 		if (g.repo) box.createDiv({ cls: 'wcc-sb-repo', text: `repo: ${g.repo}`, attr: { title: g.repo } });
@@ -137,6 +147,32 @@ export class Sidebar {
 				attr: g.live ? {} : { title: 'Its saved sessions are restored the first time you switch to this workspace' },
 			});
 		}
+	}
+
+	/** The sidebar's own header area: one collapse-all / expand-all button whose label follows
+	 *  whether anything is still expanded. */
+	private tools(parent: HTMLElement, groups: SidebarGroup[]): void {
+		const bar = parent.createDiv({ cls: 'wcc-sb-tools' });
+		const ids = groups.map((g) => g.id);
+		const collapse = collapseAllAction(ids, this.collapsed) === 'collapse';
+		const b = bar.createEl('button', {
+			cls: 'wcc-sb-tool', text: collapse ? '▾ Collapse all' : '▸ Expand all',
+			attr: { type: 'button', title: collapse ? 'Collapse every workspace — each keeps its worst state on its header' : 'Expand every workspace' },
+		});
+		b.addEventListener('click', () => {
+			const next = applyCollapseAll(ids, this.collapsed);
+			this.collapsed.clear();
+			for (const id of next) this.collapsed.add(id);
+			this.refresh();
+		});
+	}
+
+	/** A real <button> nested in the clickable header: its click and its Enter/Space are its own,
+	 *  never the header's. Enter/Space are left to the button's native activation (which fires its
+	 *  click) and only kept from bubbling to the header, so one key press acts exactly once. */
+	private ownButton(b: HTMLElement, act: () => void): void {
+		b.addEventListener('click', (e) => { e.stopPropagation(); act(); });
+		b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); });
 	}
 
 	/** Lineage · Triage · Needs-you pinned. Choosing a mode re-sorts at once — that reorder is

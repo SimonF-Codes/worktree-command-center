@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSidebar, dotFor, liveRanks, parseSidebarEnabled, parseTeamSort, parseTeamView, rankKey, ResortClock, RESORT_MS, sidebarSignature, OVERSEER_ID, TEAM_SORTS, type DotState, type SidebarLineage, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from '../src/ui/sidebar-model';
+import { applyCollapseAll, buildSidebar, collapseAllAction, dotFor, liveRanks, parseSidebarEnabled, parseTeamSort, parseTeamView, rankKey, ResortClock, RESORT_MS, sidebarSignature, OVERSEER_ID, TEAM_SORTS, type DotState, type SidebarLineage, type SidebarSession, type SidebarWorkspaceInput, type TeamLine, type TeamSort } from '../src/ui/sidebar-model';
 
 const s = (id: number, state: string, over: Partial<SidebarSession> = {}): SidebarSession =>
 	({ id, name: `t${id}`, branch: `wt/${id}`, state, remoteOn: false, ...over });
@@ -333,5 +333,28 @@ describe('buildSidebar — team view with v2.managers', () => {
 		const g = buildSidebar([ws('w', sessions, { lineage })], new Set(), { teamView: true })[0]!;
 		expect(g.team!.tree.some((l) => l.row.manager)).toBe(false);
 		expect(g.team!.unassigned).toEqual([]);
+	});
+});
+
+describe('collapse all / expand all', () => {
+	const ids = ['a', 'b', 'c'];
+	it('collapses while anything is expanded', () => {
+		expect(collapseAllAction(ids, new Set())).toBe('collapse');
+		expect(collapseAllAction(ids, new Set(['a', 'b']))).toBe('collapse');
+		expect([...applyCollapseAll(ids, new Set(['a']))].sort()).toEqual(ids);
+	});
+	it('expands once every group is collapsed', () => {
+		expect(collapseAllAction(ids, new Set(ids))).toBe('expand');
+		expect(applyCollapseAll(ids, new Set(ids)).size).toBe(0);
+	});
+	it('ignores a stale id for a workspace that is gone', () => {
+		expect(collapseAllAction(ids, new Set(['gone']))).toBe('collapse');
+		expect(collapseAllAction(['a'], new Set(['a', 'gone']))).toBe('expand');
+		expect(applyCollapseAll(['a'], new Set(['a', 'gone'])).size).toBe(0);
+	});
+	it('collapses every group buildSidebar then draws collapsed, worst dot kept', () => {
+		const groups = buildSidebar([ws('a', [s(1, 'prompt')]), ws('b', [s(2, 'running')])], applyCollapseAll(['a', 'b'], new Set()));
+		expect(groups.map((g) => g.collapsed)).toEqual([true, true]);
+		expect(groups.map((g) => g.worst)).toEqual(['needs', 'running']);
 	});
 });

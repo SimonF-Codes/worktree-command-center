@@ -425,7 +425,23 @@ html, body {
 }
 .wcc-sb-group.active .wcc-sb-head { color: var(--text-normal); }
 .wcc-sb-head:hover, .wcc-sb-row:hover { background: var(--background-modifier-hover); }
-.wcc-sb-caret { flex: 0 0 auto; width: 10px; color: var(--text-faint); font-size: 10px; }
+/* The caret is its own button (it alone collapses; the header switches), so it resets the
+   button chrome and takes a slightly wider hit area than the glyph. */
+.wcc-sb-caret {
+	flex: 0 0 auto; width: 14px; height: 18px; padding: 0; margin: 0 -2px;
+	background: transparent; border: 0; border-radius: 3px;
+	color: var(--text-faint); font: inherit; font-size: 10px; line-height: 1; cursor: pointer;
+}
+.wcc-sb-caret:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.wcc-sb-caret:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: 0; }
+/* Collapse all / expand all: one quiet control at the top of the sidebar. */
+.wcc-sb-tools { display: flex; justify-content: flex-end; padding: 0 8px 4px; }
+.wcc-sb-tool {
+	background: transparent; border: 0; border-radius: 4px; padding: 2px 6px;
+	color: var(--text-faint); font: inherit; font-size: 11px; cursor: pointer;
+}
+.wcc-sb-tool:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.wcc-sb-tool:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: -1px; }
 .wcc-sb-ws { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wcc-sb-counts { flex: 0 0 auto; display: flex; gap: 6px; font-size: 11px; font-weight: 400; color: var(--text-faint); font-family: var(--font-monospace); }
 .wcc-sb-count.needs { color: var(--text-normal); }

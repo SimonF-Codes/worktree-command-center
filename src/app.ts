@@ -516,6 +516,7 @@ async function main(): Promise<void> {
 		const sidebar = new Sidebar({
 			workspaces: () => workspaces,
 			activeId: () => activeId,
+			onSwitch: (id) => void switchTo(id),
 			floor: (id) => {
 				const g = grids.get(id);
 				if (!g) return null;

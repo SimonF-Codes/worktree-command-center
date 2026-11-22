@@ -297,3 +297,14 @@ export function buildSidebar(workspaces: SidebarWorkspaceInput[], collapsed: Rea
 export function sidebarSignature(groups: SidebarGroup[]): string {
 	return JSON.stringify(groups);
 }
+
+/** The sidebar's one collapse-all / expand-all control. While anything is expanded it collapses
+ *  everything; once every group is collapsed it expands them all. */
+export function collapseAllAction(groupIds: readonly string[], collapsed: ReadonlySet<string>): 'collapse' | 'expand' {
+	return groupIds.some((id) => !collapsed.has(id)) ? 'collapse' : 'expand';
+}
+
+/** What `collapsed` becomes when that control is pressed: every rendered group, or none. */
+export function applyCollapseAll(groupIds: readonly string[], collapsed: ReadonlySet<string>): Set<string> {
+	return collapseAllAction(groupIds, collapsed) === 'collapse' ? new Set(groupIds) : new Set();
+}
