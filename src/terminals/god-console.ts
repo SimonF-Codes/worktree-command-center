@@ -257,6 +257,9 @@ export class GodConsole {
 			COS_COORD_DIR: this.opts.coordDir,
 			COS_TERMINAL_ID: this.opts.terminalId ?? '0',
 			COS_TERMINAL_NAME: this.opts.instanceName ?? 'Kane',
+			// Attribution only: what a session this console spawns records as its parent. Authority is
+			// COS_ROLE, never this.
+			COS_SESSION_ID: this.opts.sessionId,
 			COS_ROLE: 'god',
 			PATH: sidecarDir + path.delimiter + (process.env.PATH ?? ''),
 		};

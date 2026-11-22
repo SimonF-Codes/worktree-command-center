@@ -8,6 +8,8 @@ import * as path from 'node:path';
 import { parseOutboxMessage, spawnExtrasOf } from '../src/terminals/god';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
 import { sessionRoleSlug } from '../src/terminals/role-library';
+import { isParentSessionVar } from '../src/terminals/session-env';
+const store = require('../pty-sidecar/coord-store.cjs');
 
 /** A counter-backed mint, so a test can see exactly how many ids were created. */
 function countingMint(): { mint: () => string; count: () => number } {
@@ -158,5 +160,42 @@ describe('spawn --role (E4)', () => {
 	it('an unknown slug is passed through unvalidated — the role loader is what falls back', () => {
 		const { msg } = spawnViaCli(['app', '--task', 'x', '--role', 'no-such-role']);
 		expect(sessionRoleSlug(spawnExtrasOf(msg).roleSlug, false)).toBe('no-such-role');
+	});
+});
+
+describe('from on outbox requests (E5)', () => {
+	it('a spawn request carries its sender\'s COS_SESSION_ID, and it becomes the child\'s parentSessionId', () => {
+		const { raw, msg } = spawnViaCli(['app', '--task', 'do X'], { COS_SESSION_ID: 'kane-sess-1' });
+		expect(raw.from).toBe('kane-sess-1');
+		expect(msg.from).toBe('kane-sess-1');
+		const child = restoreIdentity(JSON.parse(JSON.stringify(identityFields(newIdentity(spawnExtrasOf(msg))))));
+		expect(child.parentSessionId).toBe('kane-sess-1');
+	});
+
+	it('with no COS_SESSION_ID, from is null and the child has no parent', () => {
+		const { raw, msg } = spawnViaCli(['app', '--task', 'do X']);
+		expect(raw.from).toBeNull();
+		expect(spawnExtrasOf(msg)).not.toHaveProperty('parentSessionId');
+	});
+
+	it('every outbox request kind carries from', () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'from-'));
+		store.tell(dir, 'A', 'hi', 's1');
+		store.watch(dir, 'A', 'n', 's1');
+		store.spawn(dir, 'app', '', 'x', '', '', '', { from: 's1' });
+		store.rename(dir, 'A', 'B', 's1');
+		store.close(dir, 'A', 's1');
+		store.personality(dir, 's1');
+		store.newTab(dir, { name: 't' }, 's1');
+		const out = path.join(dir, 'god-outbox');
+		const msgs = fs.readdirSync(out).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(path.join(out, f), 'utf8')));
+		expect(msgs).toHaveLength(7);
+		expect(msgs.every((m) => m.from === 's1')).toBe(true);
+	});
+
+	it('COS_SESSION_ID is never inherited from the app\'s environment', () => {
+		// session-env strips every COS_*; each spawn path sets its own. A tile that inherited the
+		// overseer's id would attribute its own spawns to Kane.
+		expect(isParentSessionVar('COS_SESSION_ID')).toBe(true);
 	});
 });

@@ -102,28 +102,32 @@ function appendChat(dir, terminal, message) {
 // channel, not an integration point: a process outside the app uses the connector channel
 // (docs/api.md, wcc-client) — writing here instead would be impersonating Kane's authority
 // (docs/architecture.md, "Two ways in"). Record shapes: src/terminals/god.ts OutboxMessage.
-function dropOutbox(dir, obj) {
+//
+// Every request carries `from`: the sender's COS_SESSION_ID, or null when it has none (an older
+// app, a shell outside the app). Attribution only — the app records it as the spawned session's
+// parent; it never decides what a request is allowed to do.
+function dropOutbox(dir, obj, from) {
   const outbox = path.join(dir, 'god-outbox');
   fs.mkdirSync(outbox, { recursive: true });
   const ts = Date.now();
   const rand = Math.random().toString(36).slice(2, 8);
   const final = path.join(outbox, `${ts}-${rand}.json`);
   const tmp = path.join(outbox, `.${ts}-${rand}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify({ ts, ...obj }), 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify({ ts, ...obj, from: from || null }), 'utf8');
   fs.renameSync(tmp, final);
   return final;
 }
-function tell(dir, target, message) { return dropOutbox(dir, { kind: 'tell', target, message }); }
-function watch(dir, target, note) { return dropOutbox(dir, { kind: 'watch', target, note }); }
-// extra: { workstream, role } — fields added after the positional ones, null when unset.
+function tell(dir, target, message, from) { return dropOutbox(dir, { kind: 'tell', target, message }, from); }
+function watch(dir, target, note, from) { return dropOutbox(dir, { kind: 'watch', target, note }, from); }
+// extra: { workstream, role, from } — fields added after the positional ones, null when unset.
 function spawn(dir, repo, base, task, model, effort, name, extra = {}) {
-  return dropOutbox(dir, { kind: 'spawn', repo, base: base || null, task, model: model || null, effort: effort || null, name: name || null, workstream: extra.workstream || null, role: extra.role || null });
+  return dropOutbox(dir, { kind: 'spawn', repo, base: base || null, task, model: model || null, effort: effort || null, name: name || null, workstream: extra.workstream || null, role: extra.role || null }, extra.from);
 }
-function rename(dir, target, to) { return dropOutbox(dir, { kind: 'rename', target, name: to }); }
-function personality(dir) { return dropOutbox(dir, { kind: 'personality' }); }
-function close(dir, target) { return dropOutbox(dir, { kind: 'close', target }); }
+function rename(dir, target, to, from) { return dropOutbox(dir, { kind: 'rename', target, name: to }, from); }
+function personality(dir, from) { return dropOutbox(dir, { kind: 'personality' }, from); }
+function close(dir, target, from) { return dropOutbox(dir, { kind: 'close', target }, from); }
 // `fields` is new-tab-core.cjs buildNewTabFields' output: { name, repo, newRepo, parent, … }.
-function newTab(dir, fields) { return dropOutbox(dir, { kind: 'new-tab', ...fields }); }
+function newTab(dir, fields, from) { return dropOutbox(dir, { kind: 'new-tab', ...fields }, from); }
 
 // Take back a request the app has not drained. The app claims a drop by renaming it into .done/
 // before acting on it (terminals-grid.ts drainOutbox), so exactly one of the two wins: true means

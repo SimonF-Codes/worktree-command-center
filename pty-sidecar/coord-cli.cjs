@@ -55,7 +55,7 @@ function newTab(dir) {
   const b = newTabCore.buildNewTabFields(p.name, p.flags, (x) => path.resolve(x));
   if (!b.ok) newTabFail(b.reason);
   let file;
-  try { file = store.newTab(dir, b.fields); } catch (e) { newTabFail(`could not write the request: ${e.message}`); }
+  try { file = store.newTab(dir, b.fields, env('COS_SESSION_ID', '')); } catch (e) { newTabFail(`could not write the request: ${e.message}`); }
   const id = path.basename(file, '.json');
   const waitMs = Number(env('COS_COORD_NEW_TAB_WAIT_MS', String(newTabCore.NEW_TAB_WAIT_MS)));
   const r = store.waitForTellReceipt(dir, id, { waitMs });
@@ -77,6 +77,8 @@ function main() {
   const dir = env('COS_COORD_DIR');
   const terminal = env('COS_TERMINAL_NAME', `pid${process.pid}`);
   const holderId = Number(env('COS_TERMINAL_ID', String(process.pid)));
+  // Who is asking, for the outbox's `from`. Set by the app per spawn path; attribution only.
+  const from = env('COS_SESSION_ID', '');
   if (process.argv[2] === 'new-tab') { try { return newTab(dir); } catch (e) { return newTabFail(`failed: ${e.message}`); } }
   if (!dir) { process.exit(0); } // coordination not configured → allow
   const [cmd, resource, ...rest] = process.argv.slice(2);
@@ -107,7 +109,7 @@ function main() {
     const target = resource;
     const message = rest.join(' ');
     requireArgs('tell', Boolean(target && message), '<target> "<message>"');
-    const file = store.tell(dir, target, message);
+    const file = store.tell(dir, target, message, from);
     const id = path.basename(file, '.json');
     const waitMs = Number(env('COS_COORD_TELL_WAIT_MS', String(core.TELL_WAIT_MS)));
     const r = store.waitForTellReceipt(dir, id, { waitMs });
@@ -121,7 +123,7 @@ function main() {
     const target = resource;
     const note = flag(rest, '--note') || '';
     requireArgs('watch', Boolean(target && note), '<target> --note "<note>"');
-    store.watch(dir, target, note);
+    store.watch(dir, target, note, from);
     process.exit(0);
   }
 
@@ -136,7 +138,7 @@ function main() {
     const workstream = flag(rest, '--workstream') || '';
     const role = flag(rest, '--role') || ''; // passed through; the app's role loader decides what it resolves to
     requireArgs('spawn', Boolean(repo && task), '<repo> --task "<task>"');
-    store.spawn(dir, repo, base, task, model, effort, name, { workstream, role });
+    store.spawn(dir, repo, base, task, model, effort, name, { workstream, role, from });
     process.exit(0);
   }
 
@@ -145,7 +147,7 @@ function main() {
     const target = resource;
     const to = flag(rest, '--to') || '';
     requireArgs('rename', Boolean(target && to.trim()), '<target> --to "<name>"');
-    store.rename(dir, target, to);
+    store.rename(dir, target, to, from);
     process.exit(0);
   }
 
@@ -153,7 +155,7 @@ function main() {
     if (env('COS_ROLE') !== 'god') denyGodOnly('close'); // only GOD may end a worker's session
     const target = resource;
     requireArgs('close', Boolean(target && target.trim()), '<target>');
-    const file = store.close(dir, target);
+    const file = store.close(dir, target, from);
     const id = path.basename(file, '.json');
     // Parking runs git status/add/commit first; its worst case (~38s) fits inside tell's window.
     const waitMs = Number(env('COS_COORD_CLOSE_WAIT_MS', String(core.TELL_WAIT_MS)));
@@ -169,7 +171,7 @@ function main() {
 
   if (cmd === 'personality') {
     if (env('COS_ROLE') !== 'god') denyGodOnly('personality'); // only Kane toggles his own personality
-    store.personality(dir);
+    store.personality(dir, from);
     process.exit(0);
   }
 

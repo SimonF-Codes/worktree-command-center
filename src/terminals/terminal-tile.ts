@@ -817,6 +817,9 @@ export class TerminalTile implements StageTile {
 			COS_COORD_DIR: this.opts.coordDir,
 			COS_TERMINAL_ID: String(this.opts.tileId),
 			COS_TERMINAL_NAME: this.displayName,
+			// Identity for message attribution ONLY (the outbox's `from`) — never an authority check.
+			// Set here, per spawn path, like every COS_*: session-env strips any inherited one.
+			COS_SESSION_ID: this.opts.identity.sessionId,
 			PATH: sidecarDir + path.delimiter + (process.env.PATH ?? ''),
 		};
 		const probe = new ResumeProbe(4096); // the last bytes — used to detect the --continue "no conversation" exit
