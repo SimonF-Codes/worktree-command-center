@@ -3,9 +3,9 @@
  *  role-loader.ts for the thin IO wrapper), so every rule below unit-tests directly.
  *
  *  A role file is governed by the vault's `_meta/agents/Charter.md`: frontmatter with a stable
- *  `role:` slug plus a `status:`, then prose. This module only cares about three of those fields
- *  — the slug is the join key, the status gates loading, and the body becomes the prompt. The
- *  rest of the Charter (which headings must be present, the authority ladder) is the Custodian's
+ *  `role:` slug plus a `status:`, then prose. The slug is the join key, the status gates loading,
+ *  and the body becomes the prompt; `authority:` sets a spawn's isolation ceiling (core/isolation)
+ *  and, with `spawns:`, decides delegation (core/delegation). The rest of the Charter (which headings must be present, the authority ladder) is the Custodian's
  *  business, not this app's: an app that enforced the schema would refuse to load a role file a
  *  human just edited, which is exactly the failure mode the built-in fallback exists to avoid.
  *
@@ -43,7 +43,18 @@ export function parseRoleFile(text: string): ParsedRoleFile | null {
 	const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
 	if (end === -1) return null;
 	const frontmatter: Record<string, string> = {};
+	// The key a YAML block list (`spawns:` then `  - worker-terminal` lines) belongs to: set when a
+	// key's value is empty, kept while list items follow. Items are comma-joined into its value —
+	// the same form an inline `a, b` list has — so a reader parses one shape (delegation parseSpawns).
+	let listKey: string | null = null;
 	for (const line of lines.slice(1, end)) {
+		const item = /^\s*-\s+(.*)$/.exec(line);
+		if (item && listKey) {
+			const v = item[1].replace(/\s+#.*$/, '').trim();
+			if (v) frontmatter[listKey] = frontmatter[listKey] ? `${frontmatter[listKey]}, ${v}` : v;
+			continue;
+		}
+		if (!/^\s*(#|$)/.test(line)) listKey = null; // a comment or blank line keeps the list open
 		const at = line.indexOf(':');
 		if (at <= 0) continue;
 		const key = line.slice(0, at).trim().toLowerCase();
@@ -53,6 +64,7 @@ export function parseRoleFile(text: string): ParsedRoleFile | null {
 		// "alpha    # stable slug, lowercase-hyphen…". Only ` #` (whitespace first) counts, so a
 		// value that legitimately contains a hash survives.
 		frontmatter[key] = line.slice(at + 1).replace(/\s+#.*$/, '').trim();
+		if (frontmatter[key] === '' && !/^\s/.test(line)) listKey = key;
 	}
 	return { frontmatter, body: lines.slice(end + 1).join('\n').replace(/^\n+/, '').trimEnd() };
 }
