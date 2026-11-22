@@ -470,11 +470,13 @@ html, body {
 .wcc-sb-sort button:focus-visible { outline: 1px solid var(--cos-accent); outline-offset: -2px; }
 /* The pinned strip's header reads as needs-you text, never a filled row (StateDot: no state fills). */
 .wcc-sb-section.wcc-sb-pin { color: var(--color-yellow); }
-/* Team view: why an UNASSIGNED root is unassigned, one quiet line under it, aligned to its name. */
+/* Team view: why an UNASSIGNED root is unassigned, quiet text under it, aligned to its name. It wraps
+   to as many lines as it needs and never truncates: a reason you cannot read is no reason, and only
+   the name truncates (SessionRow). */
 .wcc-sb-reason {
 	padding: 0 10px 0 calc(37px + var(--sb-depth, 0) * 12px); margin-top: -3px;
 	font-family: var(--font-monospace); font-size: 10px; line-height: 14px; color: var(--text-faint);
-	white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+	white-space: normal; overflow-wrap: anywhere;
 }
 
 /* Theme switcher select in the top bar. */
