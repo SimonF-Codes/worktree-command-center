@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -7,6 +7,10 @@ import { gatherPruneFacts, executePrune, readSavedTerminals, explainRemoveFailur
 import { findLinks } from '../src/terminals/worktree-manager';
 import { planPrune, describePrunePlan } from '../src/prune-worktrees';
 import { projectDirName } from '../src/terminals/resume-target';
+
+// Real git work: on a loaded machine the 5s/10s defaults fail these on a hook timeout while they
+// pass every time in isolation. Per-file on purpose — only the IO suites need the headroom.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 // Real git, real directories, all inside a temp root — never a real repo. One repo, its
 // worktrees nested inside it, one for each way a branch can have landed (or not).

@@ -30,7 +30,7 @@ import { PerfMonitor } from './ui/perf-monitor';
 import { AttentionWidget } from './ui/attention-widget';
 import { WorkspaceBar } from './ui/workspace-bar';
 import { Sidebar } from './ui/sidebar';
-import { parseSidebarEnabled } from './ui/sidebar-model';
+import { parseSidebarEnabled, parseTeamView } from './ui/sidebar-model';
 import { SettingsPanel } from './ui/settings-panel';
 import { ChangelogPanel } from './ui/changelog-panel';
 import { MemoryPanel } from './ui/memory-panel';
@@ -320,6 +320,7 @@ async function main(): Promise<void> {
 			onOverseerNameChange: (name) => grids.forEach((g) => g.setOverseerName(name)),
 			onAutoCloseChange: (raw) => { autoCloseCfg = parseAutoClose(raw); autoCloser?.apply(); },
 			onSidebarChange: (on) => applySidebar(on),
+			onTeamViewChange: (on) => { teamView = on; sidebar.refresh(); },
 			targets: {
 				list: () => repos,
 				move: (r) => moveTargetInteractive(r),
@@ -486,13 +487,16 @@ async function main(): Promise<void> {
 		// --- V2 UI step 2: the sidebar (Settings → Sidebar, config `v2.sidebar`, default OFF). A read-only
 		// second view of each grid's floorState(), beside the tab strip — which it does not touch. Off,
 		// nothing is created and terminalRoot keeps its plain column layout.
+		// V2 Team Floor step 7: `v2.teamView` (default off) nests each workspace's rows by lineage.
+		let teamView = parseTeamView(cfg.v2);
 		const sidebar = new Sidebar({
 			workspaces: () => workspaces,
 			activeId: () => activeId,
 			floor: (id) => {
 				const g = grids.get(id);
-				return g ? { live: g.sessionsAreLive(), sessions: g.floorState() } : null;
+				return g ? { live: g.sessionsAreLive(), sessions: g.floorState(), lineage: teamView ? g.sessionLineage() : undefined } : null;
 			},
+			teamView: () => teamView,
 			onReveal: (id, tileId) => void (async () => {
 				if (id !== activeId) await switchTo(id);
 				if (id === activeId && tileId >= 0) activeGrid.revealTile(tileId); // the overseer row (-1) only switches
