@@ -18,7 +18,9 @@ export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracod
 export type OutboxMessage =
 	| { kind: 'tell'; target: string; message: string }
 	| { kind: 'watch'; target: string; note: string }
-	| { kind: 'spawn'; repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null }
+	// workstream / role: `spawn --workstream` / `--role`, null when not given (and in drops from an
+	// older cos-coord). from: the requesting session's COS_SESSION_ID — who spawned this one.
+	| { kind: 'spawn'; repo: string; base: string | null; task: string; model: string | null; effort: string | null; name: string | null; workstream: string | null; role: string | null; from: string | null }
 	| { kind: 'rename'; target: string; name: string }
 	| { kind: 'close'; target: string }
 	| { kind: 'personality' }
@@ -26,10 +28,32 @@ export type OutboxMessage =
 	// field comes back on the receipt `cos-coord new-tab` blocks on rather than as a silent drop.
 	| { kind: 'new-tab'; request: Record<string, unknown> };
 
+/** What the app files on god-outbox/.receipts/<id>.json for a `spawn`, read by coord-core's
+ *  spawnOutcome. `spawned` carries the identity the caller just created. */
+export type SpawnReceipt =
+	| { ok: true; spawned: { terminal: string; branch: string; sessionId: string } }
+	| { ok: false; reason: string };
+
+/** Pure: the receipt for one spawn attempt — the new session, or why there is none. */
+export function spawnReceipt(spawned: { name: string; branch: string; sessionId: string } | null, failReason: string): SpawnReceipt {
+	return spawned
+		? { ok: true, spawned: { terminal: spawned.name, branch: spawned.branch, sessionId: spawned.sessionId } }
+		: { ok: false, reason: failReason };
+}
+
+/** Pure: what a parsed spawn request asks the app to record about the session it creates. */
+export function spawnExtrasOf(msg: Extract<OutboxMessage, { kind: 'spawn' }>): { workstreamId?: string; roleSlug?: string; parentSessionId?: string } {
+	return {
+		...(msg.from ? { parentSessionId: msg.from } : {}),
+		...(msg.workstream ? { workstreamId: msg.workstream } : {}),
+		...(msg.role ? { roleSlug: msg.role } : {}),
+	};
+}
+
 /** Parse one god-outbox JSON message into a typed command. An untagged {target,message} is
  *  read as a tell (back-compat). Returns null on malformed / missing fields. */
 export function parseOutboxMessage(text: string): OutboxMessage | null {
-	let o: { kind?: unknown; target?: unknown; message?: unknown; note?: unknown; repo?: unknown; base?: unknown; task?: unknown; model?: unknown; effort?: unknown; name?: unknown };
+	let o: { kind?: unknown; target?: unknown; message?: unknown; note?: unknown; repo?: unknown; base?: unknown; task?: unknown; model?: unknown; effort?: unknown; name?: unknown; workstream?: unknown; role?: unknown; from?: unknown };
 	try { o = JSON.parse(text); } catch { return null; }
 	if (!o || typeof o !== 'object') return null;
 	const kind = typeof o.kind === 'string' ? o.kind : 'tell';
@@ -51,7 +75,10 @@ export function parseOutboxMessage(text: string): OutboxMessage | null {
 			const model = typeof o.model === 'string' && o.model.trim() ? o.model.trim() : null;
 			const effort = typeof o.effort === 'string' && o.effort.trim() ? o.effort.trim().toLowerCase() : null;
 			const name = typeof o.name === 'string' && o.name.trim() ? o.name.trim() : null;
-			return { kind: 'spawn', repo: o.repo, base, task: o.task, model, effort, name };
+			const workstream = typeof o.workstream === 'string' && o.workstream.trim() ? o.workstream.trim() : null;
+			const role = typeof o.role === 'string' && o.role.trim() ? o.role.trim() : null;
+			const from = typeof o.from === 'string' && o.from.trim() ? o.from.trim() : null;
+			return { kind: 'spawn', repo: o.repo, base, task: o.task, model, effort, name, workstream, role, from };
 		}
 	} else if (kind === 'rename') {
 		if (typeof o.target === 'string' && typeof o.name === 'string' && o.target.trim() && o.name.trim()) {
@@ -214,10 +241,14 @@ export function godSystemPrompt(repos: GodRepo[], coordDir: string, overseerName
 		'    cos-coord watch "<exact terminal name>" --note "<what you will do when it finishes>"',
 		'    You get a [watch] line here when it goes idle (not while it is just paused on a prompt); then do the thing.',
 		'  - To open a NEW worktree terminal and start it on a task, run:',
-		'    cos-coord spawn "<repo>" --base "<branch>" --task "<first instruction>" [--model <alias-or-id>] [--effort low|medium|high|xhigh|max|ultracode] [--name "<terminal name>"]',
+		'    cos-coord spawn "<repo>" --base "<branch>" --task "<first instruction>" [--model <alias-or-id>] [--effort low|medium|high|xhigh|max|ultracode] [--name "<terminal name>"] [--role <slug>] [--workstream <id>]',
 		'    --base is optional (defaults to the repo\'s main). --model takes an alias (opus, sonnet, haiku,',
 		'    fable) or a full model id. Flags you omit inherit the user\'s toolbar dropdowns. Target names +',
-		'    paths are listed below.',
+		'    paths are listed below. --role picks the role file the session runs on (default: worker terminal);',
+		'    --workstream tags the session with the workstream it serves.',
+		'    It CONFIRMS before returning: exit 0 prints the new terminal\'s name, its branch and its session',
+		'    id; a non-zero exit means it was refused, or never picked up (2), or not confirmed (3) — do not',
+		'    re-run a spawn that exited 3 until floor/INDEX.md shows it did not appear, or you get a duplicate.',
 		'    A target marked [plain folder — no git] is NOT a repo: its terminal runs directly in that',
 		'    folder with no worktree and no branch, so --base is ignored and edits there are not isolated.',
 		'  - To rename a worker terminal, run:  cos-coord rename "<exact terminal name>" --to "<new name>"',

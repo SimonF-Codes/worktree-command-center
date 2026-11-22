@@ -93,8 +93,29 @@ function parseChatLine(line) {
   return { raw };
 }
 
+// `cos-coord spawn`'s exit: what a receipt (or its absence) means for the caller. A spawn used to
+// print nothing and exit 0 whether or not the app took it, so a caller could not tell accepted
+// from dropped and spawned a duplicate. r is waitForTellReceipt's result; withdrawn says whether a
+// timed-out request was taken back before the app claimed it (so it can never run late).
+// Exit codes match new-tab's: 0 spawned, 2 refused or withdrawn (known not to have happened),
+// 3 the app took it but never answered (it may still appear).
+function spawnOutcome(r, opts = {}) {
+  const repo = opts.repo || '?';
+  const secs = Math.round((opts.waitMs || 0) / 1000);
+  if (r && r.timedOut) {
+    if (opts.withdrawn) return { code: 2, err: `coord: spawn in "${repo}" was WITHDRAWN — the app never picked it up within ${secs}s, so nothing was spawned and nothing will be. Is the app running?` };
+    return { code: 3, err: `coord: spawn in "${repo}" was NOT confirmed — the app took it but gave no answer within ${secs}s; it may still appear. Check floor/INDEX.md before retrying` };
+  }
+  if (r && r.ok && r.spawned) {
+    const s = r.spawned;
+    const where = s.branch ? `on ${s.branch}` : '(folder — no branch)';
+    return { code: 0, out: `coord: spawned "${s.terminal}" ${where} — session ${s.sessionId}` };
+  }
+  return { code: 2, err: `coord: spawn in "${repo}" did NOT happen — ${(r && r.reason) || 'unknown reason'}` };
+}
+
 module.exports = {
-  WAIT_MS, POLL_MS, CLI_TTL_MS, GIT_TTL_MS, TELL_WAIT_MS, SEP,
+  WAIT_MS, POLL_MS, CLI_TTL_MS, GIT_TTL_MS, TELL_WAIT_MS, SEP, spawnOutcome,
   slug, parseGitOp, baseName, resolveTargetPath, gitResource,
   lockStatus, formatBoardLine, parseBoardLine, mergeEvents, taskLabel,
   formatChatLine, parseChatLine,

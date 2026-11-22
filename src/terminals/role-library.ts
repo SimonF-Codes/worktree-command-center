@@ -121,6 +121,15 @@ export function pickRole(index: RoleIndex, slug: string): RoleLookup {
 	return { ok: true, role };
 }
 
+/** Which role a terminal session runs on. An explicit slug wins — `spawn --role`, or a caller
+ *  deliberately starting some other agent — and is NOT checked here: an unknown or inactive one
+ *  falls back to the compiled default in role-loader, which logs why. With none, the target
+ *  decides: a folder is a Folder Terminal, a worktree a Worker Terminal. */
+export function sessionRoleSlug(roleSlug: string | undefined, folder: boolean | undefined): string {
+	const s = roleSlug?.trim();
+	return s ? s : (folder ? 'folder-terminal' : 'worker-terminal');
+}
+
 /** One runtime value the built-in builders used to interpolate into their prose. */
 export interface SessionFact {
 	label: string;
