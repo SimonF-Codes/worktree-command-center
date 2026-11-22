@@ -856,6 +856,27 @@ never mint the same id. `by` is the caller's `COS_SESSION_ID` (else its terminal
 The fold — and the `Workstream` / `Task` types — is `pty-sidecar/workstreams-core.cjs`, shared by
 `cos-coord`, the app and `wcc-team metrics`, so all three read one answer.
 
+### `attention.jsonl` — how long a session waited on you
+
+The attention classifier (prompt / menu → `input`, errored → `help`, idle → `done`, else `none`)
+runs every second in the mounted workspace. Since step 11 its result is also **recorded, as
+transitions only**: a state that persists for an hour is one line, not 3600. Keyed by `sessionId`;
+the overseer is included.
+
+```jsonl
+{"v":1,"ts":0,"ev":"boot"}
+{"v":1,"ts":0,"sessionId":"…","name":"wt-main-9","from":null,"to":"input"}
+{"v":1,"ts":0,"sessionId":"…","name":"wt-main-9","from":"input","to":"none"}
+{"v":1,"ts":0,"sessionId":"…","name":"wt-main-9","from":"none","to":"unobserved","why":"unmounted"}
+```
+
+An interval ends at the session's next line. `unobserved` ends one without starting another: the
+tile left the stage (`gone`), its workspace was switched away from (`unmounted` — only a mounted
+grid is classified), or the app quit cleanly (`quit`). A `boot` line precedes a process's first
+record, so an interval still open at the next boot — the app crashed — is reported as
+**unknown-length**, never stretched across the hours the app was closed. Blocked time is the sum of
+`input` + `help`. Written whatever `v2.projectPanel` says. Model: `src/core/attention-log.ts`.
+
 ### Isolation modes
 
 Where a new session in a **repo** target works is decided by `decideIsolation()`

@@ -299,6 +299,9 @@ async function main(): Promise<void> {
 		// constructor, so a workspace nobody has opened this launch still drains external dispatches
 		// (Kane's outbox channel — see docs/architecture.md) instead of leaving them unread.
 		for (const w of workspaces) gridFor(w.id);
+		// attention.jsonl (V2 step 11): close every open interval on a clean quit, so the reader does
+		// not bill the hours the app was closed as time a session spent waiting.
+		window.addEventListener('beforeunload', () => { for (const g of grids.values()) g.flushAttention('quit'); });
 
 		// Merge over a FRESH read: other writers (e.g. the private overlay via PrivateApi.config.set)
 		// must not have their keys clobbered by this startup-snapshot spread.
