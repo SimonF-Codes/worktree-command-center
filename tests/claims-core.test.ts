@@ -18,9 +18,20 @@ const decide = (o: Record<string, unknown>) => cc.decideWrite({ ...base, target:
 describe('names', () => {
 	it('the nested worktree root matches the app\'s (drift)', () => { expect(cc.WORKTREES_DIR).toBe(WORKTREES_DIR); });
 	it('the lease lives as long as the automatic git locks', () => { expect(cc.CLAIM_TTL_MS).toBe(core.GIT_TTL_MS); });
-	it('checkoutId: resolved, forward slashes, lower case — one spelling for every way to write it', () => {
+	// One path written several ways collapsing to one id is the property; which spellings exist is
+	// the platform's business. A drive-letter path with backslashes is one path on Windows and a
+	// legal RELATIVE FILENAME on Linux, where path.resolve prefixes the cwd and the two spellings
+	// become genuinely different checkouts. So the drive-letter case is asserted on Windows only,
+	// and the case / separator / trailing-slash property is asserted everywhere — CI runs
+	// ubuntu-latest, where this assertion failed on 2026-11-22 (run 45062441421).
+	it.runIf(process.platform === 'win32')('checkoutId collapses Windows spellings: drive case, separators, trailing slash', () => {
 		expect(cc.checkoutId('C:\\Dev\\App\\')).toBe(cc.checkoutId('c:/dev/app'));
 		expect(cc.checkoutId('C:/dev/app')).not.toMatch(/\\/);
+	});
+	it('checkoutId: resolved, forward slashes, lower case — one spelling for every way to write it', () => {
+		const p = path.resolve(path.sep + 'dev', 'App');
+		expect(cc.checkoutId(p + path.sep)).toBe(cc.checkoutId(p.toLowerCase()));
+		expect(cc.checkoutId(p)).not.toMatch(/\\/);
 	});
 	it('isInside is separator-bounded', () => {
 		expect(cc.isInside(at('a.ts'), APP)).toBe(true);
