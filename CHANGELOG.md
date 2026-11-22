@@ -3,18 +3,6 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
-## Unreleased
-
-**📋 The sidebar replaces the tab strip — off by default (`v2.hideTabs`)**
-- **A workspace header switches to that workspace**, as a tab click does (Enter/Space too). The
-  caret is now its own button and the only thing that collapses; a collapsed workspace still keeps
-  its worst state on the header.
-- **Collapse all / Expand all**, one control at the top of the sidebar.
-- **Every tab-strip control has a home in the sidebar:** × close on a workspace header (on hover
-  or focus, never on the last one), and **+ add** and **↩ Recently closed** at its foot.
-- **Settings → Sidebar → Hide the tab strip.** Applied live. It does nothing while the sidebar is
-  off — the strip always stays then, so there is always a way to change workspace.
-
 ## 1.0.0 — 2026-11-22
 
 The V2 Team Floor overhaul. A workspace tab stops being a bag of worktrees and becomes a team with
@@ -26,6 +14,31 @@ that setting back, so a fresh install of 1.0.0 behaves like 0.13.0 until you tur
 one exception is `v2.recordLineage`, which defaults on and only writes fields that nothing reads
 unless the team view is enabled.
 
+Two defect fixes below are not behind a setting, because they correct behaviour that was
+already wrong: a delivery check that read a stale screen, and an authority declared in a role
+file but not enforced.
+
+
+**📋 The sidebar replaces the tab strip — off by default (`v2.hideTabs`)**
+- **A workspace header switches to that workspace**, as a tab click does (Enter/Space too). The
+  caret is now its own button and the only thing that collapses; a collapsed workspace still keeps
+  its worst state on the header.
+- **Collapse all / Expand all**, one control at the top of the sidebar.
+- **Every tab-strip control has a home in the sidebar:** × close on a workspace header (on hover
+  or focus, never on the last one), and **+ add** and **↩ Recently closed** at its foot.
+- **Settings → Sidebar → Hide the tab strip.** Applied live. It does nothing while the sidebar is
+  off — the strip always stays then, so there is always a way to change workspace.
+
+**🔁 `tell` no longer reports a false failure, or delivers a brief twice**
+- A hidden tile handed its batched output to xterm every 2,000 ms, while a delivery check read
+  the screen for its own echo 1,400 ms after typing — so roughly a third of deliveries looked
+  like failures. Each retry retyped the message and pressed Enter again, so a message the
+  session had already accepted arrived twice, or the sender was told it failed. A read now
+  drains pending output first, and the check waits for xterm’s parse before it looks — xterm
+  writes asynchronously, so draining alone was not enough.
+- **The overseer’s edges are checked like anyone else’s**, now that `Alpha.md` declares
+  `spawns:`. A session opened on a role the overseer may not start still runs, and shows under
+  Unassigned with the reason rather than being placed silently.
 
 **📊 Workstreams, metrics and the Project panel (V2 Team Floor step 11) — off by default (`v2.projectPanel`)**
 - **Workstreams carry their tasks.** `cos-coord workstream open|assign|close|reopen` and
