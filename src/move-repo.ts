@@ -245,14 +245,17 @@ const NEST_TITLE = 'Move this repo\'s worktrees from the old shared .claude-work
  *  nothing under → shown but disabled, with the reason (greyed out rather than gone, so the row
  *  still says where the worktrees went). `porcelain` is `git worktree list --porcelain`, null when
  *  that failed — then the button stays enabled, since the relayout reads git again and says what
- *  it finds. `entries` is how many names the old root holds, for the reason only. */
+ *  it finds. `entries` is how many names the old root holds, for the reason only. `respell` puts
+ *  git's canonical paths into the registered spelling (git-spelling.ts inRegisteredSpelling); this
+ *  module is pure, so the caller makes it. */
 export function nestButton(
 	repoPath: string, repoName: string, rootExists: boolean, porcelain: string | null, entries: number, ci: boolean,
+	respell: (p: string) => string = (p) => p,
 ): NestButton {
 	if (!rootExists) return { show: false };
 	const root = legacyWorktreeRootFor(repoPath, repoName);
 	if (porcelain === null) return { show: true, enabled: true, title: `${NEST_TITLE}. (git could not list the worktrees here, so whether any are left in ${root} is not known.)` };
-	const n = plannedDestinations({ from: repoPath, to: repoPath, repoName, worktrees: parseWorktreePorcelain(porcelain).map((w) => ({ ...w, dirty: [] })), caseInsensitive: ci }).length;
+	const n = plannedDestinations({ from: repoPath, to: repoPath, repoName, worktrees: parseWorktreePorcelain(porcelain).map((w) => ({ ...w, path: respell(w.path), dirty: [] })), caseInsensitive: ci }).length;
 	if (n > 0) return { show: true, enabled: true, title: `${NEST_TITLE}. ${n} worktree${n === 1 ? ' is' : 's are'} still in ${root}.` };
 	return {
 		show: true, enabled: false,
@@ -361,7 +364,7 @@ export function planMove(f: MoveFacts): MovePlan {
 	for (const m of plan.worktreeMoves) plan.pathMap.push({ from: m.from, to: m.to });
 	if (plan.staying.length) warnings.push(`${plan.staying.length} worktree${plan.staying.length === 1 ? ' is' : 's are'} outside ${oldWorktreeRoot} and stay${plan.staying.length === 1 ? 's' : ''} where ${plan.staying.length === 1 ? 'it is' : 'they are'}${relayout ? '' : ', links repaired'}: ${sample(plan.staying.map((s) => s.path))}.`);
 	if (relayout && !plan.worktreeMoves.length) {
-		refuse('nothing-to-relayout', `No worktree of ${f.repoName} is left in ${oldWorktreeRoot}${nested ? ` — its ${nested} worktree${nested === 1 ? ' already lives' : 's already live'} inside the repo` : ''}. Nothing to do.`);
+		refuse('nothing-to-relayout', `git lists no worktree of ${f.repoName} in ${oldWorktreeRoot}${nested ? ` — its ${nested} worktree${nested === 1 ? ' already lives' : 's already live'} inside the repo` : ''}${plan.staying.length ? `${nested ? ';' : ' —'} ${plan.staying.length} more ${plan.staying.length === 1 ? 'is' : 'are'} listed elsewhere and not moved: ${sample(plan.staying.map((s) => s.path))}` : ''}. Nothing to do.`);
 		return plan;
 	}
 

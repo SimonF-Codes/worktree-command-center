@@ -341,6 +341,12 @@ describe('planMove — relayout (from === to)', () => {
 		expect(q.refusals[0]!.message).toMatch(/already lives inside the repo/);
 	});
 
+	it('…and names what git DID list elsewhere, so a worktree it could not place never reads as "nothing to do"', () => {
+		const q = planMove(relayout({ worktrees: [MAIN, NATIVE, LOOSE] }));
+		expect(q.refusals.map((r) => r.code)).toEqual(['nothing-to-relayout']);
+		expect(q.refusals[0]!.message).toContain(`1 more is listed elsewhere and not moved: ${LOOSE.path}`);
+	});
+
 	it('resumes from its journal: a finished relocation is done, its transcript still renamed', () => {
 		const movedA = wt(path.join(IN, 'wt-main-1'), 'wt/main-1');
 		const q = planMove(relayout({
@@ -497,6 +503,14 @@ describe('nestButton — counts what git lists under the old root, never the fol
 		const b = nestButton(FROM, 'VerticalChess', true, porcelain(FROM), 3, false);
 		expect(b).toMatchObject({ show: true, enabled: false });
 		expect(b.show && b.title).toMatch(/still holds 3 entries git does not know as worktrees/);
+	});
+
+	it('git\'s canonical spelling is respelled first: a repo registered through a link still counts its old-root worktrees', () => {
+		const canon = path.join(R, 'Real');
+		const respell = (p: string): string => p.replace(canon, path.dirname(FROM)); // the caller's inRegisteredSpelling, faked
+		const gitSays = path.join(canon, '.claude-worktrees', 'VerticalChess', 'wt-main-1');
+		expect(nestButton(FROM, 'VerticalChess', true, porcelain(FROM, gitSays), 1, false)).toMatchObject({ enabled: false });
+		expect(nestButton(FROM, 'VerticalChess', true, porcelain(FROM, gitSays), 1, false, respell)).toMatchObject({ enabled: true });
 	});
 
 	it('a worktree in a sibling repo\'s old root is not this repo\'s', () => {

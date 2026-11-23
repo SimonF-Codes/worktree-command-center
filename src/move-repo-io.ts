@@ -7,8 +7,9 @@ import { projectDirName } from './terminals/resume-target';
 import { ensureWorktreesExcluded, WORKTREES_EXCLUDE } from './terminals/worktree-manager';
 import type { RepoConfig } from './terminals/terminals-grid';
 import { readClaims, remapClaims } from '../pty-sidecar/claims-store.cjs';
+import { inRegisteredSpelling } from './git-spelling';
 import {
-	planMove, plannedDestinations, isInside, remapPath, parseWorktreePorcelain, parseGitmodulesPaths, gitdirOf, isAbsoluteGitdir,
+	planMove, plannedDestinations, isInside, remapPath, samePath, parseWorktreePorcelain, parseGitmodulesPaths, gitdirOf, isAbsoluteGitdir,
 	configPathRefs, type MoveFacts, type MovePlan, type WorktreeFact, type PathMove,
 } from './move-repo';
 
@@ -45,8 +46,9 @@ type Kind = MoveFacts['kind'];
 const key = (p: string, ci: boolean): string => (ci ? path.resolve(p).toLowerCase() : path.resolve(p));
 
 /** Worktree path → its admin dir (<repo>/.git/worktrees/<name>), from each admin dir's `gitdir`
- *  file, which names the worktree's own .git file. Read-only. */
-function adminDirsByWorktree(repo: string, ci: boolean): Map<string, string> {
+ *  file, which names the worktree's own .git file — in git's spelling, so it is respelled like the
+ *  worktree list it is looked up from. Read-only. */
+function adminDirsByWorktree(repo: string, ci: boolean, respell: (p: string) => string): Map<string, string> {
 	const out = new Map<string, string>();
 	const base = path.join(repo, '.git', 'worktrees');
 	let names: string[] = [];
@@ -54,7 +56,7 @@ function adminDirsByWorktree(repo: string, ci: boolean): Map<string, string> {
 	for (const n of names) {
 		try {
 			const dotGit = fs.readFileSync(path.join(base, n, 'gitdir'), 'utf8').trim();
-			if (dotGit) out.set(key(path.dirname(dotGit), ci), path.join(base, n));
+			if (dotGit) out.set(key(respell(path.dirname(dotGit)), ci), path.join(base, n));
 		} catch { /* not a worktree admin dir */ }
 	}
 	return out;
@@ -89,13 +91,17 @@ export async function gatherMoveFacts(target: RepoConfig, to: string, ctx: Gathe
 		...(ctx.claimsDir ? { leases: gatherLeases(ctx.claimsDir), now: Date.now() } : {}),
 	};
 	if (kind !== 'repo' || target.folder) return facts;
-	if (ctx.journalDir) facts.priorRelocations = readOpenJournal(ctx.journalDir, from, to)?.relocations ?? [];
+	// git reports canonical paths; everything here is planned in the spelling the target was
+	// registered under (src/git-spelling.ts), or a repo reached through a junction or an 8.3 name
+	// has none of its worktrees found where they are.
+	const respell = inRegisteredSpelling([from, to], ci);
+	if (ctx.journalDir) facts.priorRelocations = (readOpenJournal(ctx.journalDir, from, to)?.relocations ?? []).map((m) => ({ from: respell(m.from), to: respell(m.to) }));
 
 	const list = await runCommand('git', ['worktree', 'list', '--porcelain'], { cwd: here, timeoutMs: 15000 });
 	if (list.code !== 0) throw new Error(`git worktree list failed in ${here}: ${firstLine(list)}`);
-	const listed = parseWorktreePorcelain(list.stdout);
+	const listed = parseWorktreePorcelain(list.stdout).map((w) => ({ ...w, path: respell(w.path) }));
 	const resuming = here === to;
-	const admin = resuming ? adminDirsByWorktree(here, ci) : new Map<string, string>();
+	const admin = resuming ? adminDirsByWorktree(here, ci, respell) : new Map<string, string>();
 	const worktrees: WorktreeFact[] = [];
 	for (const w of listed) {
 		// Where its files are now: a worktree nested in the repo moved with it, even though git
@@ -420,9 +426,10 @@ export async function verifyMove(plan: MovePlan, before: { refs: Record<string, 
 		: Object.entries(before.refs).filter(([ref, sha]) => after.refs[ref] !== sha).map(([ref]) => ref);
 	const brokenWorktrees: string[] = [];
 	const wl = await runCommand('git', ['worktree', 'list', '--porcelain'], { cwd: plan.to, timeoutMs: 15000 });
-	const listed = wl.code === 0 ? parseWorktreePorcelain(wl.stdout) : [];
+	const respell = inRegisteredSpelling([plan.to]);
+	const listed = wl.code === 0 ? parseWorktreePorcelain(wl.stdout).map((l) => ({ ...l, path: respell(l.path) })) : [];
 	for (const want of plan.expectedWorktrees) {
-		const w = listed.find((l) => path.resolve(l.path).toLowerCase() === path.resolve(want).toLowerCase());
+		const w = listed.find((l) => samePath(l.path, want, true));
 		if (!w || w.prunable || !fs.existsSync(want)) brokenWorktrees.push(want);
 	}
 	return { ok: !missingShas.length && !changedRefs.length && !brokenWorktrees.length, shas: shas.length, missingShas, changedRefs, brokenWorktrees };
