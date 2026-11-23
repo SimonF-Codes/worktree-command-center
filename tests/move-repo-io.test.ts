@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { execFileSync, spawn, type ChildProcess } from 'child_process';
 import { gatherMoveFacts, executeMove, probeRename, verifyMove, describeMoveResult, type GatherContext } from '../src/move-repo-io';
 import { planMove, type MovePlan } from '../src/move-repo';
 import { projectDirName } from '../src/terminals/resume-target';
+import { makeTempDir } from './temp-dir';
 
 // Real git work: on a loaded machine the 5s/10s defaults fail these on a hook timeout while they
 // pass every time in isolation. Per-file on purpose — only the IO suites need the headroom.
@@ -32,7 +32,7 @@ let root: string, from: string, to: string, projects: string, journals: string;
 let oldRoot: string, newRoot: string, wtA: string, wtB: string, loose: string, inner: string;
 
 beforeEach(() => {
-	root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-move-repo-')));
+	root = makeTempDir('wcc-move-repo-');
 	from = path.join(root, 'Nest', 'Repo');
 	to = path.join(root, 'Repo');
 	oldRoot = path.join(root, 'Nest', '.claude-worktrees', 'Repo');

@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { panelPlacement, parseProjectPanelEnabled, PROJECT_PANEL_W } from '../src/core/project-panel';
 import { minTileSize, DEFAULT_CELL_METRICS } from '../src/terminals/bubble-layout';
@@ -12,6 +11,7 @@ import { SessionChannel } from '../src/terminals/session-channel';
 import { lookupFrom } from '../src/core/delegation';
 import type { FloorSession, SpawnPlan } from '../src/core/session-requests';
 import type { SpawnProposal } from '../pty-sidecar/proposals-core.cjs';
+import { makeTempDir } from './temp-dir';
 
 const NOW = 1_800_000_000_000;
 
@@ -164,7 +164,7 @@ describe('Accept / Decline from the panel act FOR the addressee', () => {
 	];
 	let dir: string;
 	let spawned: SpawnPlan[];
-	beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'projpanel-')); spawned = []; });
+	beforeEach(() => { dir = makeTempDir('projpanel-'); spawned = []; });
 	const channel = () => new SessionChannel({
 		coordDir: dir, enabled: () => true, lookup: () => lookup, floor: () => floor, repos: () => [{ name: 'app' }],
 		spawn: async (plan) => { spawned.push(plan); return { ok: true, spawned: { terminal: 'wt-main-9', branch: 'wt/main-9', sessionId: 'child-9' } }; },
@@ -209,7 +209,7 @@ describe('Accept / Decline from the panel act FOR the addressee', () => {
 describe('foldCached — re-fold an append-only log only when it changed', () => {
 	it('returns the same fold until the file grows, and folds a missing file as empty', async () => {
 		const { foldCached } = await import('../src/terminals/append-log-cache');
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'foldcache-'));
+		const dir = makeTempDir('foldcache-');
 		const f = path.join(dir, 'log.jsonl');
 		let folds = 0;
 		const fold = (t: string) => { folds++; return t.split('\n').filter(Boolean); };

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { evaluateConnectorRequest, parseConnectorRequest, receiptFilename } from '../src/terminals/connectors';
 import { buildFloorState, renderFloorState } from '../src/terminals/floor-state';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
+import { makeTempDir } from './temp-dir';
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -121,7 +121,7 @@ describe('wcc-client-core: the floor', () => {
 // ── the CLI end to end, with this test playing the app's part through the app's own decision ──
 
 let coordDir: string;
-beforeEach(() => { coordDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-')); });
+beforeEach(() => { coordDir = makeTempDir('wcc-'); });
 
 function runCli(args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string; err: string }> {
 	return new Promise((resolve) => {

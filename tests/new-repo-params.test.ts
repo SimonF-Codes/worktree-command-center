@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import {
 	defaultNewRepoParams, validBranchName, gitignoreFor, seedFiles, newRepoProblem, describeNewRepo,
 } from '../src/new-repo-params';
 import { createGitRepo } from '../src/create-repo';
+import { makeTempDir } from './temp-dir';
 
 describe('validBranchName', () => {
 	it('accepts ordinary branch names', () => {
@@ -65,7 +65,7 @@ describe('createGitRepo with initial parameters', () => {
 	const saved: Record<string, string | undefined> = {};
 	const ident = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 	beforeAll(() => {
-		tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-newrepo-'));
+		tmp = makeTempDir('wcc-newrepo-');
 		for (const [k, v] of Object.entries(ident)) { saved[k] = process.env[k]; process.env[k] = v; }
 	});
 	afterAll(() => {

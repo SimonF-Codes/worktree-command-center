@@ -5,6 +5,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { parkForSessionEnd, reopenWorktree } from '../src/terminals/worktree-manager';
 import { isParkCommitSubject } from '../src/terminals/worktree-registry';
+import { makeTempDir } from './temp-dir';
 
 // Real git, real worktree: the property under test is that ending a session leaves the worktree
 // and its branch on disk, because the transcript in ~/.claude/projects is keyed by worktree PATH.
@@ -30,7 +31,7 @@ let root: string, repo: string, wt: string;
 const BRANCH = 'wt/main-1';
 
 beforeEach(() => {
-	root = fs.mkdtempSync(path.join(os.tmpdir(), 'cos-park-end-'));
+	root = makeTempDir('cos-park-end-');
 	repo = path.join(root, 'repo');
 	wt = path.join(root, 'wt-main-1');
 	fs.mkdirSync(repo);

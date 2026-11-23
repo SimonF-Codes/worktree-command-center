@@ -57,6 +57,37 @@ jobs:
             fi
           done
 
+  # The real-git suites depend on how Windows spells a path: git expands 8.3 short names and
+  # resolves junctions, `os.tmpdir()` does neither, and the runner's TEMP is a short path. None
+  # of that is visible on ubuntu, so 29 of these tests failed for weeks and were first seen when
+  # the v1.0.0 release build ran the suite on Windows (run 45066134301). This leg is that check,
+  # on every PR instead of at the tag.
+  #
+  # A separate job, not a matrix on `verify`, on purpose: a matrix renames the check to
+  # "Typecheck · Test · Build (ubuntu-latest)", and the old name is a required status check on
+  # main — it would stop reporting and every PR would hang waiting for it.
+  verify-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    # git-bash, so `npm test` and any shell step read the same as the ubuntu leg rather than pwsh.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Typecheck and bundling are platform-independent and already ran on the ubuntu leg; what
+      # only Windows can answer is whether the real-git tests agree with git about paths.
+      - name: Unit tests
+        run: npm test
   changelog:
     name: CHANGELOG updated
     runs-on: ubuntu-latest

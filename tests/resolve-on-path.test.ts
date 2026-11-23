@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
+import { writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { resolveOnPath } from '../src/resolve-on-path';
+import { makeTempDir } from './temp-dir';
 
 // Real dirs with real files so statSync().isFile() behaves like production.
 let dirA: string;
@@ -20,8 +20,8 @@ const winOnly = it.skipIf(process.platform !== 'win32');
 const sameFile = (a: string | null, b: string) => expect((a ?? '').toLowerCase()).toBe(b.toLowerCase());
 
 beforeAll(() => {
-	dirA = mkdtempSync(join(tmpdir(), 'rop-a-'));
-	dirB = mkdtempSync(join(tmpdir(), 'rop-b-'));
+	dirA = makeTempDir('rop-a-');
+	dirB = makeTempDir('rop-b-');
 	writeFileSync(join(dirA, 'claude.cmd'), '@echo off');       // npm's Windows shim
 	writeFileSync(join(dirA, 'claude'), '#!/bin/sh');           // npm's POSIX shim (extensionless)
 	writeFileSync(join(dirB, 'other.exe'), 'x');
@@ -40,7 +40,7 @@ describe('resolveOnPath', () => {
 
 	it('does NOT treat an extensionless file as a match on Windows (cmd /c cannot run it)', () => {
 		// A dir holding ONLY the extensionless `claude` (no .cmd/.exe) — Windows must miss it.
-		const bareOnly = mkdtempSync(join(tmpdir(), 'rop-bare-'));
+		const bareOnly = makeTempDir('rop-bare-');
 		writeFileSync(join(bareOnly, 'claude'), '#!/bin/sh');
 		try {
 			expect(resolveOnPath('claude', { PATH: bareOnly, PATHEXT: '.EXE;.CMD' }, 'win32')).toBeNull();

@@ -1,13 +1,13 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { appendIsolationRecord, readIsolationLog, ISOLATION_LOG } from '../src/terminals/isolation-log';
 import { decideIsolation, isolationRecord, type IsolationIntent, type IsolationContext } from '../src/core/isolation';
+import { makeTempDir } from './temp-dir';
 
 const dirs: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const d of dirs.splice(0)) try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ } });
-const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'iso-log-')); dirs.push(d); return d; };
+const tmp = () => { const d = makeTempDir('iso-log-'); dirs.push(d); return d; };
 
 const checkout = { id: 'c:/dev/app', path: 'C:/dev/app', primary: true };
 const rec = (i: IsolationIntent, c: IsolationContext, outcome = {}) => isolationRecord('app', i, c, decideIsolation(i, c), outcome);

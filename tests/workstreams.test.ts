@@ -1,16 +1,16 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFile, execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { foldWorkstreams, planWorkstreamCommand, parseWorkstreamEvent, formatWorkstream, type Workstream } from '../pty-sidecar/workstreams-core.cjs';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
+import { makeTempDir } from './temp-dir';
 
 const CLI = path.join(__dirname, '..', 'pty-sidecar', 'coord-cli.cjs');
 const BASE_ENV = sanitizeSessionEnv(process.env);
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ } });
-const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-')); dirs.push(d); return d; };
+const tmp = () => { const d = makeTempDir('ws-'); dirs.push(d); return d; };
 
 const lines = (...evs: object[]) => evs.map((e) => JSON.stringify({ v: 1, ...e })).join('\n');
 

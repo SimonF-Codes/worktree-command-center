@@ -1,15 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import {
 	AttentionRecorder, attentionIntervals, blockedMs, blockedNow, parseAttentionLog, formatAttentionLines, type AttentionLine,
 } from '../src/core/attention-log';
 import { appendAttentionLines, readAttentionLog, ATTENTION_LOG } from '../src/terminals/attention-log';
+import { makeTempDir } from './temp-dir';
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ } });
-const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'attn-')); dirs.push(d); return d; };
+const tmp = () => { const d = makeTempDir('attn-'); dirs.push(d); return d; };
 
 describe('AttentionRecorder — transitions, not ticks', () => {
 	it('a state that persists is one line, however many ticks see it', () => {

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { JournalStore, slugify } from '../src/terminals/journal-store';
+import { makeTempDir } from './temp-dir';
 
 describe('slugify', () => {
   it('makes a filesystem-safe slug', () => {
@@ -17,7 +17,7 @@ describe('slugify', () => {
 
 describe('JournalStore', () => {
   let dir: string; let store: JournalStore;
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jrnl-')); store = new JournalStore(dir); });
+  beforeEach(() => { dir = makeTempDir('jrnl-'); store = new JournalStore(dir); });
   afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
   it('save → load round-trips name + text', () => {

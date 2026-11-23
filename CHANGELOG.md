@@ -14,9 +14,9 @@ that setting back, so a fresh install of 1.0.0 behaves like 0.13.0 until you tur
 one exception is `v2.recordLineage`, which defaults on and only writes fields that nothing reads
 unless the team view is enabled.
 
-Two defect fixes below are not behind a setting, because they correct behaviour that was
-already wrong: a delivery check that read a stale screen, and an authority declared in a role
-file but not enforced.
+Three defect fixes below are not behind a setting, because they correct behaviour that was
+already wrong: a delivery check that read a stale screen, an authority declared in a role file
+but not enforced, and a push lock that let two pushes through at once.
 
 
 **📋 The sidebar replaces the tab strip — off by default (`v2.hideTabs`)**
@@ -28,6 +28,21 @@ file but not enforced.
   or focus, never on the last one), and **+ add** and **↩ Recently closed** at its foot.
 - **Settings → Sidebar → Hide the tab strip.** Applied live. It does nothing while the sidebar is
   off — the strip always stays then, so there is always a way to change workspace.
+
+**🔒 The push lock no longer fails open when a repository is reached by another spelling**
+- git canonicalises every path it records — on Windows it expands 8.3 short names (`DEV~1`) and
+  resolves junctions and symlinks. `git rev-parse --git-common-dir` prints `.git` *relative* in a
+  primary checkout, so it resolved against the directory **as spelled**, but prints its own
+  canonical absolute path from a worktree. A repository reached through a junctioned or symlinked
+  folder, or by a short name, therefore gave the primary checkout and its worktrees **two
+  different lock keys, and a `git push` from each was allowed at the same instant** — the lock
+  failed open, which is the one direction a lock must never fail. The key is now derived from the
+  directory as the OS spells it, so both sides agree with git.
+- **Known issue, not fixed here:** worktree prune and move-repo still compare the paths git
+  reports against the repo path as it was registered. The same two spellings can make a repair
+  find nothing to do and say so, rather than doing the work. Fixing it is a design choice —
+  canonicalise once when a repo is registered, or at each point where git’s paths are gathered —
+  so it is being decided rather than folded into this fix.
 
 **🔁 `tell` no longer reports a false failure, or delivers a brief twice**
 - A hidden tile handed its batched output to xterm every 2,000 ms, while a delivery check read

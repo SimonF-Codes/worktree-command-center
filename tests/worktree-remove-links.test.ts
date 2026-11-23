@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { removeWorktreeAndBranch, removeWorktreeIfPristine, unlinkLinksInside } from '../src/terminals/worktree-manager';
+import { makeTempDir } from './temp-dir';
 
 // The regression: a recursive delete that walks INTO a directory junction deletes the junction's
 // TARGET. `git worktree remove --force` does exactly that — it is how the primary checkout's
@@ -24,7 +24,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 let root: string, repo: string, wt: string, shared: string, sentinel: string;
 
 beforeEach(() => {
-	root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-wt-links-')));
+	root = makeTempDir('wcc-wt-links-');
 	repo = path.join(root, 'Repo');
 	wt = path.join(repo, '.claude-worktrees', 'wt-main-1');
 	shared = path.join(root, 'primary-node_modules');

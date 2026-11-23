@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { execFileSync, execFile } from 'node:child_process';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
 import { runSpawn, accepted } from './spawn-harness';
+import { makeTempDir } from './temp-dir';
 
 const CLI = path.join(__dirname, '..', 'pty-sidecar', 'coord-cli.cjs');
 // The outer shell's COS_* must not leak in: run from a worker the app spawned before the
 // session-env fix, COS_ROLE=god was inherited and the "worker is refused" cases ran as god and failed.
 const BASE_ENV = sanitizeSessionEnv(process.env);
 let dir: string;
-beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-')); });
+beforeEach(() => { dir = makeTempDir('cli-'); });
 
 /** Poll `cond` until it's true or `timeoutMs` elapses (throws). Used to wait for `tell`'s
  *  outbox drop from a concurrently-running child before this test plays the app's part. */

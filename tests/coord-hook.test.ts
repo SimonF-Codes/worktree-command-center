@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { makeTempDir } from './temp-dir';
 
 const HOOK = path.join(__dirname, '..', 'pty-sidecar', 'coord-hook.cjs');
 let dir: string;
 let claimsDir: string;
 beforeEach(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-'));
+  dir = makeTempDir('hook-');
   claimsDir = path.join(dir, '_claims');
   fs.mkdirSync(claimsDir);
 });
@@ -74,7 +74,7 @@ describe('coord-hook', () => {
     expect(fs.existsSync(path.join(dir, 'board.md'))).toBe(false);
   });
   it('a normal `git worktree add` on a real path still locks exactly as before', () => {
-    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'RealRepo-')); // a real folder, not a git repo
+    const target = makeTempDir('RealRepo-'); // a real folder, not a git repo
     const add = { tool_name: 'Bash', tool_input: { command: `git -C "${target}" worktree add ../x` }, cwd: '/repo/foo' };
     expect(run(add, [], '1').trim()).toBe('');
     const lock = path.join(claimsDir, cc.gitLockFileName('worktree', `name:${path.basename(target).toLowerCase()}`));
@@ -137,7 +137,7 @@ describe('coord-hook --write: failurePolicyFor is the one place, and a function 
 
 describe('coord-hook --write: broken store / environment, both directions', () => {
   let checkout: string;
-  beforeEach(() => { checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-co-')); });
+  beforeEach(() => { checkout = makeTempDir('gate-co-'); });
   const write = () => ({ tool_name: 'Write', tool_input: { file_path: path.join(checkout, 'a.txt'), content: 'x' }, cwd: checkout });
   const brokenStore = () => { const f = path.join(dir, 'not-a-dir'); fs.writeFileSync(f, 'x'); return f; }; // readdir → ENOTDIR
 

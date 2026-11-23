@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { readLibrary, findVaultRoot } from '../src/terminals/role-view-loader';
+import { makeTempDir } from './temp-dir';
 
 /** A throwaway role library on disk. The wrapper is thin, but it is the half that has to survive
  *  a missing folder, an unreadable file and no configuration at all — none of which can be tested
@@ -31,7 +31,7 @@ const INDEX = [
 	'| butler | brain-2.0 | proposer | Calm assistant | on request | active — not migrated (src/butler/session.ts) |',
 ].join('\n');
 
-beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wcc-roleview-')); });
+beforeEach(() => { dir = makeTempDir('wcc-roleview-'); });
 afterEach(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
 
 describe('readLibrary', () => {

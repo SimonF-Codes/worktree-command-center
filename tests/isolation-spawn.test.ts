@@ -4,7 +4,6 @@
 // replays them on the same inputs.
 import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseOutboxMessage, spawnExtrasOf, spawnReceipt } from '../src/terminals/god';
 import { sanitizeSessionEnv } from '../src/terminals/session-env';
@@ -12,10 +11,11 @@ import { loadRoleAuthority } from '../src/terminals/role-loader';
 import { sessionRoleSlug } from '../src/terminals/role-library';
 import { decideIsolation, resolveIntent, rungCeilingOf, isolationInstruction, type IsolationPolicy } from '../src/core/isolation';
 import { runSpawn, accepted } from './spawn-harness';
+import { makeTempDir } from './temp-dir';
 const core = require('../pty-sidecar/coord-core.cjs');
 
 const dirs: string[] = [];
-const tmp = (p: string) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); dirs.push(d); return d; };
+const tmp = (p: string) => { const d = makeTempDir(p); dirs.push(d); return d; };
 afterEach(() => { for (const d of dirs.splice(0)) try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ } });
 
 async function spawnViaCli(args: string[]) {

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ensureSessionIds, restoreIdentity, newIdentity, identityFields, mintSessionId, parseRecordLineage, readLineage } from '../src/terminals/lineage';
 import { godRecords, godIndexOf } from '../src/terminals/god-sessions';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseOutboxMessage, spawnExtrasOf } from '../src/terminals/god';
@@ -9,6 +8,7 @@ import { sanitizeSessionEnv } from '../src/terminals/session-env';
 import { runSpawn, accepted } from './spawn-harness';
 import { sessionRoleSlug } from '../src/terminals/role-library';
 import { isParentSessionVar } from '../src/terminals/session-env';
+import { makeTempDir } from './temp-dir';
 const store = require('../pty-sidecar/coord-store.cjs');
 
 /** A counter-backed mint, so a test can see exactly how many ids were created. */
@@ -100,7 +100,7 @@ describe('sessionId (E6)', () => {
 
 /** Run `cos-coord spawn …` as Kane, with a fake app accepting it, and return the request it sent. */
 async function spawnViaCli(args: string[], extraEnv: Record<string, string> = {}) {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lineage-'));
+	const dir = makeTempDir('lineage-');
 	const env = { ...sanitizeSessionEnv(process.env), COS_COORD_DIR: dir, COS_TERMINAL_ID: '0', COS_TERMINAL_NAME: 'Kane', COS_ROLE: 'god', COS_COORD_SPAWN_WAIT_MS: '10000', ...extraEnv };
 	const run = await runSpawn(dir, args, env, accepted());
 	expect(run.code).toBe(0);
@@ -176,7 +176,7 @@ describe('from on outbox requests (E5)', () => {
 	});
 
 	it('every outbox request kind carries from', () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'from-'));
+		const dir = makeTempDir('from-');
 		store.tell(dir, 'A', 'hi', 's1');
 		store.watch(dir, 'A', 'n', 's1');
 		store.spawn(dir, 'app', '', 'x', '', '', '', { from: 's1' });

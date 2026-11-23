@@ -8,10 +8,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { decideIsolation, resolveIntent, claimOf, checkoutIdOf, redecideAfterLostRace, type IsolationContext } from '../src/core/isolation';
+import { makeTempDir } from './temp-dir';
 const require = createRequire(import.meta.url);
 const claims = require('../pty-sidecar/claims-store.cjs');
 const cc = require('../pty-sidecar/claims-core.cjs');
@@ -23,7 +23,7 @@ const STORE = path.join(__dirname, '..', 'pty-sidecar', 'claims-store.cjs');
 
 let root: string, coordDir: string, claimsDir: string, checkout: string, scriptDir: string;
 beforeEach(() => {
-	root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'collision-')));
+	root = makeTempDir('collision-');
 	coordDir = path.join(root, '.coordination', 'ws-1');
 	fs.mkdirSync(coordDir, { recursive: true });
 	claimsDir = claims.ensureClaimsDir(claims.claimsDirOf(coordDir));
@@ -406,6 +406,15 @@ describe('Q12: push / worktree-add locks — two tabs, two worktrees, one reposi
 	});
 	it('the primary checkout and a worktree share the lock too', () => {
 		expect(run(sa(), 'git push', repo).allowed).toBe(true);
+		expect(run(sb(), 'git push origin wt/main-2', wtB).allowed).toBe(false);
+	});
+	it('…and still share it when the primary is reached by a spelling git canonicalises (a junction / symlink; an 8.3 name)', () => {
+		// In a primary checkout git prints the common dir RELATIVE (`.git`), so it is resolved against
+		// the cwd as spelled; in a worktree git prints its own canonical absolute path. Through a link
+		// those are two spellings of one repository — and two lock keys, unless the cwd is resolved.
+		const viaLink = path.join(root, 'repo-link');
+		fs.symlinkSync(repo, viaLink, 'junction'); // a junction on Windows (no privilege needed), a symlink elsewhere
+		expect(run(sa(), 'git push', viaLink).allowed).toBe(true);
 		expect(run(sb(), 'git push origin wt/main-2', wtB).allowed).toBe(false);
 	});
 	it('the race: two tabs push one repo at the same instant — exactly one is allowed (10 rounds)', async () => {
