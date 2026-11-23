@@ -21,6 +21,10 @@ landed on `main`.
   resolves through its nearest existing parent instead of throwing.
 - A relayout that finds nothing to move now names any worktree git lists outside the old root,
   so one it could not place no longer reads as *nothing to do*.
+- The periodic worktree scan had the same defect. For such a repo it listed the primary checkout
+  as one of its own worktrees, attached no terminal to any worktree (the ledger said *terminal
+  closed* for a live one), and *Reopen* opened a worktree by git's spelling — away from the
+  conversation filed under the registered one. It now uses the same helper.
 
 ## 1.0.0 — 2026-11-22
 

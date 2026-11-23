@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { isInside, samePath } from './move-repo';
+import { parseWorktreeList } from './terminals/worktree-registry';
 
 // One repository, two spellings. git canonicalises every path it records or reports: on Windows
 // it expands 8.3 short names (`RUNNER~1` → `runneradmin`), and everywhere it resolves junctions
@@ -55,4 +56,15 @@ export function inRegisteredSpelling(registered: readonly string[], ci = process
 		}
 		return p;
 	};
+}
+
+/** The worktree scan's view of one target: what `git worktree list --porcelain` names, the
+ *  primary checkout left out, each path in the spelling `repoPath` was registered under, so it
+ *  matches the tiles' cwds (and so Reopen opens a worktree where its conversation is filed). A path
+ *  that needs no respelling is returned exactly as git printed it. */
+export function scannedWorktrees(porcelain: string, repoPath: string, ci = process.platform === 'win32'): { path: string; branch: string }[] {
+	const respell = inRegisteredSpelling([repoPath], ci);
+	return parseWorktreeList(porcelain)
+		.map((w) => ({ ...w, path: respell(w.path) }))
+		.filter((w) => !samePath(w.path, repoPath, ci));
 }
