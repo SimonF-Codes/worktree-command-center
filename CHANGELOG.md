@@ -26,7 +26,7 @@ landed on `main`.
   closed* for a live one), and *Reopen* opened a worktree by git's spelling — away from the
   conversation filed under the registered one. It now uses the same helper.
 
-## 1.0.0 — 2026-11-22
+## 1.0.0 — 2026-11-23
 
 The V2 Team Floor overhaul. A workspace tab stops being a bag of worktrees and becomes a team with
 a project: sessions nested under the role that spawned them, isolation cheaper than a worktree,
