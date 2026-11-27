@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { main, parseTeamArgs, parseTransfersArgs, projectRepo, vaultRootOf, logBullets, projectKey, type TeamMetricsOutput, type TeamTransfersOutput } from '../src/cli/team-cli';
+import { main, parseTeamArgs, parseTransfersArgs, parseTranscriptArgs, tailLines, projectRepo, vaultRootOf, logBullets, projectKey, TAIL_BYTES, type TeamMetricsOutput, type TeamTransfersOutput, type TeamTranscriptOutput } from '../src/cli/team-cli';
 import { foldTransfers } from '../src/core/transfers';
 import type { RepoConfig } from '../src/terminals/terminals-grid';
 import { makeTempDir } from './temp-dir';
@@ -205,5 +205,73 @@ describe('wcc-team transfers', () => {
 		const quiet = await run(['transfers', '--workspace', 'quiet', '--user-data', ud]);
 		expect(quiet.code).toBe(0);
 		expect(quiet.out).toMatch(/^quiet · 0 claimed requests/);
+	});
+});
+
+describe('wcc-team transcript', () => {
+	const FIXTURE = path.join(__dirname, 'fixtures', 'transcripts', 'v2.1.332.jsonl');
+	const run = async (argv: string[]) => {
+		let out = '', err = '';
+		const code = await main(argv, { out: (s) => { out += `${s}\n`; }, err: (s) => { err += `${s}\n`; }, now: () => 42 });
+		return { code, out, err };
+	};
+
+	it('parses its options; --tail is required; the other verbs keep their own parsers', () => {
+		expect(parseTranscriptArgs(['--tail', 'f.jsonl', '--json', '--bytes', '10', '--items', '0'])).toEqual({ json: true, file: 'f.jsonl', bytes: 10, items: 0 });
+		expect(parseTranscriptArgs(['--tail', 'f.jsonl'])).toEqual({ json: false, file: 'f.jsonl', bytes: TAIL_BYTES, items: 40 });
+		expect(parseTranscriptArgs([])).toMatch(/needs --tail/);
+		expect(parseTranscriptArgs(['--tail'])).toMatch(/needs a value/);
+		expect(parseTranscriptArgs(['--tail', 'f', '--bytes', '0'])).toMatch(/whole number above 0/);
+		expect(parseTranscriptArgs(['--tail', 'f', '--items', '-1'])).toMatch(/whole number/);
+		expect(parseTranscriptArgs(['--tail', 'f', '--follow'])).toMatch(/unknown option/);
+		expect(parseTeamArgs(['transcript'])).toMatch(/unknown command/); // main dispatches before it
+	});
+
+	it('reads complete lines only: a window\'s partial first line is dropped, an unterminated last line held back', () => {
+		const buf = Buffer.from('tail-of-a-line\n{"a":1}\r\n\n{"b":2}\n{"c":');
+		expect(tailLines(buf, 100)).toEqual([{ at: 115, text: '{"a":1}' }, { at: 125, text: '{"b":2}' }]);
+		expect(tailLines(buf, 0)[0]).toEqual({ at: 0, text: 'tail-of-a-line' });
+		expect(tailLines(Buffer.from('no newline at all'), 5)).toEqual([]);
+	});
+
+	it('--json is normalise + foldItems over the window, in a fixed shape: what the Chat view will draw', async () => {
+		const r = await run(['transcript', '--tail', FIXTURE, '--json', '--items', '0']);
+		expect(r.code).toBe(0);
+		const o = JSON.parse(r.out) as TeamTranscriptOutput;
+		// The shape. A key added or dropped here is a change the panel has to agree to.
+		expect(Object.keys(o).sort()).toEqual(['bytesRead', 'file', 'fromStart', 'generatedAt', 'items', 'itemsRead', 'lines', 'schema', 'size', 'skipped']);
+		expect(o).toMatchObject({ schema: 1, generatedAt: 42, file: FIXTURE, fromStart: true, lines: 80, itemsRead: 11 });
+		expect(o.size).toBe(fs.statSync(FIXTURE).size);
+		expect(o.items.map((i) => i.kind)).toEqual(['prompt', 'tool', 'reply', 'tool', 'prompt', 'thinking', 'tool', 'thinking', 'tool', 'reply', 'tool']);
+		expect(Object.keys(o.items.find((i) => i.kind === 'tool')!).sort()).toEqual(['id', 'input', 'kind', 'name', 'result', 'status', 'ts']);
+		expect(Object.values(o.skipped).reduce((a, b) => a + b, 0)).toBe(64);
+		expect(o.skipped['attachment/queued_command-meta']).toBeUndefined();
+	});
+
+	it('the text form is one line per item and ends with what it skipped, by label', async () => {
+		const r = await run(['transcript', '--tail', FIXTURE, '--items', '3']);
+		expect(r.code).toBe(0);
+		const lines = r.out.trimEnd().split('\n');
+		expect(lines[0]).toMatch(/· 80 lines in the last \d+ of \d+ bytes \(the whole file\) · 11 items, the last 3 shown$/);
+		expect(lines).toHaveLength(5);
+		expect(lines[1]).toMatch(/^\d\d:\d\d {4}\[Bash\] .* · done → /);
+		expect(lines[4]).toMatch(/^skipped 64: api-request 6 · data-flow-records 6 · /);
+	});
+
+	it('a byte window starts at a line boundary, so a cut line is never half-parsed', async () => {
+		const o = JSON.parse((await run(['transcript', '--tail', FIXTURE, '--json', '--bytes', '20000'])).out) as TeamTranscriptOutput;
+		expect(o.fromStart).toBe(false);
+		expect(o.bytesRead).toBe(20000);
+		expect(o.lines).toBeLessThan(80);
+		expect(o.skipped['(unparseable)']).toBeUndefined();
+	});
+
+	it('a missing file is a failure; no --tail is a usage error', async () => {
+		const missing = await run(['transcript', '--tail', path.join(tmp(), 'nope.jsonl')]);
+		expect(missing.code).toBe(1);
+		expect(missing.err).toMatch(/cannot read .*nope\.jsonl/);
+		const usage = await run(['transcript']);
+		expect(usage.code).toBe(64);
+		expect(usage.err).toMatch(/transcript needs --tail <file>/);
 	});
 });
