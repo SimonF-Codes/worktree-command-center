@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { main, parseTeamArgs, projectRepo, vaultRootOf, logBullets, projectKey, type TeamMetricsOutput } from '../src/cli/team-cli';
+import { main, parseTeamArgs, parseTransfersArgs, projectRepo, vaultRootOf, logBullets, projectKey, type TeamMetricsOutput, type TeamTransfersOutput } from '../src/cli/team-cli';
+import { foldTransfers } from '../src/core/transfers';
 import type { RepoConfig } from '../src/terminals/terminals-grid';
 import { makeTempDir } from './temp-dir';
 
@@ -112,5 +113,97 @@ describe('wcc-team metrics — end to end against a real repo', () => {
 		expect(await main(['metrics', '--workspace', 'a', '--user-data', ud], { out: (s) => { out += `${s}\n`; }, err: () => {} })).toBe(0);
 		expect(out).toMatch(/^A \(a\) · personal · no repo/);
 		expect(out).toMatch(/unavailable · no repo/);
+	});
+});
+
+describe('wcc-team transfers', () => {
+	const OVERSEER = 'god-1';
+	function floor(): { ud: string; sessions: Record<string, unknown[]>; done: string } {
+		const ud = tmp();
+		const done = path.join(ud, '.coordination', 'default', 'god-outbox', '.done');
+		fs.mkdirSync(done, { recursive: true });
+		fs.mkdirSync(path.join(ud, '.coordination', 'quiet'), { recursive: true }); // no requests: not listed
+		const write = (ts: number, id: string, o: Record<string, unknown>) => fs.writeFileSync(path.join(done, `${ts}-${id}.json`), JSON.stringify({ ts, ...o }));
+		write(1795000000000, 'old', { kind: 'spawn', repo: 'r', task: 'before from existed', name: 'Kid' });
+		write(1795800000000, 'sp', { kind: 'spawn', repo: 'r', task: 'Build P5a\nthen report', name: 'Kid', role: 'worker-terminal', isolation: 'worktree', from: OVERSEER });
+		write(1795800001000, 'tl', { kind: 'tell', target: 'Kid', message: 'rebase first', from: OVERSEER });
+		write(1795800002000, 'gone', { kind: 'tell', target: 'Sidecar design', message: 'revision 2', from: OVERSEER });
+		write(1795800003000, 'cl', { kind: 'close', target: 'Council: code', from: OVERSEER });
+		const sessions = { default: [{ kind: 'god', sessionId: OVERSEER }, { kind: 'terminal', name: 'Kid', sessionId: 'kid-1', parentSessionId: OVERSEER }], other: [] };
+		fs.writeFileSync(path.join(ud, '.terminal-sessions.json'), JSON.stringify(sessions));
+		return { ud, sessions, done };
+	}
+	const run = async (argv: string[]) => {
+		let out = '', err = '';
+		const code = await main(argv, { out: (s) => { out += `${s}\n`; }, err: (s) => { err += `${s}\n`; }, now: () => 42 });
+		return { code, out, err };
+	};
+
+	it('parses its options; metrics keeps its own parser', () => {
+		expect(parseTransfersArgs(['--json', '--session', 's', '--workspace', 'w'])).toEqual({ json: true, session: 's', workspace: 'w' });
+		expect(parseTransfersArgs(['--session'])).toMatch(/needs a value/);
+		expect(parseTransfersArgs(['--timing'])).toMatch(/unknown option/);
+		expect(parseTeamArgs(['transfers'])).toMatch(/unknown command/); // main dispatches before it
+	});
+
+	it('--json is foldTransfers over the same two files, in a fixed shape: what the tree will draw', async () => {
+		const { ud, sessions, done } = floor();
+		const r = await run(['transfers', '--json', '--user-data', ud]);
+		expect(r.code).toBe(0);
+		const o = JSON.parse(r.out) as TeamTransfersOutput;
+		// The shape. A key added or dropped here is a change the tree has to agree to.
+		expect(Object.keys(o).sort()).toEqual(['generatedAt', 'schema', 'session', 'workspaces']);
+		expect(o).toMatchObject({ schema: 1, generatedAt: 42, session: null });
+		expect(o.workspaces.map((w) => w.workspaceId)).toEqual(['default']);
+		const w = o.workspaces[0]!;
+		expect(Object.keys(w).sort()).toEqual(['fold', 'source', 'workspaceId']);
+		expect(Object.keys(w.fold).sort()).toEqual(['counts', 'schema', 'skipped', 'transfers']);
+		expect(Object.keys(w.fold.counts).sort()).toEqual(['byKind', 'byState', 'requests']);
+		const spawn = w.fold.transfers.find((t) => t.id === '1795800000000-sp')!;
+		expect(Object.keys(spawn).sort()).toEqual(['brief', 'delivery', 'drawn', 'from', 'id', 'kind', 'length', 'match', 'subject', 'toName', 'ts']);
+		expect(Object.keys(w.fold.transfers.find((t) => t.kind === 'close')!).sort()).toEqual(['delivery', 'drawn', 'from', 'id', 'kind', 'length', 'match', 'subject', 'toName', 'ts']);
+		// The same function: the CLI adds nothing and drops nothing.
+		const files = fs.readdirSync(done).sort().map((file) => ({ file, text: fs.readFileSync(path.join(done, file), 'utf8') }));
+		expect(w.fold).toEqual(foldTransfers({ requests: files, sessions: sessions.default! }));
+		expect(w.fold.transfers.map((t) => [t.kind, t.match.state])).toEqual([
+			['spawn', 'unattributed'], ['spawn', 'edge'], ['tell', 'edge'], ['tell', 'unmatched'], ['close', 'closed'],
+		]);
+	});
+
+	it('prints the unmatched as unmatched, the close as not drawn, and the unattributed as a count', async () => {
+		const { ud } = floor();
+		const r = await run(['transfers', '--user-data', ud]);
+		expect(r.code).toBe(0);
+		expect(r.out).toMatch(/^default · 5 claimed requests in /);
+		expect(r.out).toContain('2 spawn · 2 tell · 0 watch · 1 close · 1 sent before the sender was recorded (plain lineage, not listed)');
+		expect(r.out).toMatch(/Z {2}spawn {2}overseer \(god-1\) → Kid \(kid-1\) {2}sent · on its edge · role worker-terminal · isolation worktree\n/);
+		expect(r.out).toContain('      "Build P5a" (of 21 chars)');
+		expect(r.out).toContain('tell   overseer (god-1) → "Sidecar design"  sent · UNMATCHED: no session on the floor is named "Sidecar design" now');
+		expect(r.out).toContain('close  overseer (god-1) → "Council: code"  sent · folded, not drawn: the session it closed is gone');
+		expect(r.out).toContain('2 on an edge · 1 unmatched (listed, never drawn, never guessed)');
+		expect(r.out).toMatch(/Sent, not delivered/);
+		expect(r.out).not.toContain('before from existed');
+		expect(r.out).not.toMatch(/quiet/);
+	});
+
+	it('--session keeps what that session sent or received', async () => {
+		const { ud } = floor();
+		const kid = JSON.parse((await run(['transfers', '--json', '--session', 'kid-1', '--user-data', ud])).out) as TeamTransfersOutput;
+		expect(kid.session).toBe('kid-1');
+		expect(kid.workspaces[0]!.fold.transfers.map((t) => t.id)).toEqual(['1795800000000-sp', '1795800001000-tl']);
+		const text = (await run(['transfers', '--session', 'kid-1', '--user-data', ud])).out;
+		expect(text).toContain('sent or received by kid-1: 2');
+		expect(text).not.toContain('Sidecar design');
+	});
+
+	it('an unknown workspace is a usage error; a missing coordination folder is a failure; a named empty one prints', async () => {
+		const { ud } = floor();
+		const bad = await run(['transfers', '--workspace', 'nope', '--user-data', ud]);
+		expect(bad.code).toBe(64);
+		expect(bad.err).toMatch(/no workspace "nope" — default, quiet/);
+		expect((await run(['transfers', '--user-data', tmp()])).code).toBe(1);
+		const quiet = await run(['transfers', '--workspace', 'quiet', '--user-data', ud]);
+		expect(quiet.code).toBe(0);
+		expect(quiet.out).toMatch(/^quiet · 0 claimed requests/);
 	});
 });

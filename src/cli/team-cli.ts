@@ -9,12 +9,15 @@ import {
 	type FloorFacts, type GitCommit, type GitFacts, type ProjectInputs, type ProjectReport, type Sourced, type VaultFacts, type VaultLogEntry,
 } from '../core/metrics';
 import { readIsolationLog } from '../terminals/isolation-log';
+import { readFolderCached } from '../terminals/append-log-cache';
+import { foldTransfers, transfersFor, transferSubject, type Transfer, type TransferFold } from '../core/transfers';
 import { linkedRepo, reposForWorkspace } from '../workspace';
 import type { RepoConfig } from '../terminals/terminals-grid';
 import { defaultUserData } from './worktrees-cli';
 
-// wcc-team — the floor's team-level read verbs. Today one: `metrics`, the Project panel's numbers
-// (V2 Team Floor step 11, design §4). It runs as a CHILD PROCESS of the app (D11): git must never
+// wcc-team — the floor's team-level read verbs: `metrics`, the Project panel's numbers (V2 Team
+// Floor step 11, design §4), and `transfers`, what the overseer has sent down (Session Transfers
+// P5a, design §11). It runs as a CHILD PROCESS of the app (D11): git must never
 // run in the renderer's process, and the panel must not become a second implementation of this.
 // Every number is computed by core/metrics.ts; this file only gathers the facts, and times them.
 //
@@ -24,6 +27,7 @@ import { defaultUserData } from './worktrees-cli';
 export const EXIT = { ok: 0, failed: 1, usage: 64 } as const;
 
 const USAGE = `usage: wcc-team metrics [--json] [--workspace <id>] [--user-data <dir>]
+       wcc-team transfers [--json] [--session <id>] [--workspace <id>] [--user-data <dir>]
 
   metrics            The Project panel's metrics for every workspace (or one), with the source of
                      each and, for one that cannot be computed, the reason instead of a value.
@@ -31,7 +35,13 @@ const USAGE = `usage: wcc-team metrics [--json] [--workspace <id>] [--user-data 
   --workspace <id>   One workspace only (the panel asks for the one it shows).
   --user-data <dir>  The app's data folder (default %APPDATA%/worktree-command-center; or WCC_USER_DATA).
 
-Always prints its wall time and every git call it made to stderr.
+  transfers          Every spawn brief, tell, watch and close the overseer has sent, from the claimed
+                     requests in god-outbox/.done/, joined to the sessions they reached. SENT only:
+                     whether a tell arrived is not on disk. A request that matches no session, or
+                     two, is listed as unmatched — never guessed.
+  --session <id>     Only what this session sent or received.
+
+metrics always prints its wall time and every git call it made to stderr.
 Exit: 0 done · 1 failed · 64 usage.`;
 
 export interface GitCall { repo: string; args: string[]; ms: number; code: number | null; bytes: number }
@@ -268,6 +278,7 @@ export async function main(argv: readonly string[], partial: Partial<TeamCliDeps
 	};
 	const t0 = d.clock();
 	if (argv.includes('-h') || argv.includes('--help')) { d.out(USAGE); return EXIT.ok; }
+	if (argv[0] === 'transfers') return transfersMain(argv.slice(1), d);
 	const a = parseTeamArgs(argv);
 	if (typeof a === 'string') { d.err(`wcc-team: ${a}\n\n${USAGE}`); return EXIT.usage; }
 
@@ -358,4 +369,100 @@ export function formatReport(r: ProjectReport): string {
 export function formatTiming(t: Timing): string {
 	const head = `wcc-team: ${t.workspaces} workspace${t.workspaces === 1 ? '' : 's'}, ${t.repos} repo${t.repos === 1 ? '' : 's'} · wall ${t.wallMs} ms (process ${t.processMs} ms) · ${t.gitCalls.length} git call${t.gitCalls.length === 1 ? '' : 's'}, ${t.gitMs} ms summed`;
 	return [head, ...t.gitCalls.map((c) => `  git -C ${c.repo} ${c.args.map((x) => (/[\s%]/.test(x) ? JSON.stringify(x) : x)).join(' ').slice(0, 140)} → ${c.code} · ${c.ms} ms · ${Math.round(c.bytes / 1024)} KB`)].join('\n');
+}
+
+// ---- transfers (Session Transfers P5a). Read-only: the sessions file, and each workspace's
+// claimed-request folder through the folder cache.
+
+interface TransfersArgs { json: boolean; session?: string; workspace?: string; userData?: string }
+
+export function parseTransfersArgs(rest: readonly string[]): TransfersArgs | string {
+	const a: TransfersArgs = { json: false };
+	for (let i = 0; i < rest.length; i++) {
+		const x = rest[i]!;
+		if (x === '--json') a.json = true;
+		else if (x === '--session' || x === '--workspace' || x === '--user-data') {
+			const v = rest[++i];
+			if (!v) return `${x} needs a value`;
+			if (x === '--session') a.session = v; else if (x === '--workspace') a.workspace = v; else a.userData = v;
+		} else return `unknown option ${x}`;
+	}
+	return a;
+}
+
+export interface WorkspaceTransfers { workspaceId: string; source: string; fold: TransferFold }
+export interface TeamTransfersOutput { schema: 1; generatedAt: number; session: string | null; workspaces: WorkspaceTransfers[] }
+
+/** One workspace's fold, exactly as the tree will compute it: its claimed requests (folder-cached)
+ *  and its records from the sessions file, through foldTransfers. */
+export function workspaceTransfers(userData: string, workspaceId: string, sessionsByWorkspace: Record<string, unknown>): WorkspaceTransfers {
+	const source = path.join(userData, '.coordination', workspaceId, 'god-outbox', '.done');
+	const recs = Object.prototype.hasOwnProperty.call(sessionsByWorkspace, workspaceId) ? sessionsByWorkspace[workspaceId] : undefined;
+	return { workspaceId: transferSubject(workspaceId), source, fold: foldTransfers({ requests: readFolderCached(source), sessions: Array.isArray(recs) ? recs : [] }) };
+}
+
+async function transfersMain(rest: readonly string[], d: TeamCliDeps): Promise<number> {
+	const a = parseTransfersArgs(rest);
+	if (typeof a === 'string') { d.err(`wcc-team: ${a}\n\n${USAGE}`); return EXIT.usage; }
+	const userData = a.userData ?? defaultUserData(d.env, d.platform);
+	let sessions: Record<string, unknown> = {};
+	try {
+		const p: unknown = JSON.parse(fs.readFileSync(path.join(userData, '.terminal-sessions.json'), 'utf8'));
+		if (p && typeof p === 'object' && !Array.isArray(p)) sessions = p as Record<string, unknown>;
+	} catch { /* no sessions file: every attributed request reads as unmatched, which is what is true */ }
+	const coord = path.join(userData, '.coordination');
+	let ids: string[];
+	try { ids = fs.readdirSync(coord, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort(); } catch (e) {
+		d.err(`wcc-team: cannot read ${coord}: ${(e as Error).message}`);
+		return EXIT.failed;
+	}
+	if (a.workspace) {
+		if (!ids.includes(a.workspace)) { d.err(`wcc-team: no workspace "${a.workspace}" — ${ids.join(', ')}`); return EXIT.usage; }
+		ids = [a.workspace];
+	}
+	// Every workspace with something to say; a named one even when it has nothing.
+	let workspaces = ids.map((id) => workspaceTransfers(userData, id, sessions)).filter((w) => a.workspace || w.fold.counts.requests > 0);
+	if (a.session) {
+		const s = a.session;
+		workspaces = workspaces.map((w) => ({ ...w, fold: { ...w.fold, transfers: transfersFor(w.fold, s) } }));
+	}
+	const output: TeamTransfersOutput = { schema: 1, generatedAt: d.now(), session: a.session ? transferSubject(a.session) : null, workspaces };
+	d.out(a.json ? JSON.stringify(output) : formatTransfers(output));
+	return EXIT.ok;
+}
+
+const when = (ts: number | null): string => (ts === null || !Number.isFinite(new Date(ts).getTime()) ? '(no time)        ' : `${new Date(ts).toISOString().slice(0, 16).replace('T', ' ')}Z`);
+const who = (r: { sessionId: string; name: string | null; kind: string | null } | null): string =>
+	!r ? 'nobody recorded' : `${r.name ?? (r.kind === 'god' ? 'overseer' : r.kind ?? 'not on the floor')} (${r.sessionId.slice(0, 8)})`;
+
+function transferLines(t: Transfer): string[] {
+	const m = t.match;
+	const to = m.state === 'edge' || m.state === 'off-edge' ? who(m.to) : `"${t.toName ?? '?'}"`;
+	const state = m.state === 'edge' ? 'sent · on its edge'
+		: m.state === 'off-edge' ? 'sent · not to a child of the sender, so on no edge'
+			: m.state === 'unmatched' ? `sent · UNMATCHED: ${m.reason}`
+				: m.state === 'closed' ? 'sent · folded, not drawn: the session it closed is gone'
+					: 'unattributed · plain lineage';
+	const brief = t.brief ? [t.brief.role && `role ${t.brief.role}`, t.brief.isolation && `isolation ${t.brief.isolation}`].filter(Boolean).join(' · ') : '';
+	const lines = [`  ${when(t.ts)}  ${t.kind.padEnd(5)}  ${who(t.from)} → ${to}  ${state}${brief ? ` · ${brief}` : ''}`];
+	if (t.subject) lines.push(`      "${t.subject}"${t.length !== null && t.length > t.subject.length ? ` (of ${t.length} chars)` : ''}`);
+	return lines;
+}
+
+/** The plain-text rendering: every attributed request in full, the unattributed ones as a count. */
+export function formatTransfers(o: TeamTransfersOutput): string {
+	const out: string[] = [];
+	for (const w of o.workspaces) {
+		const c = w.fold.counts;
+		out.push(`${w.workspaceId} · ${c.requests} claimed request${c.requests === 1 ? '' : 's'} in ${w.source}`);
+		out.push(`  ${c.byKind.spawn} spawn · ${c.byKind.tell} tell · ${c.byKind.watch} watch · ${c.byKind.close} close · ${c.byState.unattributed} sent before the sender was recorded (plain lineage, not listed)${w.fold.skipped.length ? ` · ${w.fold.skipped.length} skipped` : ''}`);
+		const listed = w.fold.transfers.filter((t) => t.match.state !== 'unattributed');
+		if (o.session) out.push(`  sent or received by ${o.session}: ${listed.length}`);
+		for (const t of listed) out.push(...transferLines(t));
+		if (listed.length) out.push(`  ${listed.filter((t) => t.drawn).length} on an edge · ${listed.filter((t) => t.match.state === 'unmatched').length} unmatched (listed, never drawn, never guessed)`);
+		for (const s of w.fold.skipped) out.push(`  skipped ${s.file}: ${s.reason}`);
+	}
+	if (!o.workspaces.length) out.push('no claimed requests in any workspace');
+	out.push('Sent, not delivered: whether a tell arrived is not recorded on disk yet (P5b).');
+	return out.join('\n');
 }
