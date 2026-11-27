@@ -250,6 +250,13 @@ export async function mountGrid(o: { records?: SessionRecord[]; extra?: Partial<
 	} finally {
 		GridEl.prototype.createDiv = origCreate;
 	}
+	// mount() starts `void this.scanWorktrees()`, which writes worktrees.md, and does not await it.
+	// The board drew its registry before that write (no file yet), but anything that later calls
+	// board.refresh() — hiding a tile does — re-reads the file, and so draws "No active worktrees."
+	// only if the write has landed. Whether it had was a race with mount()'s own awaits: it always
+	// won locally and lost once on CI Windows (run 46069312732). Wait for the scan here, so the
+	// ledger is on disk before any scene acts and the drawing cannot depend on who won.
+	await settleScans();
 	flushFrames();
 	return {
 		host, grid, root, toasts,
@@ -302,8 +309,13 @@ async function trackScans(): Promise<void> {
 
 /** Wait for every untracked write this harness knows of: scans, then the persist chain. */
 export async function settleGrid(): Promise<void> {
-	while (inFlight.size) await Promise.allSettled([...inFlight]);
+	await settleScans();
 	await settlePersists();
+}
+
+/** Resolve once every worktree scan any grid has started has finished (and written worktrees.md). */
+async function settleScans(): Promise<void> {
+	while (inFlight.size) await Promise.allSettled([...inFlight]);
 }
 
 /** Resolve once every queued session-file write, from any grid, has finished. */

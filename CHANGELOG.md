@@ -43,6 +43,10 @@ landed on `main`.
 - **Not yet measured:** the stage's cost with six live sessions, both slots open and one worker
   streaming, against the baseline in the pull request. **Not yet tried:** whether a WebGL-drawn
   tile still draws once placed in a slot. Both need the app running.
+- **The off-state golden no longer races the worktree scan.** Its *hiding a tile* scene re-reads
+  `worktrees.md`, which mount's un-awaited scan writes, so on CI Windows it could draw the registry
+  before the write landed and miss one line. The test harness now waits for that scan before a
+  scene acts. Test-only; no behaviour change.
 
 **💬 `wcc-team transcript --tail`: Claude Code's transcript format, settled before the Chat view is built on it**
 - Chat Panel step P0, a spike with no window. `src/core/transcript.ts` holds a pure
