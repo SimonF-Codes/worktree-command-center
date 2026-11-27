@@ -5,6 +5,25 @@ landed on `main`.
 
 ## Unreleased
 
+**📨 `wcc-team transfers`: what the overseer has sent down, read from what is already on disk**
+- Session Transfers step P5a. A new read-only command, `wcc-team transfers [--json] [--session
+  <id>] [--workspace <id>]`, folds every spawn brief, `tell`, `watch` and `close` in
+  `god-outbox/.done/` against `.terminal-sessions.json` and prints who sent what to whom. The app
+  writes nothing new; there is no setting, because nothing in the window calls it yet.
+- **Sent, never delivered.** Whether a `tell` arrived is not on disk, and the fold does not infer
+  it from a missing error file.
+- **Unmatched is said, never guessed.** A spawn joins its child only through `parentSessionId` and
+  `name`; a tell or watch joins the one session with that name. No match, two matches, or a tell
+  older than the spawn of the session that now has the name is listed as unmatched. A request
+  written before the sender was recorded is counted as plain lineage. A `close` is listed and
+  never drawn. On the machine this was built on, 20 of the 32 attributed requests are unmatched,
+  because those sessions have closed.
+- Every string the fold puts out — briefs, messages, names, ids — goes through one cleaner,
+  `transferSubject()`: first line, 120 characters, with direction overrides and isolates,
+  bidi marks, zero-width characters, the tag block and C0/C1 controls removed.
+- `readFolderCached()` (beside `foldCached`) keys a folder on its modified time and entry count,
+  and reads each claimed request once.
+
 **🔗 Worktree prune, relayout and move work on a repo registered by another spelling**
 - Closes the known issue recorded under 1.0.0's push-lock fix. git reports every worktree by its
   canonical path (8.3 short names expanded, junctions and symlinks resolved); a target is
