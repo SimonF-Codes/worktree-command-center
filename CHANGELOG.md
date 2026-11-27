@@ -22,6 +22,9 @@ landed on `main`.
 - Off, the panel draws exactly what it drew before: a test compares the rendering against a
   fixture recorded from the panel before lanes existed. Applied live from Settings, no restart.
 - `attention.jsonl` is now re-parsed only when it changes, since the lanes read it on every refresh.
+- The test suite runs in UTC, pinned in `vitest.config.mjs`, whatever the shell's timezone. The
+  panel's golden fixture prints times of day and dates, which differ by zone, so it passed on an
+  EST machine and failed in CI.
 
 **🔗 Worktree prune, relayout and move work on a repo registered by another spelling**
 - Closes the known issue recorded under 1.0.0's push-lock fix. git reports every worktree by its

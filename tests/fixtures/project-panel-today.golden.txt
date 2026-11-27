@@ -193,19 +193,19 @@
       <div.wcc-proj-section>
         <div.wcc-proj-h> "Updates · append-only"
         <div.wcc-proj-feed>
-          <time.wcc-proj-num> "1/14"
+          <time.wcc-proj-num> "04:00"
           <span.wcc-proj-feed-text> "landed ws-3 — Old migration"
         <div.wcc-proj-feed>
-          <time.wcc-proj-num> "1/14"
+          <time.wcc-proj-num> "03:00"
           <span.wcc-proj-feed-text> "opened ws-2 — Search index"
         <div.wcc-proj-feed>
           <time.wcc-proj-num> "1/14"
           <span.wcc-proj-feed-text> "done ws-1/t1 — Cart page"
         <div.wcc-proj-feed>
-          <time.wcc-proj-num> "1/13"
+          <time.wcc-proj-num> "1/14"
           <span.wcc-proj-feed-text> "opened ws-1 — Checkout flow"
         <div.wcc-proj-feed>
-          <time.wcc-proj-num> "1/11"
+          <time.wcc-proj-num> "1/12"
           <span.wcc-proj-feed-text> "opened ws-3 — Old migration"
       <div.wcc-proj-section>
         <div.wcc-proj-h> "Spawn proposals · 2"
