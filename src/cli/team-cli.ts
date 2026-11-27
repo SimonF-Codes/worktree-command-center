@@ -11,13 +11,15 @@ import {
 import { readIsolationLog } from '../terminals/isolation-log';
 import { readFolderCached } from '../terminals/append-log-cache';
 import { foldTransfers, transfersFor, transferSubject, type Transfer, type TransferFold } from '../core/transfers';
+import { foldItems, normalise, type Folded } from '../core/transcript';
 import { linkedRepo, reposForWorkspace } from '../workspace';
 import type { RepoConfig } from '../terminals/terminals-grid';
 import { defaultUserData } from './worktrees-cli';
 
 // wcc-team — the floor's team-level read verbs: `metrics`, the Project panel's numbers (V2 Team
-// Floor step 11, design §4), and `transfers`, what the overseer has sent down (Session Transfers
-// P5a, design §11). It runs as a CHILD PROCESS of the app (D11): git must never
+// Floor step 11, design §4), `transfers`, what the overseer has sent down (Session Transfers
+// P5a, design §11), and `transcript`, a Claude Code transcript read as chat items (Chat Panel P0,
+// the format spike — nothing in the window calls it yet). It runs as a CHILD PROCESS of the app (D11): git must never
 // run in the renderer's process, and the panel must not become a second implementation of this.
 // Every number is computed by core/metrics.ts; this file only gathers the facts, and times them.
 //
@@ -28,6 +30,7 @@ export const EXIT = { ok: 0, failed: 1, usage: 64 } as const;
 
 const USAGE = `usage: wcc-team metrics [--json] [--workspace <id>] [--user-data <dir>]
        wcc-team transfers [--json] [--session <id>] [--workspace <id>] [--user-data <dir>]
+       wcc-team transcript --tail <file> [--json] [--bytes <n>] [--items <n>]
 
   metrics            The Project panel's metrics for every workspace (or one), with the source of
                      each and, for one that cannot be computed, the reason instead of a value.
@@ -40,6 +43,14 @@ const USAGE = `usage: wcc-team metrics [--json] [--workspace <id>] [--user-data 
                      whether a tell arrived is not on disk. A request that matches no session, or
                      two, is listed as unmatched — never guessed.
   --session <id>     Only what this session sent or received.
+
+  transcript         A Claude Code transcript (.jsonl) as the conversation: prompts, replies,
+                     thinking, tool calls with their status, and notices, then a count of every
+                     line it did not draw, by type. A tool with no result yet is "no-result-yet":
+                     running or awaiting approval — the file cannot tell which.
+  --tail <file>      The transcript to read, from its end backwards.
+  --bytes <n>        How much of the end to read (default 1048576); the first, partial line is dropped.
+  --items <n>        Print the last n items (default 40; 0 for all that were read).
 
 metrics always prints its wall time and every git call it made to stderr.
 Exit: 0 done · 1 failed · 64 usage.`;
@@ -279,6 +290,7 @@ export async function main(argv: readonly string[], partial: Partial<TeamCliDeps
 	const t0 = d.clock();
 	if (argv.includes('-h') || argv.includes('--help')) { d.out(USAGE); return EXIT.ok; }
 	if (argv[0] === 'transfers') return transfersMain(argv.slice(1), d);
+	if (argv[0] === 'transcript') return transcriptMain(argv.slice(1), d);
 	const a = parseTeamArgs(argv);
 	if (typeof a === 'string') { d.err(`wcc-team: ${a}\n\n${USAGE}`); return EXIT.usage; }
 
@@ -464,5 +476,100 @@ export function formatTransfers(o: TeamTransfersOutput): string {
 	}
 	if (!o.workspaces.length) out.push('no claimed requests in any workspace');
 	out.push('Sent, not delivered: whether a tell arrived is not recorded on disk yet (P5b).');
+	return out.join('\n');
+}
+
+// ---- transcript (Chat Panel P0). Read-only: one file, its last --bytes, through core/transcript.ts.
+
+interface TranscriptArgs { json: boolean; file: string; bytes: number; items: number }
+export const TAIL_BYTES = 1 << 20;
+
+export function parseTranscriptArgs(rest: readonly string[]): TranscriptArgs | string {
+	const a: { json: boolean; file?: string; bytes?: number; items?: number } = { json: false };
+	for (let i = 0; i < rest.length; i++) {
+		const x = rest[i]!;
+		if (x === '--json') a.json = true;
+		else if (x === '--tail' || x === '--bytes' || x === '--items') {
+			const v = rest[++i];
+			if (!v) return `${x} needs a value`;
+			if (x === '--tail') { a.file = v; continue; }
+			const n = Number(v);
+			if (!Number.isInteger(n) || n < 0 || (x === '--bytes' && n === 0)) return `${x} needs a whole number${x === '--bytes' ? ' above 0' : ''}`;
+			if (x === '--bytes') a.bytes = n; else a.items = n;
+		} else return `unknown option ${x}`;
+	}
+	if (!a.file) return 'transcript needs --tail <file>';
+	return { json: a.json, file: a.file, bytes: a.bytes ?? TAIL_BYTES, items: a.items ?? 40 };
+}
+
+/** The complete lines in a window of a file that starts `start` bytes in, each with its byte offset.
+ *  Unless the window starts at 0 its first line is partial and is dropped; a last line with no
+ *  newline yet is still being written and is held back. */
+export function tailLines(buf: Buffer, start: number): Array<{ at: number; text: string }> {
+	const out: Array<{ at: number; text: string }> = [];
+	let from = 0;
+	if (start > 0) { const nl = buf.indexOf(0x0a); if (nl < 0) return out; from = nl + 1; }
+	for (let nl = buf.indexOf(0x0a, from); nl >= 0; from = nl + 1, nl = buf.indexOf(0x0a, from)) {
+		const text = buf.subarray(from, nl).toString('utf8').replace(/\r$/, '');
+		if (text.trim()) out.push({ at: start + from, text });
+	}
+	return out;
+}
+
+export interface TeamTranscriptOutput extends Folded {
+	schema: 1; generatedAt: number; file: string; size: number; bytesRead: number; fromStart: boolean; lines: number; itemsRead: number;
+}
+
+function readTail(file: string, bytes: number): { buf: Buffer; size: number; start: number } {
+	const fd = fs.openSync(file, 'r');
+	try {
+		const size = fs.fstatSync(fd).size;
+		const start = Math.max(0, size - bytes);
+		const buf = Buffer.alloc(size - start);
+		let got = 0;
+		while (got < buf.length) { const n = fs.readSync(fd, buf, got, buf.length - got, start + got); if (n <= 0) break; got += n; }
+		return { buf: buf.subarray(0, got), size, start };
+	} finally { fs.closeSync(fd); }
+}
+
+async function transcriptMain(rest: readonly string[], d: TeamCliDeps): Promise<number> {
+	const a = parseTranscriptArgs(rest);
+	if (typeof a === 'string') { d.err(`wcc-team: ${a}\n\n${USAGE}`); return EXIT.usage; }
+	let tail: ReturnType<typeof readTail>;
+	try { tail = readTail(a.file, a.bytes); } catch (e) {
+		d.err(`wcc-team: cannot read ${a.file}: ${(e as Error).message}`);
+		return EXIT.failed;
+	}
+	const lines = tailLines(tail.buf, tail.start);
+	const folded = foldItems(lines.flatMap((l) => normalise(l.text, l.at)));
+	const output: TeamTranscriptOutput = {
+		schema: 1, generatedAt: d.now(), file: a.file, size: tail.size, bytesRead: tail.buf.length, fromStart: tail.start === 0,
+		lines: lines.length, itemsRead: folded.items.length, items: a.items ? folded.items.slice(-a.items) : folded.items, skipped: folded.skipped,
+	};
+	d.out(a.json ? JSON.stringify(output) : formatTranscript(output));
+	return EXIT.ok;
+}
+
+const hhmm = (ts: number): string => (ts ? new Date(ts).toISOString().slice(11, 16) : '--:--');
+
+/** The plain-text rendering: one line per item, every string through transferSubject() (first line,
+ *  120 characters, controls and direction overrides removed), then what was skipped, by label. */
+export function formatTranscript(o: TeamTranscriptOutput): string {
+	const out = [`${o.file} · ${o.lines} line${o.lines === 1 ? '' : 's'} in the last ${o.bytesRead} of ${o.size} bytes${o.fromStart ? ' (the whole file)' : ''} · ${o.itemsRead} item${o.itemsRead === 1 ? '' : 's'}${o.items.length < o.itemsRead ? `, the last ${o.items.length} shown` : ''}`];
+	for (const it of o.items) {
+		const t = hhmm(it.ts);
+		if (it.kind === 'prompt') out.push(`${t}  > ${transferSubject(it.text) || '(empty)'}`);
+		else if (it.kind === 'reply') out.push(`${t}    ${transferSubject(it.markdown) || '(empty)'}`);
+		else if (it.kind === 'thinking') out.push(`${t}    (thinking) ${transferSubject(it.text)}`);
+		else if (it.kind === 'notice') out.push(`${t}  · ${transferSubject(it.text)}`);
+		else {
+			const input = it.input === undefined ? '' : ` ${transferSubject(JSON.stringify(it.input)).slice(0, 80)}`;
+			const res = it.result ? ` → ${transferSubject(it.result.text) || '(no output)'}${it.result.truncated ? ' [truncated]' : ''}` : '';
+			out.push(`${t}    [${it.name || 'result of a call before this window'}]${input} · ${it.status}${res}`);
+		}
+	}
+	const sk = Object.entries(o.skipped).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
+	const n = sk.reduce((s, [, c]) => s + c, 0);
+	out.push(n ? `skipped ${n}: ${sk.map(([k, c]) => `${k} ${c}`).join(' · ')}` : 'skipped nothing');
 	return out.join('\n');
 }
