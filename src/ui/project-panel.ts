@@ -12,6 +12,7 @@
  *  never a hidden row (design system, components/MetricCell). */
 
 import { buildProjectView, projectViewSignature, type MetricCell, type ProjectView, type ProjectViewInput } from './project-model';
+import { lanesOf, type LaneFloor, type LaneSession, type LanesView } from './project-lanes';
 
 export type PanelMode = 'column' | 'pane';
 
@@ -22,7 +23,15 @@ export interface ProjectPanelDeps {
 	onRefresh: () => void;
 	onAccept: (proposalId: string) => void;
 	onDecline: (proposalId: string) => void;
+	/** `v2.projectLanes` (Tree Stage P7): the floor the lanes read, or null while the setting is off.
+	 *  Off, the panel draws exactly what it drew before lanes existed. Read on every refresh, so the
+	 *  setting applies live. */
+	lanes?: () => LaneFloor | null;
+	/** Bring a session's tile up, from a lane or the "outside any open workstream" line. */
+	onReveal?: (tileKey: number) => void;
 }
+
+const DOT_TITLE: Record<string, string> = { needs: 'Needs you', refused: 'Wants help — looks errored', running: 'Running', idle: 'Done — idle' };
 
 const REFRESH_MS = 1500;
 const STATE_DOT: Record<string, string> = { blocked: 'needs', doing: 'running', todo: 'idle', open: 'idle' };
@@ -33,6 +42,8 @@ export class ProjectPanel {
 	private lastSig = '';
 	private onKey: ((e: KeyboardEvent) => void) | null = null;
 	private busy = new Set<string>();
+	/** Whether the "outside any open workstream" line is expanded into its sessions. */
+	private outsideOpen = false;
 	mode: PanelMode = 'pane';
 
 	constructor(private deps: ProjectPanelDeps) {}
@@ -74,10 +85,13 @@ export class ProjectPanel {
 		if (!this.el) return;
 		const input = this.deps.input();
 		const view = input ? buildProjectView(input) : null;
-		const sig = `${view ? projectViewSignature(view) : 'none'}|${[...this.busy].join(',')}`;
+		const floor = view ? this.deps.lanes?.() ?? null : null;
+		const lanes = view && floor ? lanesOf(view, floor) : null;
+		// Off, the signature is the one it always was: lanes add to it only while they are drawn.
+		const sig = `${view ? projectViewSignature(view) : 'none'}|${[...this.busy].join(',')}${lanes ? `|lanes:${JSON.stringify(lanes)}|${this.outsideOpen}` : ''}`;
 		if (sig === this.lastSig) return;
 		this.lastSig = sig;
-		this.render(view);
+		this.render(view, lanes);
 	}
 
 	private metricCell(parent: HTMLElement, c: MetricCell, headline = false): void {
@@ -97,7 +111,68 @@ export class ProjectPanel {
 		return s;
 	}
 
-	private render(v: ProjectView | null): void {
+	private untrackedSection(body: HTMLElement, untracked: NonNullable<ProjectView['untracked']>): void {
+		const s = this.section(body, `Untracked work · ${untracked.length}`);
+		s.createDiv({ cls: 'wcc-proj-note', text: 'No workstream has been opened here, so this is the worktree ledger\'s dirty, ahead and parked entries.' });
+		if (!untracked.length) s.createDiv({ cls: 'wcc-mgr-empty', text: 'Nothing dirty, ahead or parked in this workspace\'s repo.' });
+		for (const u of untracked) {
+			const row = s.createDiv({ cls: 'wcc-proj-row' });
+			row.createSpan({ cls: 'wcc-proj-mono', text: u.branch });
+			row.createSpan({ cls: 'wcc-proj-state', text: u.state });
+			row.createSpan({ cls: 'wcc-proj-meta', text: u.heldBy ?? 'nobody holds it' });
+		}
+		s.createDiv({ cls: 'wcc-metric-source', text: 'floor-report.json worktrees · ≤30s' });
+	}
+
+	private laneSession(parent: HTMLElement, s: LaneSession): void {
+		const row = parent.createDiv({ cls: 'wcc-proj-lane-session', attr: { role: 'button', tabindex: '0', title: `${s.name} · ${DOT_TITLE[s.dot] ?? s.dot} — click to bring the tile up` } });
+		row.createSpan({ cls: `wcc-sb-dot dot-${s.dot}`, attr: { 'aria-label': DOT_TITLE[s.dot] ?? s.dot } });
+		row.createSpan({ cls: 'wcc-proj-name', text: s.name });
+		const go = (): void => this.deps.onReveal?.(s.key);
+		row.addEventListener('click', go);
+		row.addEventListener('keydown', (e) => { const k = (e as KeyboardEvent).key; if (k === 'Enter' || k === ' ') { e.preventDefault(); go(); } });
+	}
+
+	/** Tree Stage §7: one lane per OPEN workstream. Sessions with none are one line, never a lane. */
+	private lanesSection(body: HTMLElement, l: LanesView): void {
+		const s = this.section(body, `Lanes · ${l.lanes.length}`);
+		if (l.empty) s.createDiv({ cls: 'wcc-mgr-empty wcc-proj-lanes-empty', text: l.empty });
+		for (const lane of l.lanes) {
+			const box = s.createDiv({ cls: 'wcc-proj-lane', attr: { 'data-lane': lane.id } });
+			const h = box.createDiv({ cls: 'wcc-proj-ws-h' });
+			h.createSpan({ cls: `wcc-sb-dot dot-${STATE_DOT[lane.state] ?? 'idle'}`, attr: { 'aria-label': lane.state } });
+			h.createSpan({ cls: 'wcc-proj-mono wcc-proj-id', text: lane.id });
+			h.createSpan({ cls: 'wcc-proj-name', text: lane.title });
+			h.createSpan({ cls: 'wcc-proj-num', text: lane.total ? `${lane.done}/${lane.total}` : 'no tasks', attr: { title: 'tasks done ÷ tasks, dropped ones left out' } });
+			h.createSpan({ cls: 'wcc-proj-num', text: lane.age, attr: { title: `open for ${lane.age}` } });
+			if (lane.total) {
+				const bar = box.createDiv({ cls: 'wcc-proj-bar', attr: { role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(lane.total), 'aria-valuenow': String(lane.done) } });
+				bar.createDiv({ cls: 'wcc-proj-bar-fill' }).style.width = `${Math.round((100 * lane.done) / lane.total)}%`;
+			}
+			box.createDiv({ cls: `wcc-proj-meta${lane.ownerName ? '' : ' vacant'}`, text: lane.ownerName ? `owner · ${lane.ownerName}` : 'owner · vacant' });
+			const who = box.createDiv({ cls: 'wcc-proj-lane-sessions' });
+			if (!lane.sessions.length) who.createDiv({ cls: 'wcc-proj-note', text: 'No session on it now.' });
+			for (const x of lane.sessions) this.laneSession(who, x);
+			this.metricCell(box, lane.blocked);
+		}
+		if (l.outside.length) {
+			const n = l.outside.length;
+			const line = s.createEl('button', {
+				cls: 'wcc-proj-btn wcc-proj-lanes-outside',
+				text: `${this.outsideOpen ? '▾' : '▸'} ${n} session${n === 1 ? '' : 's'} outside any open workstream`,
+				attr: { 'aria-expanded': String(this.outsideOpen), title: 'Not a lane: these sessions serve no open workstream. A session joins one when it is spawned with --workstream <id>.' },
+			});
+			line.addEventListener('click', () => { this.outsideOpen = !this.outsideOpen; this.lastSig = ''; this.refresh(); });
+			if (this.outsideOpen) {
+				const list = s.createDiv({ cls: 'wcc-proj-lane-sessions' });
+				for (const x of l.outside) this.laneSession(list, x);
+			}
+		}
+		this.metricCell(s, l.cost);
+		s.createDiv({ cls: 'wcc-metric-source', text: 'workstreams.jsonl · the sessions file · attention.jsonl · live' });
+	}
+
+	private render(v: ProjectView | null, lanes: LanesView | null = null): void {
 		const el = this.el!;
 		const scroll = el.querySelector('.wcc-proj-body')?.scrollTop ?? 0;
 		el.empty();
@@ -125,17 +200,13 @@ export class ProjectPanel {
 		this.metricCell(body, v.headline, true);
 
 		// Open work: a list, not a count. Until a workstream exists, the ledger's untracked work.
-		if (v.untracked) {
-			const s = this.section(body, `Untracked work · ${v.untracked.length}`);
-			s.createDiv({ cls: 'wcc-proj-note', text: 'No workstream has been opened here, so this is the worktree ledger\'s dirty, ahead and parked entries.' });
-			if (!v.untracked.length) s.createDiv({ cls: 'wcc-mgr-empty', text: 'Nothing dirty, ahead or parked in this workspace\'s repo.' });
-			for (const u of v.untracked) {
-				const row = s.createDiv({ cls: 'wcc-proj-row' });
-				row.createSpan({ cls: 'wcc-proj-mono', text: u.branch });
-				row.createSpan({ cls: 'wcc-proj-state', text: u.state });
-				row.createSpan({ cls: 'wcc-proj-meta', text: u.heldBy ?? 'nobody holds it' });
-			}
-			s.createDiv({ cls: 'wcc-metric-source', text: 'floor-report.json worktrees · ≤30s' });
+		// With lanes on (Tree Stage P7), the lanes take the open-work list's place; the untracked
+		// fallback still follows them, since a lane cannot show work no workstream holds.
+		if (lanes) {
+			this.lanesSection(body, lanes);
+			if (v.untracked) this.untrackedSection(body, v.untracked);
+		} else if (v.untracked) {
+			this.untrackedSection(body, v.untracked);
 		} else {
 			const s = this.section(body, `Open work · ${v.openWork.length}`);
 			if (!v.openWork.length) s.createDiv({ cls: 'wcc-mgr-empty', text: 'Every workstream here has landed or been dropped.' });

@@ -51,10 +51,10 @@ import { releaseRefusal } from '../../pty-sidecar/claims-core.cjs';
 import { loadRoleAuthority } from './role-loader';
 import { sessionRoleSlug } from './role-library';
 import { appendIsolationRecord } from './isolation-log';
-import { appendAttentionLines, readAttentionLog } from './attention-log';
+import { appendAttentionLines, ATTENTION_LOG } from './attention-log';
 import { foldWorkstreams, type Workstream } from '../../pty-sidecar/workstreams-core.cjs';
 import { foldCached } from './append-log-cache';
-import { AttentionRecorder, type AttentionLine, type UnobservedWhy } from '../core/attention-log';
+import { AttentionRecorder, parseAttentionLog, type AttentionLine, type UnobservedWhy } from '../core/attention-log';
 import { SessionChannel, readProposals, type SpawnedInfo } from './session-channel';
 import type { SpawnProposal } from '../core/proposals';
 import type { RoleLookup } from '../core/delegation';
@@ -2228,8 +2228,8 @@ export class TerminalsGrid {
 		this.recordAttention(this.attnRecorder.unobserveAll(Date.now(), why));
 	}
 
-	/** attention.jsonl, read back. */
-	attentionLog(): AttentionLine[] { return readAttentionLog(this.coordDir); }
+	/** attention.jsonl, read back — re-parsed only when it changed: the Project panel's lanes read it on every refresh. */
+	attentionLog(): AttentionLine[] { return foldCached(path.join(this.coordDir, ATTENTION_LOG), parseAttentionLog); }
 
 	/** Record a tab's current bucket; toast when it CHANGES into a flagging bucket. */
 	private noteAttention(id: number, kind: AttentionKind | null, name: string): void {
