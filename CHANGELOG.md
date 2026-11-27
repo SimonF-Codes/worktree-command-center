@@ -3,7 +3,30 @@
 All notable changes to Worktree Command Center. Grouped by version; dates are when the work
 landed on `main`.
 
-## 1.0.0 — 2026-11-22
+## Unreleased
+
+**🔗 Worktree prune, relayout and move work on a repo registered by another spelling**
+- Closes the known issue recorded under 1.0.0's push-lock fix. git reports every worktree by its
+  canonical path (8.3 short names expanded, junctions and symlinks resolved); a target is
+  registered, and every terminal cwd, saved session and transcript folder spelled, the way the
+  user reached it. Prune and move-repo compared the two as strings. A **relayout** of a repo
+  reached through a junction or a short name found none of its old-root worktrees and reported
+  *nothing to relayout*. **Prune was worse than a no-op:** a worktree with a live or saved
+  terminal in it read as unused and was offered for removal (the held-open probe was then the
+  only thing in the way), and its conversations counted as zero.
+- Fixed where git's answer is read: one helper (`src/git-spelling.ts`) rewrites each path git
+  reports into the registered spelling, at every gather site — prune's scan and its read-back,
+  move-repo's scan, its admin-dir lookup and its verification, and the Settings row's *Nest
+  worktrees…* button. A path that no longer exists, which is prune's and move's daily business,
+  resolves through its nearest existing parent instead of throwing.
+- A relayout that finds nothing to move now names any worktree git lists outside the old root,
+  so one it could not place no longer reads as *nothing to do*.
+- The periodic worktree scan had the same defect. For such a repo it listed the primary checkout
+  as one of its own worktrees, attached no terminal to any worktree (the ledger said *terminal
+  closed* for a live one), and *Reopen* opened a worktree by git's spelling — away from the
+  conversation filed under the registered one. It now uses the same helper.
+
+## 1.0.0 — 2026-11-23
 
 The V2 Team Floor overhaul. A workspace tab stops being a bag of worktrees and becomes a team with
 a project: sessions nested under the role that spawned them, isolation cheaper than a worktree,
@@ -38,11 +61,6 @@ but not enforced, and a push lock that let two pushes through at once.
   different lock keys, and a `git push` from each was allowed at the same instant** — the lock
   failed open, which is the one direction a lock must never fail. The key is now derived from the
   directory as the OS spells it, so both sides agree with git.
-- **Known issue, not fixed here:** worktree prune and move-repo still compare the paths git
-  reports against the repo path as it was registered. The same two spellings can make a repair
-  find nothing to do and say so, rather than doing the work. Fixing it is a design choice —
-  canonicalise once when a repo is registered, or at each point where git’s paths are gathered —
-  so it is being decided rather than folded into this fix.
 
 **🔁 `tell` no longer reports a false failure, or delivers a brief twice**
 - A hidden tile handed its batched output to xterm every 2,000 ms, while a delivery check read

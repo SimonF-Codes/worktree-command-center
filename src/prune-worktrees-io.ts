@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { runCommand } from './command-runner';
-import { parseWorktreePorcelain, parseGitmodulesPaths } from './move-repo';
+import { parseWorktreePorcelain, parseGitmodulesPaths, samePath } from './move-repo';
+import { inRegisteredSpelling } from './git-spelling';
 import { defaultProjectsDir, probeRenameCode, holdersByCommandLine } from './move-repo-io';
 import { findLinks, unlinkLinksInside, countCherryUnmatched, mergesToNothing } from './terminals/worktree-manager';
 import {
@@ -37,7 +38,7 @@ const firstLine = (r: { stderr: string; error?: string }): string => (r.error ??
 const lines = (s: string): string[] => s.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.trim());
 const git = (cwd: string, args: string[], timeoutMs = 15000) => runCommand('git', args, { cwd, timeoutMs });
 
-async function gatherRepo(t: PruneTarget): Promise<PruneRepoFacts> {
+async function gatherRepo(t: PruneTarget, ci: boolean): Promise<PruneRepoFacts> {
 	const out: PruneRepoFacts = { repoName: t.name, repoPath: t.path, remotes: [], worktrees: [] };
 	if (!fs.existsSync(t.path)) { out.error = `${t.path} does not exist`; return out; }
 	const list = await git(t.path, ['worktree', 'list', '--porcelain']);
@@ -47,7 +48,11 @@ async function gatherRepo(t: PruneTarget): Promise<PruneRepoFacts> {
 	const remotes = await git(t.path, ['remote'], 8000);
 	out.remotes = remotes.code === 0 ? lines(remotes.stdout).map((l) => l.trim()) : [];
 
-	for (const w of parseWorktreePorcelain(list.stdout)) {
+	// git reports canonical paths; the live and saved terminals and the transcript folders are
+	// spelled the way the target was registered (src/git-spelling.ts). Compared across spellings,
+	// a worktree with a terminal in it reads as unused.
+	const respell = inRegisteredSpelling([t.path], ci);
+	for (const w of parseWorktreePorcelain(list.stdout).map((x) => ({ ...x, path: respell(x.path) }))) {
 		const base = baseFor(w.branch, branches);
 		const f: PruneWorktreeFact = { path: w.path, branch: w.branch, isMain: w.isMain, missing: w.prunable || !fs.existsSync(w.path), locked: w.locked, dirty: [], base, ahead: null, cherryUnmatched: null, contentMerged: null };
 		out.worktrees.push(f);
@@ -110,7 +115,7 @@ export function readSavedTerminals(sessionsFile: string | undefined): { path: st
 export async function gatherPruneFacts(targets: readonly PruneTarget[], ctx: PruneGatherContext): Promise<PruneFacts> {
 	const ci = ctx.caseInsensitive ?? process.platform === 'win32';
 	const repos: PruneRepoFacts[] = [];
-	for (const t of targets) repos.push(await gatherRepo(t));
+	for (const t of targets) repos.push(await gatherRepo(t, ci));
 	const facts: PruneFacts = {
 		repos, livePaths: ctx.livePaths, savedTerminals: readSavedTerminals(ctx.sessionsFile), heldOpen: [],
 		transcripts: readTranscriptCounts(ctx.projectsDir ?? defaultProjectsDir()), caseInsensitive: ci,
@@ -164,7 +169,8 @@ export async function executePrune(repos: readonly RepoPrunePlan[]): Promise<Pru
 			const rm = await git(r.repoPath, ['worktree', 'remove', e.path], 60000);
 			if (rm.code !== 0) { res.detail = explainRemoveFailure(firstLine(rm)) + (links.length ? ` (its ${links.length} link${links.length === 1 ? ' was' : 's were'} already unlinked)` : ''); continue; }
 			const list = await git(r.repoPath, ['worktree', 'list', '--porcelain']);
-			const stillListed = list.code !== 0 || parseWorktreePorcelain(list.stdout).some((w) => path.resolve(w.path).toLowerCase() === path.resolve(e.path).toLowerCase());
+			const respell = inRegisteredSpelling([r.repoPath]);
+			const stillListed = list.code !== 0 || parseWorktreePorcelain(list.stdout).some((w) => samePath(respell(w.path), e.path, true));
 			const branchOk = !e.branch || (await git(r.repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${e.branch}`], 8000)).code === 0;
 			if (fs.existsSync(e.path)) res.detail = 'git reported success but the directory is still there';
 			else if (stillListed) res.detail = 'removed, but git still lists it';

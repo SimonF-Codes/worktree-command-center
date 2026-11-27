@@ -363,3 +363,66 @@ describe('write leases across a move, on real git', () => {
 		expect(plan.refusals).toEqual([]);
 	});
 });
+
+// One repository, two spellings. git canonicalises every path it records or reports (8.3 names
+// expanded, junctions and symlinks resolved); a target is registered — and every path the app
+// derives from it (worktree dirs, terminal cwds, transcript folder names) is spelled — the way
+// the user reached it. Comparing the two as strings found no worktree in the old root and
+// reported "nothing to relayout". A junction on Windows (no privilege needed), a symlink
+// elsewhere, so this runs on every platform without needing 8.3 names.
+describe('a repo registered under a spelling git canonicalises (a junction / symlink; an 8.3 name)', () => {
+	let via: string, aliasFrom: string, aliasOld: string;
+	beforeEach(() => {
+		via = path.join(root, 'via');
+		fs.symlinkSync(path.join(root, 'Nest'), via, 'junction');
+		aliasFrom = path.join(via, 'Repo');
+		aliasOld = path.join(via, '.claude-worktrees', 'Repo');
+	});
+	const aliasTarget = () => ({ name: 'Repo', path: aliasFrom });
+
+	it('a relayout still finds the old-root worktrees, moves them, renames their transcripts and verifies', async () => {
+		const aliasA = path.join(aliasOld, 'wt-main-1');
+		// The conversation the app started in wt-main-1, keyed to the spelling its terminal used.
+		fs.mkdirSync(path.join(projects, projectDirName(aliasA)));
+		fs.writeFileSync(path.join(projects, projectDirName(aliasA), 's3.jsonl'), '{}\n');
+
+		const plan = planMove(await gatherMoveFacts(aliasTarget(), aliasFrom, ctx({ targets: [aliasTarget()], journalDir: journals })));
+		expect(plan.refusals).toEqual([]);
+		const nest = path.join(aliasFrom, '.claude-worktrees');
+		expect(plan.worktreeMoves.map((m) => [m.from, m.to])).toEqual([
+			[aliasA, path.join(nest, 'wt-main-1')], [path.join(aliasOld, 'wt-main-2'), path.join(nest, 'wt-main-2')],
+		]);
+
+		const state = appState();
+		const r = await executeMove(plan, { projectsDir: projects, journalDir: journals, applyAppState: state.applyAppState });
+		expect(r.ok, describeMoveResult(r)).toBe(true);
+		expect(r.verify).toMatchObject({ ok: true, brokenWorktrees: [] });
+		expect(listedWorktrees(from).sort()).toEqual([from, path.join(from, '.claude-worktrees', 'wt-main-1'), path.join(from, '.claude-worktrees', 'wt-main-2'), loose, inner].sort());
+		// The path map is in the registered spelling — the one config.json and the sessions file hold.
+		expect(state.calls[0]!.pathMap.map((m) => m.from)).toEqual([aliasA, path.join(aliasOld, 'wt-main-2')]);
+		expect(fs.existsSync(path.join(projects, projectDirName(path.join(nest, 'wt-main-1')), 's3.jsonl'))).toBe(true);
+	});
+
+	it('a terminal live in an old-root worktree, spelled the registered way, refuses the relayout', async () => {
+		const plan = planMove(await gatherMoveFacts(aliasTarget(), aliasFrom, ctx({ targets: [aliasTarget()], livePaths: [path.join(aliasOld, 'wt-main-2')] })));
+		expect(plan.refusals.map((x) => x.code)).toEqual(['live-terminal']);
+	});
+
+	it.skipIf(process.platform !== 'win32')('…and through a real 8.3 short name (Windows, where the volume makes them)', async (t) => {
+		const short = shortNameOf(path.join(root, 'Nest'));
+		if (!short || short.toLowerCase() === path.join(root, 'Nest').toLowerCase()) { t.skip(); return; }
+		const sf = path.join(short, 'Repo');
+		const plan = planMove(await gatherMoveFacts({ name: 'Repo', path: sf }, sf, ctx({ targets: [{ name: 'Repo', path: sf }] })));
+		expect(plan.refusals).toEqual([]);
+		expect(plan.worktreeMoves.map((m) => m.from)).toEqual([path.join(short, '.claude-worktrees', 'Repo', 'wt-main-1'), path.join(short, '.claude-worktrees', 'Repo', 'wt-main-2')]);
+	});
+});
+
+/** The 8.3 spelling of `p`, from cmd's `%~s` — null when it cannot be had. The temp root's own
+ *  name is longer than 8.3, so it has a short form wherever the volume generates them. */
+function shortNameOf(p: string): string | null {
+	try {
+		const out = execFileSync('cmd.exe', ['/d', '/s', '/c', `for %I in ("${p}") do @echo %~sI`], { encoding: 'utf8', windowsVerbatimArguments: true }).trim();
+		return out && fs.existsSync(out) ? out : null;
+	} catch { return null; }
+}

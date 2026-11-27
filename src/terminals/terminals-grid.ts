@@ -3,7 +3,9 @@ import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import { listBranches, createWorktree, writeWorktreeSettings, ensureClaudeSettingsIgnored, defaultBranch, parkWorktree, parkForSessionEnd, reopenWorktree, type WorktreeInfo } from './worktree-manager';
-import { nextWorktreeBranch, parseWorktreeList, parseStatusPorcelain, parseAheadBehind, isParkCommitSubject, formatRegistryMarkdown, parseBranchTips, BRANCH_TIPS_FORMAT, type WorktreeEntry } from './worktree-registry';
+import { scannedWorktrees } from '../git-spelling';
+import { samePath } from '../move-repo';
+import { nextWorktreeBranch, parseStatusPorcelain, parseAheadBehind, isParkCommitSubject, formatRegistryMarkdown, parseBranchTips, BRANCH_TIPS_FORMAT, type WorktreeEntry } from './worktree-registry';
 import type { GridScan, RepoScan } from './floor-report';
 import { repoOptionLabel } from '../workspace';
 import { remapSessionRecords, type PathMove } from '../move-repo';
@@ -82,6 +84,8 @@ const TELL_MAX_WAIT_MS = 40000;
 const FLOOR_FEED_MS = 4000;
 /** How long the transcript-off warning stays up — long enough to be seen from across the room. */
 const TRANSCRIPT_OFF_TOAST_MS = 60_000;
+/** Paths compare case-insensitively where the filesystem does. */
+const CI = process.platform === 'win32';
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -1654,7 +1658,7 @@ export class TerminalsGrid {
 		if (t.isJournal) return 'journal';
 		const tt = t as TerminalTile;
 		if (tt.repoName) return tt.repoName;
-		const e = this.lastEntries.find((x) => path.resolve(x.path) === path.resolve(tt.worktreePath));
+		const e = this.lastEntries.find((x) => samePath(x.path, tt.worktreePath, CI));
 		return e ? e.repo : '?';
 	}
 
@@ -2664,10 +2668,11 @@ export class TerminalsGrid {
 				branches: tips ? tips.size : null,
 				lastCommitAt: tips && tips.size ? Math.max(...[...tips.values()].map((t) => t.committedAt)) : null,
 			});
-			for (const wt of parseWorktreeList(wl.stdout)) {
-				if (path.resolve(wt.path) === path.resolve(repo.path)) continue; // skip the primary checkout
+			// git's paths, respelled the way the target was registered (git-spelling.ts) — the
+			// spelling every tile's cwd uses — with the primary checkout already left out.
+			for (const wt of scannedWorktrees(wl.stdout, repo.path, CI)) {
 				const status = await runCommand('git', ['status', '--porcelain'], { cwd: wt.path, timeoutMs: 8000 });
-				const tile = ([...this.tiles, ...this.hidden].filter((t) => !t.isJournal) as TerminalTile[]).find((t) => path.resolve(t.worktreePath) === path.resolve(wt.path));
+				const tile = ([...this.tiles, ...this.hidden].filter((t) => !t.isJournal) as TerminalTile[]).find((t) => samePath(t.worktreePath, wt.path, CI));
 				const baseRef = tile ? tile.baseBranch : this.baseOf(wt.branch);
 				const ab = await runCommand('git', ['rev-list', '--left-right', '--count', `${baseRef}...HEAD`], { cwd: wt.path, timeoutMs: 8000 });
 				// A detached worktree has no branch tip to look up, and neither does a scan whose
@@ -2715,7 +2720,7 @@ export class TerminalsGrid {
 		const repo = this.repos.find((r) => r.name === entry.repo);
 		if (!repo) return;
 		// Skip if a tile is already attached to this worktree.
-		if (this.tiles.some((t) => !t.isJournal && path.resolve((t as TerminalTile).worktreePath) === path.resolve(entry.path))) return;
+		if (this.tiles.some((t) => !t.isJournal && samePath((t as TerminalTile).worktreePath, entry.path, CI))) return;
 		await reopenWorktree(repo.path, entry.path, branch);
 		const tile = this.makeTile({ worktreePath: entry.path, branch }, repo.name, repo.path, this.baseOf(branch), false, undefined, undefined, undefined, undefined, undefined, newIdentity());
 		if (this.stageEl) tile.render(this.stageEl);

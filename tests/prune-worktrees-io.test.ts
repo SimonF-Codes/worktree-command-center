@@ -175,3 +175,32 @@ describe('the parts', () => {
 		expect(explainRemoveFailure("error: failed to delete 'x': Permission denied")).toMatch(/working directory/);
 	});
 });
+
+// One repository, two spellings: the target registered (and every terminal cwd, saved session and
+// transcript folder spelled) the way the user reached it, git reporting its canonical path. Compared
+// as strings, a worktree with a live or saved terminal in it read as unused and was offered for
+// removal, and its conversations counted as zero. A junction on Windows, a symlink elsewhere.
+describe('a repo registered under a spelling git canonicalises (a junction / symlink)', () => {
+	it('sees the live and saved terminals and the transcripts in the registered spelling, and removes through it', async () => {
+		const via = path.join(root, 'via');
+		fs.symlinkSync(repo, via, 'junction');
+		const V = (n: string): string => path.join(via, '.claude-worktrees', n);
+		fs.mkdirSync(path.join(projects, projectDirName(V('wt-main-2'))));
+		fs.writeFileSync(path.join(projects, projectDirName(V('wt-main-2')), 's.jsonl'), '{}\n');
+		fs.writeFileSync(sessions, JSON.stringify({ t1: [{ worktreePath: V('wt-main-3'), name: 'Kira' }] }));
+
+		const p = planPrune(await gatherPruneFacts([{ name: 'Repo', path: via }], {
+			livePaths: [V('wt-main-1')], projectsDir: projects, sessionsFile: sessions, caseInsensitive: process.platform === 'win32',
+		}));
+		const r = p.repos[0]!;
+		expect(r.keep.map((e) => [e.path, e.refusals.map((x) => x.code)])).toEqual([
+			[V('wt-main-1'), ['live-terminal']], [V('wt-main-3'), ['saved-terminal']], [V('wt-main-4'), ['unmerged']], [V('wt-main-5'), ['dirty']],
+		]);
+		expect(r.prune.map((e) => [e.path, e.transcripts])).toEqual([[V('wt-main-2'), 1]]);
+
+		const results = await executePrune(p.repos);
+		expect(results.map((x) => [x.path, x.ok, x.detail])).toEqual([[V('wt-main-2'), true, 'removed; branch wt/main-2 kept']]);
+		expect(fs.existsSync(W('wt-main-2'))).toBe(false);
+		expect(fs.existsSync(W('wt-main-1'))).toBe(true);
+	});
+});

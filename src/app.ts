@@ -12,6 +12,7 @@ import { parseConnectors } from './terminals/connectors';
 import { discoverRepos, mergeRepos, forgetRepo, retargetRepo, reposForWorkspace, linkedRepo, repoOptionLabel } from './workspace';
 import { planMove, describeMovePlan, describeRefusals, remapRepoLinks, samePath, isInside, legacyWorktreeRootFor, nestButton, type PathMove } from './move-repo';
 import { gatherMoveFacts, executeMove, describeMoveResult } from './move-repo-io';
+import { inRegisteredSpelling } from './git-spelling';
 import { claimsDirUnder } from '../pty-sidecar/claims-store.cjs';
 import { planPrune, describePrunePlan, stillPrunable } from './prune-worktrees';
 import { gatherPruneFacts, executePrune, describePruneResults } from './prune-worktrees-io';
@@ -355,7 +356,7 @@ async function main(): Promise<void> {
 					const list = await runCommand('git', ['worktree', 'list', '--porcelain'], { cwd: r.path, timeoutMs: 8000 });
 					let entries = 0;
 					try { entries = fs.readdirSync(root).length; } catch { /* only the wording of the reason */ }
-					return nestButton(r.path, r.name, true, list.code === 0 ? list.stdout : null, entries, caseInsensitive);
+					return nestButton(r.path, r.name, true, list.code === 0 ? list.stdout : null, entries, caseInsensitive, inRegisteredSpelling([r.path], caseInsensitive));
 				},
 				relayout: (r) => runMoveInteractive(r, r.path),
 				repoint: (r) => repointTargetInteractive(r),
