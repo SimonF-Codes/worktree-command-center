@@ -6,6 +6,7 @@ import { parseAutoClose, thresholdLabel, AUTO_CLOSE_CHOICES } from '../terminals
 import { parseHideTabs, parseSidebarEnabled, parseTeamView } from './sidebar-model';
 import { parseManagersEnabled } from '../core/delegation';
 import { parseProjectLanesEnabled, parseProjectPanelEnabled } from '../core/project-panel';
+import { parseTreeStageEnabled } from '../core/side-panel';
 import type { RepoConfig } from '../terminals/terminals-grid';
 import type { NestButton } from '../move-repo';
 import * as fs from 'fs';
@@ -32,6 +33,8 @@ export interface SettingsPanelDeps {
 	onProjectPanelChange?: (enabled: boolean) => void;
 	/** Draw the Project panel's lanes live — the value just saved as `v2.projectLanes`. */
 	onProjectLanesChange?: (enabled: boolean) => void;
+	/** Draw the stage as the lineage tree live — the value just saved as `v2.treeStage`. */
+	onTreeStageChange?: (enabled: boolean) => void;
 	/** The registered targets and what can be done to one. Read from the APP, never from config:
 	 *  persist() rewrites the whole `repos` key from the app's memory, so the app has to make
 	 *  these edits itself or they are overwritten. Each action resolves once it is finished or
@@ -338,6 +341,32 @@ export class SettingsPanel {
 				await this.deps.setConfig({ ...cfg, v2: { ...prev, projectLanes: on } });
 				this.deps.onProjectLanesChange?.(on);
 				this.deps.toast(on ? 'Project lanes on — one per open workstream' : 'Project lanes off — the open-work list is back', 'success');
+			})();
+		});
+
+		// Tree Stage P4b: the stage as the lineage tree, with a two-slot Side Panel. Its own key,
+		// default OFF; off is today's grid, whole, with its layout selector. Applied live.
+		const srow = s.createDiv({ cls: 'wcc-settings-row' });
+		const slabel = srow.createEl('label', { cls: 'wcc-settings-row-label' });
+		const sbox = slabel.createEl('input', { attr: { type: 'checkbox' } }) as HTMLInputElement;
+		sbox.checked = parseTreeStageEnabled(v2);
+		slabel.append(' Tree stage — the stage draws the lineage tree; click a node to open its terminal beside it');
+		s.createDiv({
+			cls: 'wcc-settings-note',
+			text: 'One node per session, the overseer at the root, edges from who opened whom. A Side Panel beside the tree holds two '
+				+ 'sessions at once (one on a narrow window, the other parked as a chip). A click opens the session in the slot you are not '
+				+ 'typing in and never replaces one with focus, a draft, a queued message or a pin (Alt+L). A session that starts waiting '
+				+ 'gets a badge and the ⚠ queue; it opens by itself only into a free slot. The grid shows several terminals at once and '
+				+ 'the tree shows two — turn this off to get the grid and its layout selector back.',
+		});
+		sbox.addEventListener('change', () => {
+			void (async () => {
+				const on = sbox.checked;
+				const cfg = await this.deps.getConfig();
+				const prev = cfg.v2 && typeof cfg.v2 === 'object' ? (cfg.v2 as Record<string, unknown>) : {};
+				await this.deps.setConfig({ ...cfg, v2: { ...prev, treeStage: on } });
+				this.deps.onTreeStageChange?.(on);
+				this.deps.toast(on ? 'Tree stage on — click a node to open it' : 'Tree stage off — the grid is back', 'success');
 			})();
 		});
 	}

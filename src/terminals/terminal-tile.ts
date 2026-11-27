@@ -523,6 +523,8 @@ export class TerminalTile implements StageTile {
 	/** True while this terminal's input box appears to hold unsubmitted typing. deliverLine uses
 	 *  it to refuse rather than type over someone. */
 	get isDrafting(): boolean { return this.gate.drafting; }
+	/** Messages waiting for the box to empty before they are typed in (notice-gate.ts). */
+	get queuedMessages(): number { return this.gate.queued; }
 
 	/** Show/hide the "N waiting" badge in this tile's header. */
 	private renderQueueBadge(n: number): void {

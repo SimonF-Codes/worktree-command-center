@@ -177,7 +177,9 @@ export function nodeClick(s: PanelState, key: number, seats: 1 | 2, facts: Facts
 	}
 	const target = pickClickSlot(s, seated, facts);
 	if (!target) return { state: held, outcome: { kind: 'select', offer: seated } };
-	return { state: openIn(held, target, key, now), outcome: { kind: 'open', slot: target } };
+	// Opened in the slot not being read, and the reader keeps the keyboard: focus does not move.
+	// A second click on the same node is rule 1, and focuses it.
+	return { state: openIn(held, target, key, now, false), outcome: { kind: 'open', slot: target } };
 }
 
 function pickClickSlot(s: PanelState, seated: SlotId[], facts: FactsOf): SlotId | null {
@@ -190,15 +192,16 @@ function pickClickSlot(s: PanelState, seated: SlotId[], facts: FactsOf): SlotId 
 	return [...pool].sort((a, b) => s.slots[a].usedAt - s.slots[b].usedAt || a.localeCompare(b))[0]!;
 }
 
-/** Put `key` in `slot`, explicitly — the card's Open in A / Open in B, a journal from the
- *  Journals row, or a click that the rule placed. Focus follows an explicit choice. The same
- *  session's terminal cannot be in both slots: if it is already in the other, the two swap. */
-export function openIn(s: PanelState, slot: SlotId, key: number, now: number): PanelState {
+/** Put `key` in `slot` — the card's Open in A / Open in B, Alt+J's new journal, or a click the
+ *  rule placed. Focus follows an explicit naming of the slot (`focus`, default true); a click the
+ *  rule placed passes false. The same session's terminal cannot be in both slots: if it is already
+ *  in the other, the two swap. */
+export function openIn(s: PanelState, slot: SlotId, key: number, now: number, focus = true): PanelState {
 	const other: SlotId = slot === 'A' ? 'B' : 'A';
 	let next = s;
 	if (s.slots[other].key === key) next = put(next, other, s.slots[slot].key, now);
 	next = put(next, slot, key, now);
-	return { ...next, focused: slot, parked: next.parked === key ? null : next.parked };
+	return { ...next, focused: focus ? slot : next.focused, parked: next.parked === key ? null : next.parked };
 }
 
 /** Empty a slot (its ✕, or Alt+Backspace). The session keeps running; only the view goes. */

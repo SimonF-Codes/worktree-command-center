@@ -52,6 +52,7 @@ import { openProposalCounts } from './ui/manager-model';
 import { ProjectPanel } from './ui/project-panel';
 import { ProjectMetricsRunner } from './terminals/project-metrics';
 import { parseProjectLanesEnabled, parseProjectPanelEnabled, panelPlacement, PROJECT_PANEL_W, METRICS_REFRESH_MS } from './core/project-panel';
+import { parseTreeStageEnabled } from './core/side-panel';
 import { minTileSize } from './terminals/bubble-layout';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
 import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, linkWorkspaceRepo, type Workspace } from './terminals/workspace-store';
@@ -252,6 +253,9 @@ async function main(): Promise<void> {
 		// (delegation-roles.ts) — never against a session's environment — and the team view marks ★
 		// from spawns:. Off, every non-overseer spawn is refused, exactly as before.
 		let managers = parseManagersEnabled(cfg.v2);
+		// Tree Stage P4b: `v2.treeStage` (default off), applied live. On, every grid's stage draws the
+		// lineage tree with a two-slot Side Panel; off is today's grid, whole, with its layout selector.
+		let treeStage = parseTreeStageEnabled(cfg.v2);
 		// V2 steps 8-9: config.json `isolation`, default worktree-always (today's behaviour, and the
 		// rollback). `cheap-readonly` lets a spawn that writes nothing skip the worktree;
 		// `cheapest-safe` also lets a small fix write an existing checkout under its write lease.
@@ -285,6 +289,7 @@ async function main(): Promise<void> {
 			connectors,
 			recordLineage,
 			managers: () => managers,
+			treeStage: () => treeStage,
 			isolation,
 			newTab: async (fields, by) => { await newTabIsReady; return newTabFromSession(fields, by); },
 			sessionEnv: () => sessionEnvProvider({ workspaceId: id }),
@@ -349,6 +354,8 @@ async function main(): Promise<void> {
 			onProjectPanelChange: (on) => { projectPanelOn = on; projectBtn.style.display = on ? '' : 'none'; if (!on) closeProject(); },
 			// Applied live: the panel asks for its lanes on every refresh, and gets null while this is off.
 			onProjectLanesChange: (on) => { projectLanesOn = on; projectPanel.refresh(); },
+			// Applied live: only a mounted grid has a stage to redraw; the rest read it when they mount.
+			onTreeStageChange: (on) => { treeStage = on; activeGrid.treeStageChanged(); },
 			targets: {
 				list: () => repos,
 				move: (r) => moveTargetInteractive(r),

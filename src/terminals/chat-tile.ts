@@ -143,6 +143,8 @@ export class ChatTile {
 	}
 
 	setCentered(on: boolean): void { this.el?.toggleClass('centered', on); }
+	/** Out of a Side Panel slot (tree-stage.ts): hidden, still running. */
+	setHidden(on: boolean): void { if (this.el) this.el.style.display = on ? 'none' : ''; }
 	focus(): void { this.input?.focus(); }
 
 	unmount(): void {

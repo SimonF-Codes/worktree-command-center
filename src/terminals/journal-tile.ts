@@ -61,6 +61,8 @@ export class JournalTile implements StageTile {
   get tileId(): number { return this.opts.tileId; }
   get name(): string { return this.displayName; }
   get journalSlug(): string | undefined { return this.slug; }
+  /** Edited since the last save — the Side Panel treats it as an unsent draft (never replaced). */
+  get hasUnsavedText(): boolean { return this.dirty; }
 
   render(parent: HTMLElement): void {
     this.el = parent.createDiv({ cls: 'cos-term-tile cos-journal-tile' });

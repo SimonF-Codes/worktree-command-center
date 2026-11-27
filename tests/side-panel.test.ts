@@ -99,6 +99,9 @@ describe('the click rule — four cases', () => {
 		const r = nodeClick(s, 30, 2, factsMap(), 100, HOLD);
 		expect(r.outcome).toEqual({ kind: 'open', slot: 'B' });
 		expect([r.state.slots.A.key, r.state.slots.B.key]).toEqual([10, 30]);
+		expect(r.state.focused).toBe('A'); // the reader keeps the keyboard
+		// and a second click on the same node is case 1: it focuses B.
+		expect(nodeClick(r.state, 30, 2, factsMap(), 101, HOLD).outcome).toEqual({ kind: 'focus', slot: 'B' });
 	});
 
 	it('2. with neither focused, the slot used least recently; an empty slot first', () => {

@@ -146,7 +146,8 @@ export function layoutTree(tree: TeamTree, cards: ReadonlyMap<number, NodeCard>,
 		const box: NodeBox = {
 			key: n.session.key, sessionId: n.session.sessionId,
 			x: colX(depth), y, w: m.cardW, h: m.cardH, depth,
-			card: cardFor(n), group,
+			// ★ is buildTeam's verdict (from the role file's spawns:), the same one the sidebar shows.
+			card: { ...cardFor(n), manager: n.manager === true }, group,
 			hasChildren: n.children.length > 0,
 			hiddenBelow: isCollapsed ? countBelow(n) : 0,
 			...(reason ? { reason } : {}),
