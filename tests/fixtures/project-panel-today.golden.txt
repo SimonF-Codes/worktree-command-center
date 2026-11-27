@@ -1,0 +1,231 @@
+<div>
+  <div.wcc-proj.wcc-proj-column aria-label="Project panel" role="region">
+    <div.wcc-proj-top>
+      <div.wcc-proj-titles>
+        <div.wcc-proj-title> "Project · Groceries"
+        <div.wcc-proj-sub> "personal"
+      <div.wcc-roles-spacer aria-hidden="true">
+      <button.wcc-proj-btn aria-label="Refresh metrics" title="Re-run wcc-team metrics now (otherwise it re-runs at most every 5 minutes while the panel is open)"> "↻"
+      <button.wcc-proj-btn aria-label="Close" title="Close the Project panel"> "×"
+    <div.wcc-proj-body>
+      <div.wcc-metric.headline.unavailable data-metric="lead-time">
+        <div.wcc-metric-reason> "unavailable · not computed yet — the panel runs wcc-team when it opens"
+        <div.wcc-metric-label> "Lead time · median, 14 d"
+        <div.wcc-metric-source> "wcc-team metrics --json · ≤5m"
+      <div.wcc-proj-section>
+        <div.wcc-proj-h> "Untracked work · 0"
+        <div.wcc-proj-note> "No workstream has been opened here, so this is the worktree ledger's dirty, ahead and parked entries."
+        <div.wcc-mgr-empty> "Nothing dirty, ahead or parked in this workspace's repo."
+        <div.wcc-metric-source> "floor-report.json worktrees · ≤30s"
+      <div.wcc-proj-section>
+        <div.wcc-proj-h> "Flow"
+        <div.wcc-metric.unavailable data-metric="open-work">
+          <div.wcc-metric-reason> "unavailable · no workstream has been opened in this workspace — `cos-coord workstream open \"<title>\"`; until then the list shows the worktree ledger's untracked work"
+          <div.wcc-metric-label> "Open work · workstreams not landed or dropped"
+          <div.wcc-metric-source> "workstreams.jsonl · live"
+        <div.wcc-metric.unavailable data-metric="landed">
+          <div.wcc-metric-reason> "unavailable · not computed yet — the panel runs wcc-team when it opens"
+          <div.wcc-metric-label> "Landed · last 7 d"
+          <div.wcc-metric-source> "wcc-team metrics --json · ≤5m"
+        <div.wcc-metric.unavailable data-metric="blocked-time">
+          <div.wcc-metric-reason> "unavailable · not computed yet — the panel runs wcc-team when it opens"
+          <div.wcc-metric-label> "Blocked time · waiting on you (input + help), 7 d"
+          <div.wcc-metric-source> "wcc-team metrics --json · ≤5m"
+        <div.wcc-metric.unavailable data-metric="rework">
+          <div.wcc-metric-reason> "unavailable · not computed yet — the panel runs wcc-team when it opens"
+          <div.wcc-metric-label> "Rework rate · landed then reverted or reopened, 14 d"
+          <div.wcc-metric-source> "wcc-team metrics --json · ≤5m"
+        <div.wcc-metric.unavailable data-metric="idle-alive">
+          <div.wcc-metric-reason> "unavailable · not computed yet — the panel runs wcc-team when it opens"
+          <div.wcc-metric-label> "Idle but alive · sessions idle ≥ 20 min"
+          <div.wcc-metric-source> "wcc-team metrics --json · ≤5m"
+        <div.wcc-metric.unavailable data-metric="isolation-cost">
+          <div.wcc-metric-reason> "unavailable · not computed yet — the panel runs wcc-team when it opens"
+          <div.wcc-metric-label> "Isolation cost · worktrees created ÷ workstreams landed, 14 d"
+          <div.wcc-metric-source> "wcc-team metrics --json · ≤5m"
+        <div.wcc-metric.unavailable data-metric="highlights">
+          <div.wcc-metric-reason> "unavailable · not computed yet — the panel runs wcc-team when it opens"
+          <div.wcc-metric-label> "Highlights · releases and highlight:: log entries, 14 d"
+          <div.wcc-metric-source> "wcc-team metrics --json · ≤5m"
+        <div.wcc-metric.unavailable data-metric="suggestions">
+          <div.wcc-metric-reason> "unavailable · not computed yet — the panel runs wcc-team when it opens"
+          <div.wcc-metric-label> "Suggestions · newest Workflow Auditor notes"
+          <div.wcc-metric-source> "wcc-team metrics --json · ≤5m"
+      <div.wcc-proj-section>
+        <div.wcc-proj-h> "Tasks"
+        <div.wcc-metric.unavailable data-metric="progress">
+          <div.wcc-metric-reason> "unavailable · no task has been added in this workspace — `cos-coord workstream task add <ws> \"<title>\"`"
+          <div.wcc-metric-label> "Progress · tasks done ÷ tasks, open workstreams"
+          <div.wcc-metric-source> "workstreams.jsonl tasks · live"
+        <div.wcc-metric.unavailable data-metric="task-lead-time">
+          <div.wcc-metric-reason> "unavailable · no task has been added in this workspace — `cos-coord workstream task add <ws> \"<title>\"`"
+          <div.wcc-metric-label> "Task lead time · median opened → done, 14 d"
+          <div.wcc-metric-source> "workstreams.jsonl tasks · live"
+        <div.wcc-metric.unavailable data-metric="stale-work">
+          <div.wcc-metric-reason> "unavailable · no task has been added in this workspace — `cos-coord workstream task add <ws> \"<title>\"`"
+          <div.wcc-metric-label> "Stale work · tasks doing, unchanged ≥ 3 d"
+          <div.wcc-metric-source> "workstreams.jsonl tasks · live"
+      <div.wcc-proj-section>
+        <div.wcc-proj-h> "Updates · append-only"
+        <div.wcc-mgr-empty> "Nothing landed, released, opened or logged here in the last 7 days."
+      <div.wcc-proj-section>
+        <div.wcc-proj-h> "Spawn proposals · 0"
+        <div.wcc-mgr-empty> "None open. Ignoring one is a legitimate outcome — nothing escalates or times out."
+    <div.wcc-proj-cost title="What the last refresh cost (NFR-2). wcc-team runs as a child process; git never runs in this window's process."> "not run yet"
+=====
+<div>
+  <div.wcc-proj.wcc-proj-column aria-label="Project panel" role="region">
+    <div.wcc-proj-top>
+      <div.wcc-proj-titles>
+        <div.wcc-proj-title> "Project · Shop"
+        <div.wcc-proj-sub> "personal · no repo"
+      <div.wcc-roles-spacer aria-hidden="true">
+      <button.wcc-proj-btn aria-label="Refresh metrics" title="Re-run wcc-team metrics now (otherwise it re-runs at most every 5 minutes while the panel is open)"> "↻"
+      <button.wcc-proj-btn aria-label="Close" title="Close the Project panel"> "×"
+    <div.wcc-proj-body>
+      <div.wcc-metric.headline data-metric="lead-time">
+        <div.wcc-metric-value> "3.2 d"
+        <div.wcc-metric-label> "Lead time · median of 1, 14 d"
+        <div.wcc-metric-source> "workstreams.jsonl · open → close (landed) · as of just now · live"
+      <div.wcc-proj-section>
+        <div.wcc-proj-h> "Open work · 2"
+        <div.wcc-proj-row title="ws-1 · blocked · opened 30h ago">
+          <span.wcc-sb-dot.dot-needs aria-label="blocked">
+          <span.wcc-proj-mono.wcc-proj-id> "ws-1"
+          <span.wcc-proj-name> "Checkout flow"
+          <span.wcc-proj-meta.vacant> "vacant"
+          <span.wcc-proj-num> "1/3"
+          <span.wcc-proj-num> "30h"
+        <div.wcc-proj-row title="ws-2 · open · opened 5h ago">
+          <span.wcc-sb-dot.dot-idle aria-label="open">
+          <span.wcc-proj-mono.wcc-proj-id> "ws-2"
+          <span.wcc-proj-name> "Search index"
+          <span.wcc-proj-meta.vacant> "vacant"
+          <span.wcc-proj-num>
+          <span.wcc-proj-num> "5h"
+        <div.wcc-metric-source> "workstreams.jsonl · live"
+      <div.wcc-proj-section>
+        <div.wcc-proj-h> "Flow"
+        <div.wcc-metric data-metric="open-work">
+          <div.wcc-metric-value> "2 open"
+          <div.wcc-metric-label> "Open work · workstreams not landed or dropped"
+          <div.wcc-metric-source> "workstreams.jsonl · as of just now · live"
+        <div.wcc-metric data-metric="landed">
+          <div.wcc-metric-value> "1 workstream · 1 task"
+          <div.wcc-metric-label> "Landed · last 7 d"
+          <div.wcc-metric-source> "workstreams.jsonl · unavailable — git: no repo · unavailable — vault: vault not configured · as of just now · ≤5m"
+        <div.wcc-metric.unavailable data-metric="blocked-time">
+          <div.wcc-metric-reason> "unavailable · nothing recorded yet — attention.jsonl is written while this workspace is open in the app (since step 11)"
+          <div.wcc-metric-label> "Blocked time · waiting on you (input + help), 7 d"
+          <div.wcc-metric-source> "attention.jsonl · ≤5m"
+        <div.wcc-metric data-metric="rework">
+          <div.wcc-metric-value> "0 / 1 · 0%"
+          <div.wcc-metric-label> "Rework rate · landed then reverted or reopened, 14 d"
+          <div.wcc-metric-source> "workstreams.jsonl reopen · revert half unavailable — no repo · as of just now · ≤5m"
+        <div.wcc-metric.unavailable data-metric="idle-alive">
+          <div.wcc-metric-reason> "unavailable · no floor report yet"
+          <div.wcc-metric-label> "Idle but alive · sessions idle ≥ 20 min"
+          <div.wcc-metric-source> "floor-report.json · session memory idleSince · ≤5m"
+        <div.wcc-metric.unavailable data-metric="isolation-cost">
+          <div.wcc-metric-reason> "unavailable · no spawn decision recorded — isolation.jsonl is written per spawn since step 8, and none has happened in this workspace"
+          <div.wcc-metric-label> "Isolation cost · worktrees created ÷ workstreams landed, 14 d"
+          <div.wcc-metric-source> "isolation.jsonl ÷ workstreams.jsonl · ≤5m"
+        <div.wcc-metric.unavailable data-metric="highlights">
+          <div.wcc-metric-reason> "unavailable · releases unavailable — no repo · highlight:: unavailable — vault not configured"
+          <div.wcc-metric-label> "Highlights · releases and highlight:: log entries, 14 d"
+          <div.wcc-metric-source> "git tags · vault logs · ≤5m"
+        <div.wcc-metric.unavailable data-metric="suggestions">
+          <div.wcc-metric-reason> "unavailable · vault not configured"
+          <div.wcc-metric-label> "Suggestions · newest Workflow Auditor notes"
+          <div.wcc-metric-source> "Personal/Code/Proposals/ · on-demand"
+      <div.wcc-proj-section>
+        <div.wcc-proj-h> "Tasks"
+        <div.wcc-metric data-metric="progress">
+          <div.wcc-metric-value> "1 / 3"
+          <div.wcc-metric-label> "Progress · tasks done ÷ tasks, open workstreams"
+          <div.wcc-metric-source> "workstreams.jsonl tasks · as of just now · live"
+        <div.wcc-metric data-metric="task-lead-time">
+          <div.wcc-metric-value> "19 h"
+          <div.wcc-metric-label> "Task lead time · median of 1, 14 d"
+          <div.wcc-metric-source> "workstreams.jsonl tasks · as of just now · live"
+        <div.wcc-metric data-metric="stale-work">
+          <div.wcc-metric-value> "0 tasks"
+          <div.wcc-metric-label> "Stale work · tasks doing, unchanged ≥ 3 d"
+          <div.wcc-metric-source> "workstreams.jsonl tasks · as of just now · live"
+        <div.wcc-proj-ws>
+          <div.wcc-proj-ws-h>
+            <span.wcc-proj-mono.wcc-proj-id> "ws-1"
+            <span.wcc-proj-name> "Checkout flow"
+            <span.wcc-proj-state> "open"
+            <span.wcc-proj-num> "1/3"
+          <div.wcc-proj-bar aria-valuemax="3" aria-valuemin="0" aria-valuenow="1" role="progressbar">
+            <div.wcc-proj-bar-fill style={"width":"33%"}>
+          <div.wcc-proj-task.state-done title="">
+            <span.wcc-proj-mono> "t1"
+            <span.wcc-proj-state> "done"
+            <span.wcc-proj-name> "Cart page"
+            <span.wcc-proj-meta> "alice"
+            <span.wcc-proj-num> "19h"
+          <div.wcc-proj-task.state-blocked title="blocked: needs the API key">
+            <span.wcc-proj-mono> "t2"
+            <span.wcc-proj-state> "blocked"
+            <span.wcc-proj-name> "Payment form"
+            <span.wcc-proj-meta> "bob"
+            <span.wcc-proj-num> "29h"
+          <div.wcc-proj-task.state-todo title="">
+            <span.wcc-proj-mono> "t3"
+            <span.wcc-proj-state> "todo"
+            <span.wcc-proj-name> "Receipt email"
+            <span.wcc-proj-meta>
+            <span.wcc-proj-num> "29h"
+        <div.wcc-proj-ws>
+          <div.wcc-proj-ws-h>
+            <span.wcc-proj-mono.wcc-proj-id> "ws-2"
+            <span.wcc-proj-name> "Search index"
+            <span.wcc-proj-state> "open"
+            <span.wcc-proj-num> "no tasks"
+        <div.wcc-proj-ws>
+          <div.wcc-proj-ws-h>
+            <span.wcc-proj-mono.wcc-proj-id> "ws-3"
+            <span.wcc-proj-name> "Old migration"
+            <span.wcc-proj-state> "landed"
+            <span.wcc-proj-num> "no tasks"
+      <div.wcc-proj-section>
+        <div.wcc-proj-h> "Updates · append-only"
+        <div.wcc-proj-feed>
+          <time.wcc-proj-num> "1/14"
+          <span.wcc-proj-feed-text> "landed ws-3 — Old migration"
+        <div.wcc-proj-feed>
+          <time.wcc-proj-num> "1/14"
+          <span.wcc-proj-feed-text> "opened ws-2 — Search index"
+        <div.wcc-proj-feed>
+          <time.wcc-proj-num> "1/14"
+          <span.wcc-proj-feed-text> "done ws-1/t1 — Cart page"
+        <div.wcc-proj-feed>
+          <time.wcc-proj-num> "1/13"
+          <span.wcc-proj-feed-text> "opened ws-1 — Checkout flow"
+        <div.wcc-proj-feed>
+          <time.wcc-proj-num> "1/11"
+          <span.wcc-proj-feed-text> "opened ws-3 — Old migration"
+      <div.wcc-proj-section>
+        <div.wcc-proj-h> "Spawn proposals · 2"
+        <div.wcc-mgr-card>
+          <div.wcc-mgr-card-h>
+            <span.wcc-role-tag> "tester"
+            <span.wcc-mgr-task> "Write the receipt tests"
+          <div.wcc-mgr-meta> "alice → carol · 1h ago"
+          <div.wcc-mgr-why> "why: nobody owns t3"
+          <div.wcc-proj-acts>
+            <button.wcc-proj-btn.accept title="Spawn it as carol would — the same delegation check runs against carol's role file"> "Accept"
+            <button.wcc-proj-btn title="Decline with a reason the proposer can read"> "Decline…"
+        <div.wcc-mgr-card>
+          <div.wcc-mgr-card-h>
+            <span.wcc-role-tag> "writer"
+            <span.wcc-mgr-task> "Draft the docs"
+          <div.wcc-mgr-meta> "bob → unassigned · 2h ago"
+          <div.wcc-mgr-why> "why: release soon"
+          <div.wcc-mgr-verdict.refused> "Accept is unavailable: it is addressed to nobody"
+          <div.wcc-proj-acts>
+            <button.wcc-proj-btn.accept disabled="true" title="it is addressed to nobody"> "Accept"
+            <button.wcc-proj-btn title="Decline with a reason the proposer can read"> "Decline…"
+    <div.wcc-proj-cost title="What the last refresh cost (NFR-2). wcc-team runs as a child process; git never runs in this window's process."> "wcc-team 30 ms · 0 git calls (0 ms) · round trip 40 ms · 1m ago"

@@ -5,6 +5,24 @@ landed on `main`.
 
 ## Unreleased
 
+**🛤 Lanes in the Project panel — a progress view, behind `v2.projectLanes` (default off)**
+- Tree Stage step P7. With the setting on, the Project panel's open-work list becomes **one lane
+  per open workstream**: its tasks done ÷ total with a bar, its owner, how long it has been open,
+  the sessions serving it now (the `workstreamId` on their session record) with their state dots,
+  and how long those sessions waited on you, from `attention.jsonl`. A click on a session brings
+  its tile up. `lanesOf` (`src/ui/project-lanes.ts`) is pure: no new file, no new data.
+- **Sessions in no open workstream are not a lane.** They are one line under the lanes, *N sessions
+  outside any open workstream*, which expands into them.
+- **Nothing is shown as 0 that was not measured.** Blocked time with no attention line for a lane's
+  sessions, or with no session on it, reads *unavailable* with the reason. Token cost has no source
+  and always reads *unavailable*, with the reason.
+- **The empty state is what the default workspace shows**, since it has no `workstreams.jsonl`: the
+  lanes section says why there are no lanes and how one starts, and the untracked-work fallback
+  still follows it. When every workstream has landed or been dropped, it says that instead.
+- Off, the panel draws exactly what it drew before: a test compares the rendering against a
+  fixture recorded from the panel before lanes existed. Applied live from Settings, no restart.
+- `attention.jsonl` is now re-parsed only when it changes, since the lanes read it on every refresh.
+
 **🔗 Worktree prune, relayout and move work on a repo registered by another spelling**
 - Closes the known issue recorded under 1.0.0's push-lock fix. git reports every worktree by its
   canonical path (8.3 short names expanded, junctions and symlinks resolved); a target is

@@ -1018,6 +1018,14 @@ html, body {
 .wcc-proj-bar { height: 4px; border-radius: 2px; background: var(--background-modifier-border); overflow: hidden; }
 .wcc-proj-bar-fill { height: 100%; background: var(--cos-accent); }
 .wcc-proj-feed time { text-align: left; min-width: 38px; }
+/* Lanes (Tree Stage P7, v2.projectLanes): one open workstream each — a read surface, no drag. */
+.wcc-proj-lane { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-top: 1px dashed var(--background-modifier-border); }
+.wcc-proj-lane .wcc-proj-ws-h .wcc-sb-dot { align-self: center; flex: none; }
+.wcc-proj-lane > .wcc-proj-meta { max-width: none; }
+.wcc-proj-lane-sessions { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.wcc-proj-lane-session { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer; max-width: 160px; }
+.wcc-proj-lane-session:hover .wcc-proj-name, .wcc-proj-lane-session:focus-visible .wcc-proj-name { text-decoration: underline; }
+.wcc-proj-lanes-outside { align-self: flex-start; text-align: left; }
 .wcc-proj-acts { display: flex; gap: 6px; }
 .wcc-proj-cost { flex: 0 0 auto; font-family: var(--font-monospace); font-size: 10.5px; color: var(--text-faint); padding: 5px 12px; border-top: 1px solid var(--background-modifier-border); background: var(--background-secondary); overflow-wrap: anywhere; }
 :root[data-theme="olympus"] .wcc-proj-top { border-bottom: 3px solid #0b0b0b; }

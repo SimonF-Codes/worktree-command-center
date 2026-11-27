@@ -51,7 +51,7 @@ import { ManagerViewPane } from './ui/manager-view';
 import { openProposalCounts } from './ui/manager-model';
 import { ProjectPanel } from './ui/project-panel';
 import { ProjectMetricsRunner } from './terminals/project-metrics';
-import { parseProjectPanelEnabled, panelPlacement, PROJECT_PANEL_W, METRICS_REFRESH_MS } from './core/project-panel';
+import { parseProjectLanesEnabled, parseProjectPanelEnabled, panelPlacement, PROJECT_PANEL_W, METRICS_REFRESH_MS } from './core/project-panel';
 import { minTileSize } from './terminals/bubble-layout';
 import { CUSTODIAN_SLUG } from './terminals/role-view-loader';
 import { normalizeWorkspaces, addWorkspace, closeWorkspace, nextActiveAfter, linkWorkspaceRepo, type Workspace } from './terminals/workspace-store';
@@ -347,6 +347,8 @@ async function main(): Promise<void> {
 			onManagersChange: (on) => { managers = on; sidebar.refresh(); },
 			// Applied live. Off hides 📊 and closes the panel; the logs keep being written regardless.
 			onProjectPanelChange: (on) => { projectPanelOn = on; projectBtn.style.display = on ? '' : 'none'; if (!on) closeProject(); },
+			// Applied live: the panel asks for its lanes on every refresh, and gets null while this is off.
+			onProjectLanesChange: (on) => { projectLanesOn = on; projectPanel.refresh(); },
 			targets: {
 				list: () => repos,
 				move: (r) => moveTargetInteractive(r),
@@ -700,6 +702,9 @@ async function main(): Promise<void> {
 		// minTileSize inequality from live cell metrics, never a pixel breakpoint); otherwise it opens
 		// in the main pane, the way Roles does. Off = no 📊; the logs keep being written regardless.
 		let projectPanelOn = parseProjectPanelEnabled(cfg.v2);
+		// Tree Stage P7: lanes in the panel, behind `v2.projectLanes` (default off; applied live). Off,
+		// the panel is never handed a floor, so it draws exactly what it drew before lanes existed.
+		let projectLanesOn = parseProjectLanesEnabled(cfg.v2);
 		const projectBtn = barButton('wcc-settings-btn', '📊', 'Project');
 		projectBtn.style.display = projectPanelOn ? '' : 'none';
 		const metricsRunner = new ProjectMetricsRunner({ cliPath: path.join(sidecarDir, 'wcc-team.cjs'), userData, log: (l) => console.info(l) });
@@ -729,6 +734,22 @@ async function main(): Promise<void> {
 					},
 				};
 			},
+			// The floor the lanes read: every session on this tab with its state and workstreamId, and
+			// attention.jsonl. The overseer is left out — it oversees every lane and serves none.
+			lanes: () => {
+				if (!projectLanesOn) return null;
+				const g = grids.get(activeId);
+				if (!g) return null;
+				const states = new Map(g.floorState().map((r) => [r.id, r.state]));
+				return {
+					now: Date.now(),
+					sessions: g.floorSessions().filter((s) => s.key >= 0).map((s) => ({
+						key: s.key, sessionId: s.sessionId, name: s.name, workstreamId: s.workstreamId ?? null, state: states.get(s.key) ?? 'running',
+					})),
+					attention: g.attentionLog(),
+				};
+			},
+			onReveal: (tileKey) => activeGrid.revealTile(tileKey),
 			onRefresh: runProjectMetrics,
 			// FR-53: Accept / Decline act FOR the proposal's addressee — the same evaluation, and the same
 			// checkDelegation against its role file, as the addressee's own `cos-coord proposal accept`.

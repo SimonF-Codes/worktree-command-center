@@ -1,10 +1,18 @@
-// V2 Team Floor step 11 — the Project panel's two pure decisions: whether it is on, and where it goes.
+// V2 Team Floor step 11 — the Project panel's pure decisions: whether it is on, whether its lanes
+// are (Tree Stage P7), and where it goes.
 
 /** `v2.projectPanel`, default OFF. Off = no 📊 at all; attention.jsonl and workstreams.jsonl keep
  *  being written regardless, so turning it on later has history to show. */
 export function parseProjectPanelEnabled(v2: unknown): boolean {
 	if (!v2 || typeof v2 !== 'object') return false;
 	return (v2 as { projectPanel?: unknown }).projectPanel === true;
+}
+
+/** `v2.projectLanes` (Tree Stage step P7), default OFF. Off = the panel's open-work list exactly as
+ *  it was before lanes; on = lanes (ui/project-lanes.ts) in its place. Applied live, no restart. */
+export function parseProjectLanesEnabled(v2: unknown): boolean {
+	if (!v2 || typeof v2 !== 'object') return false;
+	return (v2 as { projectLanes?: unknown }).projectLanes === true;
 }
 
 /** The panel's width when pinned as a column, in px. A width, not a breakpoint: WHETHER it pins is
