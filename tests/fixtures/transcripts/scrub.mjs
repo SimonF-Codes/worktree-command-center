@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // The scrubber for the transcript fixtures (Chat Panel P0). A transcript is a record of real
 // conversations; a fixture must carry its STRUCTURE and none of its CONTENT. Run it to re-capture:
 //
