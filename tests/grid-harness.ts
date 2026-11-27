@@ -181,6 +181,15 @@ export function pressKey(o: { key: string; code?: string; altKey?: boolean; repe
 
 export function keyListenerCount(): number { return (docHandlers.get('keydown') ?? []).length; }
 
+/** Every listener the grid has left on the fake document and window, by event — empty once a grid
+ *  has been disposed. */
+export function listenersLeft(): Record<string, number> {
+	const out: Record<string, number> = {};
+	for (const [ev, l] of docHandlers) if (l.length) out[`document:${ev}`] = l.length;
+	for (const [ev, l] of winHandlers) if (l.length) out[`window:${ev}`] = l.length;
+	return out;
+}
+
 // ---- A grid over a temp coordination directory and a sessions file of journal records.
 
 export interface GridHarness {
@@ -188,7 +197,10 @@ export interface GridHarness {
 	grid: import('../src/terminals/terminals-grid').TerminalsGrid;
 	root: string;
 	toasts: string[];
-	cleanup: () => void;
+	/** Wait for the grid's queued writes, dispose it, check it left nothing listening, then delete
+	 *  its directory. Throws if a listener survived — a teardown that leaks must fail loudly, not
+	 *  perturb the next test. */
+	cleanup: () => Promise<void>;
 }
 
 /** Journal records for workspace `group`, in the order they restore (tile ids 1, 2, 3…). */
@@ -200,6 +212,7 @@ export function journalRecords(names: string[], hidden: string[] = []): SessionR
  *  goes in here). The stage's size is fixed by `stage` and applied before the first layout. */
 export async function mountGrid(o: { records?: SessionRecord[]; extra?: Partial<GridDeps>; stage?: { w: number; h: number } } = {}): Promise<GridHarness> {
 	installGridGlobals();
+	await trackScans();
 	const { TerminalsGrid } = await import('../src/terminals/terminals-grid');
 	const root = makeTempDir('cos-grid-harness-');
 	const coordDir = path.join(root, 'coord', 'g1');
@@ -240,11 +253,65 @@ export async function mountGrid(o: { records?: SessionRecord[]; extra?: Partial<
 	flushFrames();
 	return {
 		host, grid, root, toasts,
-		cleanup: () => {
-			try { grid.unmount(); } catch { /* best effort */ }
-			fs.rmSync(root, { recursive: true, force: true });
+		cleanup: async () => {
+			// The grid's session-file writes are fire-and-forget (`void this.persist()`) on ONE chain
+			// shared by every grid (TerminalsGrid.persistChain is static). Drain it before deleting the
+			// directory those writes land in: otherwise a write still in flight makes Node 20's rmSync
+			// fail with ENOTEMPTY, or lands in the next test's run.
+			await settleGrid();
+			// dispose(), not unmount(). unmount() is a workspace switch: by design it leaves the grid's
+			// fs watchers on its coordination directory armed (the god outbox, connectors/, the
+			// session channel), because a workspace that is not on screen must still drain its
+			// requests. Deleting a directory under a live watcher makes the watcher emit EPERM on
+			// Windows under Node 20, and with no 'error' listener that is an uncaught exception which
+			// vitest pins on whatever test is running when it lands (PR #8, run 46065012630).
+			grid.dispose();
+			await settleGrid(); // dispose() kills tiles; a journal with unsaved text writes once more
+			const left = listenersLeft();
+			// Reset the fake globals whatever was left, so one leaking test cannot bleed into the next.
+			installGridGlobals();
+			try { fs.rmSync(root, { recursive: true, force: true }); }
+			catch (e) {
+				// Name whatever was still being written, so the next late writer is found, not guessed at.
+				const what = (dir: string): string[] => { try { return fs.readdirSync(dir, { recursive: true }).map(String); } catch { return []; } };
+				throw new Error(`${(e as Error).message} — still in it: ${JSON.stringify(what(root))}`);
+			}
+			if (Object.keys(left).length) throw new Error(`grid left listeners after dispose: ${JSON.stringify(left)}`);
 		},
 	};
+}
+
+/** Async work the grid starts and does not await, which writes into its directories: mount()'s
+ *  `void this.scanWorktrees()` (the worktrees.md ledger). Wrapped once on the prototype so every
+ *  scan any grid starts is recorded, and a teardown can wait for it instead of racing it. */
+const inFlight = new Set<Promise<unknown>>();
+let scansTracked = false;
+async function trackScans(): Promise<void> {
+	if (scansTracked) return;
+	scansTracked = true;
+	const { TerminalsGrid } = await import('../src/terminals/terminals-grid');
+	const proto = TerminalsGrid.prototype as unknown as { scanWorktrees: (...a: unknown[]) => Promise<void> };
+	const real = proto.scanWorktrees;
+	proto.scanWorktrees = function (this: unknown, ...a: unknown[]) {
+		const p = real.apply(this, a);
+		inFlight.add(p);
+		void p.finally(() => inFlight.delete(p)).catch(() => {});
+		return p;
+	};
+}
+
+/** Wait for every untracked write this harness knows of: scans, then the persist chain. */
+export async function settleGrid(): Promise<void> {
+	while (inFlight.size) await Promise.allSettled([...inFlight]);
+	await settlePersists();
+}
+
+/** Resolve once every queued session-file write, from any grid, has finished. */
+export async function settlePersists(): Promise<void> {
+	const { TerminalsGrid } = await import('../src/terminals/terminals-grid');
+	const holder = TerminalsGrid as unknown as { persistChain: Promise<void> };
+	// A write can queue another behind it; wait until the chain stops moving.
+	for (let last: Promise<void> | null = null; last !== holder.persistChain;) { last = holder.persistChain; await last; }
 }
 
 /** The stage element (where tiles and, with the tree stage on, the tree and slots are drawn). */

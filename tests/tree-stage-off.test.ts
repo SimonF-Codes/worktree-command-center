@@ -18,7 +18,11 @@ const mount = async (on: () => boolean, names = ['Alpha notes', 'Beta notes', 'G
 	harnesses.push(h);
 	return h;
 };
-afterEach(() => { while (harnesses.length) harnesses.pop()!.cleanup(); vi.restoreAllMocks(); });
+// Mocks are restored even if a cleanup throws, so a spy can never carry its calls into the next test.
+afterEach(async () => {
+	try { while (harnesses.length) await harnesses.pop()!.cleanup(); }
+	finally { vi.restoreAllMocks(); }
+});
 
 describe('v2.treeStage off — the grid byte for byte as it was', () => {
 	it('with no setting at all, draws the recorded golden', async () => {

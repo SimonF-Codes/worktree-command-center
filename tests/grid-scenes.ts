@@ -28,7 +28,7 @@ export async function drawScenes(extra: Partial<GridDeps> = {}): Promise<string>
 			await s.run(h);
 			flushFrames();
 			out.push(`### ${s.name}\n${serialize(h.host)}`);
-		} finally { h.cleanup(); }
+		} finally { await h.cleanup(); }
 	}
 	return out.join('\n=====\n') + '\n';
 }
