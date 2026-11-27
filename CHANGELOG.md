@@ -44,6 +44,40 @@ landed on `main`.
   streaming, against the baseline in the pull request. **Not yet tried:** whether a WebGL-drawn
   tile still draws once placed in a slot. Both need the app running.
 
+**💬 `wcc-team transcript --tail`: Claude Code's transcript format, settled before the Chat view is built on it**
+- Chat Panel step P0, a spike with no window. `src/core/transcript.ts` holds a pure
+  `normalise(line, ref?) → ChatItem[]` (the design's union: prompt, reply, thinking, tool,
+  notice, skipped) and `foldItems()`, which joins each tool call to its result. A new read-only
+  command, `wcc-team transcript --tail <file> [--json] [--bytes <n>] [--items <n>]`, reads the
+  end of one transcript and prints the conversation, then a count of every line it skipped, by
+  label. There is no setting: nothing in the window calls it yet. To roll it back, remove the command.
+- **The finding: the fields a reader needs have not moved.** Measured over every transcript on
+  the machine it was built on: 103 files, 67,581 lines, 40 CLI versions from 2.1.170 to 2.1.332.
+  `uuid`, `parentUuid`, `timestamp`, `message.content` and the four block shapes (`text`,
+  `thinking`, `tool_use`, `tool_result`) are the same in all 40 versions. An assistant line always
+  holds exactly one block. `normalise()` misses no tool result over the whole set: none is
+  orphaned and none is unparseable. **The rest of the file churns heavily but only by addition:**
+  29 line types, most of them bookkeeping, and new top-level keys every few releases. Those are
+  skipped by name, so they grow the skipped count and break nothing.
+- **What did move:** `origin`, the field that marks a human's prompt, first appears in 2.1.209.
+  Resuming a session (`--continue`) appends to the same file under the same session id, but the
+  `derived-from` line that marks the resume first appears around 2.1.327. Before that, a resume is
+  visible only as a change in `version`.
+- **The human's prompt is `origin.kind === "human"`**, on 441 `user` lines. **A prompt typed while
+  a turn runs is not a `user` line at all.** It is an `attachment` of type `queued_command` (86 of
+  them), and a reader that skips attachments loses it. `thinking` text is usually not on disk: 88%
+  of thinking blocks carry only a signature.
+- The four cases the design listed as unobserved now each have a fixture. A **compaction** stays
+  in the same file as a `compact_boundary` followed by a summary `user` line, and the reader skips
+  the summary. **`/clear`** starts a new file that opens with the `/clear` command line. **A
+  sub-agent** has its own file, `<session>/subagents/agent-<id>.jsonl`, where every line is a
+  sidechain and the file opens with the brief the sub-agent was given.
+- The fixtures in `tests/fixtures/transcripts/` are scrubbed captures. `scrub.mjs` there is the
+  scrubber: an allow-list. It keeps only enum values and remapped ids, shifts every time to 2030,
+  and turns all other text into filler of the same shape. It refuses to write a capture in which
+  it finds an e-mail address, an absolute path, the home directory, the user name, or a local
+  project folder's name. A test checks every string in every fixture against the same rules.
+
 **🛤 Lanes in the Project panel — a progress view, behind `v2.projectLanes` (default off)**
 - Tree Stage step P7. With the setting on, the Project panel's open-work list becomes **one lane
   per open workstream**: its tasks done ÷ total with a bar, its owner, how long it has been open,
