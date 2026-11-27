@@ -5,7 +5,7 @@ import type { ToastVariant } from './toast-queue';
 import { parseAutoClose, thresholdLabel, AUTO_CLOSE_CHOICES } from '../terminals/auto-close';
 import { parseHideTabs, parseSidebarEnabled, parseTeamView } from './sidebar-model';
 import { parseManagersEnabled } from '../core/delegation';
-import { parseProjectPanelEnabled } from '../core/project-panel';
+import { parseProjectLanesEnabled, parseProjectPanelEnabled } from '../core/project-panel';
 import type { RepoConfig } from '../terminals/terminals-grid';
 import type { NestButton } from '../move-repo';
 import * as fs from 'fs';
@@ -30,6 +30,8 @@ export interface SettingsPanelDeps {
 	onManagersChange?: (enabled: boolean) => void;
 	/** Show or hide 📊 live — the value just saved as `v2.projectPanel`. */
 	onProjectPanelChange?: (enabled: boolean) => void;
+	/** Draw the Project panel's lanes live — the value just saved as `v2.projectLanes`. */
+	onProjectLanesChange?: (enabled: boolean) => void;
 	/** The registered targets and what can be done to one. Read from the APP, never from config:
 	 *  persist() rewrites the whole `repos` key from the app's memory, so the app has to make
 	 *  these edits itself or they are overwritten. Each action resolves once it is finished or
@@ -311,6 +313,31 @@ export class SettingsPanel {
 				await this.deps.setConfig({ ...cfg, v2: { ...prev, projectPanel: on } });
 				this.deps.onProjectPanelChange?.(on);
 				this.deps.toast(on ? 'Project panel on — 📊 in the top bar' : 'Project panel off — the logs keep being written', 'success');
+			})();
+		});
+
+		// Tree Stage P7: lanes in the Project panel. Its own key, default OFF; off leaves the panel's
+		// open-work list exactly as it was. Applied live, like the panel's own setting.
+		const lrow = s.createDiv({ cls: 'wcc-settings-row' });
+		const llabel = lrow.createEl('label', { cls: 'wcc-settings-row-label' });
+		const lbox = llabel.createEl('input', { attr: { type: 'checkbox' } }) as HTMLInputElement;
+		lbox.checked = parseProjectLanesEnabled(v2);
+		llabel.append(' Project panel lanes — one lane per open workstream, in place of the open-work list');
+		s.createDiv({
+			cls: 'wcc-settings-note',
+			text: 'A lane shows its tasks done ÷ total, the sessions serving it now with their state, how long it has been open, and '
+				+ 'how long those sessions waited on you where attention.jsonl says. Sessions in no open workstream are one line under '
+				+ 'the lanes, not a lane. Token cost reads unavailable: nothing records it. Read-only — joining a workstream is a spawn '
+				+ 'with --workstream. Needs the Project panel on to be seen.',
+		});
+		lbox.addEventListener('change', () => {
+			void (async () => {
+				const on = lbox.checked;
+				const cfg = await this.deps.getConfig();
+				const prev = cfg.v2 && typeof cfg.v2 === 'object' ? (cfg.v2 as Record<string, unknown>) : {};
+				await this.deps.setConfig({ ...cfg, v2: { ...prev, projectLanes: on } });
+				this.deps.onProjectLanesChange?.(on);
+				this.deps.toast(on ? 'Project lanes on — one per open workstream' : 'Project lanes off — the open-work list is back', 'success');
 			})();
 		});
 	}
