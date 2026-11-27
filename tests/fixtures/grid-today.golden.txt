@@ -1,0 +1,657 @@
+### three journals, as restored
+<div>
+  <div.cos-terminals-controls>
+    <select value="">
+    <select value="">
+    <select title="Model for new terminals" value="">
+      <option value=""> "Model: Default"
+      <option value="opus"> "Opus (latest)"
+      <option value="sonnet"> "Sonnet (latest)"
+      <option value="haiku"> "Haiku (latest)"
+      <option value="fable"> "Fable (latest)"
+      <option value="claude-opus-5"> "Opus 5"
+      <option value="claude-opus-4-8"> "Opus 4.8"
+      <option value="claude-sonnet-5"> "Sonnet 5"
+      <option value="claude-haiku-4-5"> "Haiku 4.5"
+      <option value="claude-fable-5"> "Fable 5"
+    <select title="Effort for new terminals" value="">
+      <option value=""> "Effort: Default"
+      <option value="low"> "Low"
+      <option value="medium"> "Medium"
+      <option value="high"> "High"
+      <option value="xhigh"> "XHigh"
+      <option value="max"> "Max"
+      <option value="ultracode"> "Ultracode"
+    <select title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto">
+      <option title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto"> "⤢ Auto"
+      <option title="Grid — always an equal best-fit grid, even when a terminal is spotlighted." value="grid"> "▦ Grid"
+      <option title="Columns — always full-height columns, one per terminal." value="columns"> "▥ Columns"
+      <option title="Rows — always full-width rows, one per terminal." value="rows"> "▤ Rows"
+      <option title="Focus — the spotlighted terminal as large as it can be, the rest kept to preview strips at the edge." value="focus"> "◎ Focus"
+    <button> "+ New branch"
+    <button.cos-play-btn> "▶ Play"
+    <button.cos-lock-btn title="When locked, terminals never auto-center — only your click or Alt+F-key centers one"> "🔓 Lock"
+    <button.cos-god-btn title="Open the Kane overseer console — sees the whole floor, acts on request (Alt+K)"> "🜲 Kane"
+    <button.cos-god-btn title="Add another Kane console — a separate session in its own panel (close it with its ×)"> "🜲+"
+    <button> "🧩 View Code"
+    <button> "⟳ Refresh"
+    <button.cos-journal-btn title="Open a new journal entry tile (Alt+J)"> "📓 Journal Entry"
+  <div.cos-coord-board.collapsed>
+    <div.cos-coord-head> "🛰 Coordination"
+    <div.cos-coord-hidden>
+    <div.cos-coord-registry>
+    <div.cos-coord-bg>
+    <div.cos-coord-locks>
+      <span.cos-coord-empty> "no active locks"
+    <div.cos-coord-feed>
+  <div.cos-stage-wrap>
+    <div.cos-terminals-stage>
+      <div.cos-term-tile.cos-journal-tile style={"height":"438px","left":"8px","top":"8px","width":"788px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Alpha notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"438px","left":"804px","top":"8px","width":"788px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Beta notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"438px","left":"8px","top":"454px","width":"788px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Gamma notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+=====
+### a click centres the second
+<div>
+  <div.cos-terminals-controls>
+    <select value="">
+    <select value="">
+    <select title="Model for new terminals" value="">
+      <option value=""> "Model: Default"
+      <option value="opus"> "Opus (latest)"
+      <option value="sonnet"> "Sonnet (latest)"
+      <option value="haiku"> "Haiku (latest)"
+      <option value="fable"> "Fable (latest)"
+      <option value="claude-opus-5"> "Opus 5"
+      <option value="claude-opus-4-8"> "Opus 4.8"
+      <option value="claude-sonnet-5"> "Sonnet 5"
+      <option value="claude-haiku-4-5"> "Haiku 4.5"
+      <option value="claude-fable-5"> "Fable 5"
+    <select title="Effort for new terminals" value="">
+      <option value=""> "Effort: Default"
+      <option value="low"> "Low"
+      <option value="medium"> "Medium"
+      <option value="high"> "High"
+      <option value="xhigh"> "XHigh"
+      <option value="max"> "Max"
+      <option value="ultracode"> "Ultracode"
+    <select title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto">
+      <option title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto"> "⤢ Auto"
+      <option title="Grid — always an equal best-fit grid, even when a terminal is spotlighted." value="grid"> "▦ Grid"
+      <option title="Columns — always full-height columns, one per terminal." value="columns"> "▥ Columns"
+      <option title="Rows — always full-width rows, one per terminal." value="rows"> "▤ Rows"
+      <option title="Focus — the spotlighted terminal as large as it can be, the rest kept to preview strips at the edge." value="focus"> "◎ Focus"
+    <button> "+ New branch"
+    <button.cos-play-btn> "▶ Play"
+    <button.cos-lock-btn title="When locked, terminals never auto-center — only your click or Alt+F-key centers one"> "🔓 Lock"
+    <button.cos-god-btn title="Open the Kane overseer console — sees the whole floor, acts on request (Alt+K)"> "🜲 Kane"
+    <button.cos-god-btn title="Add another Kane console — a separate session in its own panel (close it with its ×)"> "🜲+"
+    <button> "🧩 View Code"
+    <button> "⟳ Refresh"
+    <button.cos-journal-btn title="Open a new journal entry tile (Alt+J)"> "📓 Journal Entry"
+  <div.cos-coord-board.collapsed>
+    <div.cos-coord-head> "🛰 Coordination"
+    <div.cos-coord-hidden>
+    <div.cos-coord-registry>
+    <div.cos-coord-bg>
+    <div.cos-coord-locks>
+      <span.cos-coord-empty> "no active locks"
+    <div.cos-coord-feed>
+  <div.cos-stage-wrap>
+    <div.cos-terminals-stage>
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"8px","top":"8px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Alpha notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile.centered style={"height":"884px","left":"336px","top":"8px","width":"928px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Beta notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"1272px","top":"8px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Gamma notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+=====
+### Alt+→ steps the spotlight
+<div>
+  <div.cos-terminals-controls>
+    <select value="">
+    <select value="">
+    <select title="Model for new terminals" value="">
+      <option value=""> "Model: Default"
+      <option value="opus"> "Opus (latest)"
+      <option value="sonnet"> "Sonnet (latest)"
+      <option value="haiku"> "Haiku (latest)"
+      <option value="fable"> "Fable (latest)"
+      <option value="claude-opus-5"> "Opus 5"
+      <option value="claude-opus-4-8"> "Opus 4.8"
+      <option value="claude-sonnet-5"> "Sonnet 5"
+      <option value="claude-haiku-4-5"> "Haiku 4.5"
+      <option value="claude-fable-5"> "Fable 5"
+    <select title="Effort for new terminals" value="">
+      <option value=""> "Effort: Default"
+      <option value="low"> "Low"
+      <option value="medium"> "Medium"
+      <option value="high"> "High"
+      <option value="xhigh"> "XHigh"
+      <option value="max"> "Max"
+      <option value="ultracode"> "Ultracode"
+    <select title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto">
+      <option title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto"> "⤢ Auto"
+      <option title="Grid — always an equal best-fit grid, even when a terminal is spotlighted." value="grid"> "▦ Grid"
+      <option title="Columns — always full-height columns, one per terminal." value="columns"> "▥ Columns"
+      <option title="Rows — always full-width rows, one per terminal." value="rows"> "▤ Rows"
+      <option title="Focus — the spotlighted terminal as large as it can be, the rest kept to preview strips at the edge." value="focus"> "◎ Focus"
+    <button> "+ New branch"
+    <button.cos-play-btn> "▶ Play"
+    <button.cos-lock-btn title="When locked, terminals never auto-center — only your click or Alt+F-key centers one"> "🔓 Lock"
+    <button.cos-god-btn title="Open the Kane overseer console — sees the whole floor, acts on request (Alt+K)"> "🜲 Kane"
+    <button.cos-god-btn title="Add another Kane console — a separate session in its own panel (close it with its ×)"> "🜲+"
+    <button> "🧩 View Code"
+    <button> "⟳ Refresh"
+    <button.cos-journal-btn title="Open a new journal entry tile (Alt+J)"> "📓 Journal Entry"
+  <div.cos-coord-board.collapsed>
+    <div.cos-coord-head> "🛰 Coordination"
+    <div.cos-coord-hidden>
+    <div.cos-coord-registry>
+    <div.cos-coord-bg>
+    <div.cos-coord-locks>
+      <span.cos-coord-empty> "no active locks"
+    <div.cos-coord-feed>
+  <div.cos-stage-wrap>
+    <div.cos-terminals-stage>
+      <div.cos-term-tile.cos-journal-tile.centered style={"height":"884px","left":"336px","top":"8px","width":"928px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Alpha notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"8px","top":"8px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Beta notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"1272px","top":"8px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Gamma notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+=====
+### Alt+J opens a journal entry
+<div>
+  <div.cos-terminals-controls>
+    <select value="">
+    <select value="">
+    <select title="Model for new terminals" value="">
+      <option value=""> "Model: Default"
+      <option value="opus"> "Opus (latest)"
+      <option value="sonnet"> "Sonnet (latest)"
+      <option value="haiku"> "Haiku (latest)"
+      <option value="fable"> "Fable (latest)"
+      <option value="claude-opus-5"> "Opus 5"
+      <option value="claude-opus-4-8"> "Opus 4.8"
+      <option value="claude-sonnet-5"> "Sonnet 5"
+      <option value="claude-haiku-4-5"> "Haiku 4.5"
+      <option value="claude-fable-5"> "Fable 5"
+    <select title="Effort for new terminals" value="">
+      <option value=""> "Effort: Default"
+      <option value="low"> "Low"
+      <option value="medium"> "Medium"
+      <option value="high"> "High"
+      <option value="xhigh"> "XHigh"
+      <option value="max"> "Max"
+      <option value="ultracode"> "Ultracode"
+    <select title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto">
+      <option title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto"> "⤢ Auto"
+      <option title="Grid — always an equal best-fit grid, even when a terminal is spotlighted." value="grid"> "▦ Grid"
+      <option title="Columns — always full-height columns, one per terminal." value="columns"> "▥ Columns"
+      <option title="Rows — always full-width rows, one per terminal." value="rows"> "▤ Rows"
+      <option title="Focus — the spotlighted terminal as large as it can be, the rest kept to preview strips at the edge." value="focus"> "◎ Focus"
+    <button> "+ New branch"
+    <button.cos-play-btn> "▶ Play"
+    <button.cos-lock-btn title="When locked, terminals never auto-center — only your click or Alt+F-key centers one"> "🔓 Lock"
+    <button.cos-god-btn title="Open the Kane overseer console — sees the whole floor, acts on request (Alt+K)"> "🜲 Kane"
+    <button.cos-god-btn title="Add another Kane console — a separate session in its own panel (close it with its ×)"> "🜲+"
+    <button> "🧩 View Code"
+    <button> "⟳ Refresh"
+    <button.cos-journal-btn title="Open a new journal entry tile (Alt+J)"> "📓 Journal Entry"
+  <div.cos-coord-board.collapsed>
+    <div.cos-coord-head> "🛰 Coordination"
+    <div.cos-coord-hidden>
+    <div.cos-coord-registry>
+    <div.cos-coord-bg>
+    <div.cos-coord-locks>
+      <span.cos-coord-empty> "no active locks"
+    <div.cos-coord-feed>
+  <div.cos-stage-wrap>
+    <div.cos-terminals-stage>
+      <div.cos-term-tile.cos-journal-tile style={"height":"438px","left":"8px","top":"8px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Alpha notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"1272px","top":"8px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Beta notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"438px","left":"8px","top":"454px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Gamma notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile.centered style={"height":"884px","left":"336px","top":"8px","width":"928px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Journal 1"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+=====
+### Alt+L locks the centred tile
+<div>
+  <div.cos-terminals-controls>
+    <select value="">
+    <select value="">
+    <select title="Model for new terminals" value="">
+      <option value=""> "Model: Default"
+      <option value="opus"> "Opus (latest)"
+      <option value="sonnet"> "Sonnet (latest)"
+      <option value="haiku"> "Haiku (latest)"
+      <option value="fable"> "Fable (latest)"
+      <option value="claude-opus-5"> "Opus 5"
+      <option value="claude-opus-4-8"> "Opus 4.8"
+      <option value="claude-sonnet-5"> "Sonnet 5"
+      <option value="claude-haiku-4-5"> "Haiku 4.5"
+      <option value="claude-fable-5"> "Fable 5"
+    <select title="Effort for new terminals" value="">
+      <option value=""> "Effort: Default"
+      <option value="low"> "Low"
+      <option value="medium"> "Medium"
+      <option value="high"> "High"
+      <option value="xhigh"> "XHigh"
+      <option value="max"> "Max"
+      <option value="ultracode"> "Ultracode"
+    <select title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto">
+      <option title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto"> "⤢ Auto"
+      <option title="Grid — always an equal best-fit grid, even when a terminal is spotlighted." value="grid"> "▦ Grid"
+      <option title="Columns — always full-height columns, one per terminal." value="columns"> "▥ Columns"
+      <option title="Rows — always full-width rows, one per terminal." value="rows"> "▤ Rows"
+      <option title="Focus — the spotlighted terminal as large as it can be, the rest kept to preview strips at the edge." value="focus"> "◎ Focus"
+    <button> "+ New branch"
+    <button.cos-play-btn> "▶ Play"
+    <button.cos-lock-btn title="When locked, terminals never auto-center — only your click or Alt+F-key centers one"> "🔓 Lock"
+    <button.cos-god-btn title="Open the Kane overseer console — sees the whole floor, acts on request (Alt+K)"> "🜲 Kane"
+    <button.cos-god-btn title="Add another Kane console — a separate session in its own panel (close it with its ×)"> "🜲+"
+    <button> "🧩 View Code"
+    <button> "⟳ Refresh"
+    <button.cos-journal-btn title="Open a new journal entry tile (Alt+J)"> "📓 Journal Entry"
+  <div.cos-coord-board.collapsed>
+    <div.cos-coord-head> "🛰 Coordination"
+    <div.cos-coord-hidden>
+    <div.cos-coord-registry>
+    <div.cos-coord-bg>
+    <div.cos-coord-locks>
+      <span.cos-coord-empty> "no active locks"
+    <div.cos-coord-feed>
+  <div.cos-stage-wrap>
+    <div.cos-terminals-stage>
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"8px","top":"8px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Alpha notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"1272px","top":"8px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Beta notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile.centered style={"height":"884px","left":"336px","top":"8px","width":"928px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Gamma notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock.on title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+=====
+### Alt+F2 jumps to the second tile
+<div>
+  <div.cos-terminals-controls>
+    <select value="">
+    <select value="">
+    <select title="Model for new terminals" value="">
+      <option value=""> "Model: Default"
+      <option value="opus"> "Opus (latest)"
+      <option value="sonnet"> "Sonnet (latest)"
+      <option value="haiku"> "Haiku (latest)"
+      <option value="fable"> "Fable (latest)"
+      <option value="claude-opus-5"> "Opus 5"
+      <option value="claude-opus-4-8"> "Opus 4.8"
+      <option value="claude-sonnet-5"> "Sonnet 5"
+      <option value="claude-haiku-4-5"> "Haiku 4.5"
+      <option value="claude-fable-5"> "Fable 5"
+    <select title="Effort for new terminals" value="">
+      <option value=""> "Effort: Default"
+      <option value="low"> "Low"
+      <option value="medium"> "Medium"
+      <option value="high"> "High"
+      <option value="xhigh"> "XHigh"
+      <option value="max"> "Max"
+      <option value="ultracode"> "Ultracode"
+    <select title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto">
+      <option title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto"> "⤢ Auto"
+      <option title="Grid — always an equal best-fit grid, even when a terminal is spotlighted." value="grid"> "▦ Grid"
+      <option title="Columns — always full-height columns, one per terminal." value="columns"> "▥ Columns"
+      <option title="Rows — always full-width rows, one per terminal." value="rows"> "▤ Rows"
+      <option title="Focus — the spotlighted terminal as large as it can be, the rest kept to preview strips at the edge." value="focus"> "◎ Focus"
+    <button> "+ New branch"
+    <button.cos-play-btn> "▶ Play"
+    <button.cos-lock-btn title="When locked, terminals never auto-center — only your click or Alt+F-key centers one"> "🔓 Lock"
+    <button.cos-god-btn title="Open the Kane overseer console — sees the whole floor, acts on request (Alt+K)"> "🜲 Kane"
+    <button.cos-god-btn title="Add another Kane console — a separate session in its own panel (close it with its ×)"> "🜲+"
+    <button> "🧩 View Code"
+    <button> "⟳ Refresh"
+    <button.cos-journal-btn title="Open a new journal entry tile (Alt+J)"> "📓 Journal Entry"
+  <div.cos-coord-board.collapsed>
+    <div.cos-coord-head> "🛰 Coordination"
+    <div.cos-coord-hidden>
+    <div.cos-coord-registry>
+    <div.cos-coord-bg>
+    <div.cos-coord-locks>
+      <span.cos-coord-empty> "no active locks"
+    <div.cos-coord-feed>
+  <div.cos-stage-wrap>
+    <div.cos-terminals-stage>
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"8px","top":"8px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Alpha notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile.centered style={"height":"884px","left":"336px","top":"8px","width":"928px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Beta notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"1272px","top":"8px","width":"320px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Gamma notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+=====
+### hiding a tile
+<div>
+  <div.cos-terminals-controls>
+    <select value="">
+    <select value="">
+    <select title="Model for new terminals" value="">
+      <option value=""> "Model: Default"
+      <option value="opus"> "Opus (latest)"
+      <option value="sonnet"> "Sonnet (latest)"
+      <option value="haiku"> "Haiku (latest)"
+      <option value="fable"> "Fable (latest)"
+      <option value="claude-opus-5"> "Opus 5"
+      <option value="claude-opus-4-8"> "Opus 4.8"
+      <option value="claude-sonnet-5"> "Sonnet 5"
+      <option value="claude-haiku-4-5"> "Haiku 4.5"
+      <option value="claude-fable-5"> "Fable 5"
+    <select title="Effort for new terminals" value="">
+      <option value=""> "Effort: Default"
+      <option value="low"> "Low"
+      <option value="medium"> "Medium"
+      <option value="high"> "High"
+      <option value="xhigh"> "XHigh"
+      <option value="max"> "Max"
+      <option value="ultracode"> "Ultracode"
+    <select title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto">
+      <option title="Auto — follow the window: stacked rows when narrow, a best-fit grid in between, full-height columns when ultrawide. The spotlighted terminal still gets the big centre." value="auto"> "⤢ Auto"
+      <option title="Grid — always an equal best-fit grid, even when a terminal is spotlighted." value="grid"> "▦ Grid"
+      <option title="Columns — always full-height columns, one per terminal." value="columns"> "▥ Columns"
+      <option title="Rows — always full-width rows, one per terminal." value="rows"> "▤ Rows"
+      <option title="Focus — the spotlighted terminal as large as it can be, the rest kept to preview strips at the edge." value="focus"> "◎ Focus"
+    <button> "+ New branch"
+    <button.cos-play-btn> "▶ Play"
+    <button.cos-lock-btn title="When locked, terminals never auto-center — only your click or Alt+F-key centers one"> "🔓 Lock"
+    <button.cos-god-btn data-attn="" title="Open the Kane overseer console — sees the whole floor, acts on request (Alt+K)"> "🜲 Kane"
+    <button.cos-god-btn title="Add another Kane console — a separate session in its own panel (close it with its ×)"> "🜲+"
+    <button> "🧩 View Code"
+    <button> "⟳ Refresh"
+    <button.cos-journal-btn title="Open a new journal entry tile (Alt+J)"> "📓 Journal Entry"
+  <div.cos-coord-board.collapsed>
+    <div.cos-coord-head> "🛰 Coordination"
+    <div.cos-coord-hidden>
+      <div.cos-reg-repo> "Hidden"
+      <div.cos-reg-row>
+        <span.cos-reg-branch> "Alpha notes"
+        <span.cos-reg-repo-tag> "journal"
+        <button.cos-reopen-btn> "Show"
+        <button.cos-close-btn title="Close — removes the worktree + branch"> "✕"
+    <div.cos-coord-registry>
+      <span.cos-coord-empty> "No active worktrees."
+    <div.cos-coord-bg>
+    <div.cos-coord-locks>
+      <span.cos-coord-empty> "no active locks"
+    <div.cos-coord-feed>
+  <div.cos-stage-wrap>
+    <div.cos-terminals-stage>
+      <div.cos-term-tile.cos-journal-tile style={"display":"none","height":"438px","left":"8px","top":"8px","width":"788px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Alpha notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"8px","top":"8px","width":"788px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Beta notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"
+      <div.cos-term-tile.cos-journal-tile style={"height":"884px","left":"804px","top":"8px","width":"788px"}>
+        <div.cos-term-head>
+          <span.cos-term-name title="Double-click to rename"> "Gamma notes"
+          <div.cos-term-head-btns>
+            <button.cos-term-lock title="Lock to center (Alt+L)"> "🔒"
+            <button.cos-term-hide title="Hide — resurface from Coordination"> "–"
+            <button title="Close this journal"> "×"
+        <div.cos-journal-body>
+          <textarea.cos-journal-text>
+        <div.cos-journal-actions>
+          <button.cos-journal-save> "Save"
+          <button.cos-journal-history> "See History"
+          <button.cos-journal-fmt title="Reformat with Claude — fixes indentation, keeps your words"> "Format"
+          <button.cos-journal-convert-btn title="Send this note to a configured destination (task tracker or notes vault)"> "Convert to…"

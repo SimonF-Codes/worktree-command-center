@@ -5,6 +5,45 @@ landed on `main`.
 
 ## Unreleased
 
+**🌳 The stage as a lineage tree, with a two-slot Side Panel — behind `v2.treeStage` (default off)**
+- Tree Stage step P4b. With the setting on, the stage draws **one node per session** — the
+  overseer at the root on the left, depth running right, edges from `parentSessionId` — and
+  nothing else. A node carries the sidebar row's fields: the state dot, the name, a
+  `role · isolation` subline, the branch, ★ for a manager and ◆N for open proposals, from the same
+  `buildTeam` tree the sidebar's team view reads. Edges out of the overseer are drawn dashed and say
+  why: it spawns through its own channel, unchecked. A session with no live parent sits under
+  *Unassigned* with the reason. Positions are computed every draw and never stored; a subtree can
+  be collapsed (viewer state only); nothing can be dragged.
+- **The Side Panel has two slots, A and B**, beside the tree, each holding one session's terminal —
+  the same tile, placed over the slot, never moved to another parent. A journal or the agent chat
+  room opens in a slot from the rows under the tree; they are not nodes. The overseer's node opens
+  its dock, which is unchanged. Below the width where two terminals fit (`stageSplit`: the
+  `minTileSize` inequality, 1,140 px of stage on the default font), one slot shows and the second
+  session waits as a *parked* chip that swaps in. With one session there is one slot, filling the
+  stage. Narrower than a card, the tree becomes a rail of state dots.
+- **A click never replaces the session you are reading.** It focuses the slot a node is already in;
+  otherwise it opens in the slot without keyboard focus (or the one used least recently). A slot
+  with focus, an unsent draft, a queued message or a pin (📌, Alt+L) is never replaced: if both are,
+  the node is only selected and offers *Open in A* / *Open in B* (*Open here* with one slot).
+- **Attention no longer moves the view.** A session that starts waiting gets a badge on its node and
+  its entry in the ⚠ queue. It opens by itself only into a slot that is free — not focused, no
+  draft, no queued message, no pin, and empty or showing an idle session — never by moving focus,
+  and not within 30 s of a manual choice. When both slots are in use, the badge and the queue only.
+- **Keys:** Alt+K, Alt+J and Alt+↑/↓ are unchanged (a new journal opens in a slot). Alt+←/→ move the
+  selection between sibling nodes, as do ←/→ with the tree focused; the F-key and letter badges
+  jump to a node; Alt+L pins the focused slot. New: Alt+[ and Alt+] focus slot A or B, and
+  Alt+Backspace closes the focused slot — those three are kept from the terminal, since Alt+[ is the
+  escape sequence that starts every terminal control code.
+- **Off is today's grid, whole**, the layout selector included: a test mounts the real grid and
+  compares its drawing, byte for byte, against a fixture recorded before this step, and asserts it
+  differs with the setting on. The five tile arrangements are hidden while the tree is on, because
+  they arrange tiles that are no longer on the stage. Applied live from Settings, no restart.
+- A terminal whose WebGL context is lost now redraws with the DOM renderer and marks its header,
+  instead of being able to sit blank.
+- **Not yet measured:** the stage's cost with six live sessions, both slots open and one worker
+  streaming, against the baseline in the pull request. **Not yet tried:** whether a WebGL-drawn
+  tile still draws once placed in a slot. Both need the app running.
+
 **💬 `wcc-team transcript --tail`: Claude Code's transcript format, settled before the Chat view is built on it**
 - Chat Panel step P0, a spike with no window. `src/core/transcript.ts` holds a pure
   `normalise(line, ref?) → ChatItem[]` (the design's union: prompt, reply, thinking, tool,

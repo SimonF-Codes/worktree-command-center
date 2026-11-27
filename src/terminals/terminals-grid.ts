@@ -60,6 +60,9 @@ import type { SpawnProposal } from '../core/proposals';
 import type { RoleLookup } from '../core/delegation';
 import { delegationLookup } from './delegation-roles';
 import type { FloorSession, SpawnPlan } from '../core/session-requests';
+import { TreeStage, type Placeable } from './tree-stage';
+import { modeChip, sessionMode } from '../core/isolation';
+import { openProposalCounts } from '../ui/manager-model';
 
 /** A target on the floor. `folder: true` marks a NON-git directory: its terminals run directly
  *  in `path` with no worktree and no branch (see spawnFolder). Absent/false = a git repo, the
@@ -135,6 +138,10 @@ export interface GridDeps {
 	 *  or a connector's `new-tab`). A tab is app-wide, not this grid's, so the app does it — through
 	 *  the same code the + tab button uses. `by` names the asker in the window's notice. */
 	newTab?: (fields: NewTabFields, by: string) => Promise<NewTabOutcome>;
+	/** config.json `v2.treeStage` (core/side-panel.ts parseTreeStageEnabled), read live. On, the
+	 *  stage draws the lineage tree with the two-slot Side Panel (tree-stage.ts); off — and absent —
+	 *  is today's grid, whole, with the layout selector. Re-read on mount and on treeStageChanged(). */
+	treeStage?: () => boolean;
 }
 /** What a session's write gate needs from its spawn's isolation decision (terminal-tile.ts). */
 export interface SpawnGate { taskClass?: TaskClass; rungCeiling?: RungCeiling }
@@ -275,6 +282,9 @@ export class TerminalsGrid {
 	private scanDebounce: number | null = null;
 	private lastScanAt = 0; // rate-limits watcher-triggered scans (see the coordWatcher comment)
 	private stageResizeObs: ResizeObserver | null = null;
+	/** Non-null exactly while `v2.treeStage` is on (applyTreeStage). Every tree-stage branch in this
+	 *  class tests this, so with it null the grid runs the code it ran before the tree existed. */
+	private treeStage: TreeStage | null = null;
 	private layoutRaf: number | null = null;
 	private overseerName: string;
 
@@ -484,6 +494,7 @@ export class TerminalsGrid {
 		this.applyMaximizeChrome();
 		this.installKeyboard();
 		window.addEventListener('resize', this.onResize);
+		this.applyTreeStage();
 	}
 
 	/** Tab switch away: detach the stage + drop listeners, but KEEP sessions running. */
@@ -551,6 +562,7 @@ export class TerminalsGrid {
 
 	private installKeyboard(): void {
 		this.keydown = (e: KeyboardEvent) => {
+			if (this.treeStage) { this.treeKeydown(e, this.treeStage); return; }
 			if (e.key === 'Alt') { this.stageEl?.toggleClass('alt-on', true); this.refreshBadges(); return; }
 			// NOTE: Escape is deliberately NOT handled here — it must reach the focused
 			// terminal so Claude gets it (double-Esc clears the message). Use the Minimize /
@@ -572,7 +584,7 @@ export class TerminalsGrid {
 			const idx = keyToIndex(physicalKeyLabel(e));
 			if (idx !== null && this.tiles[idx]) { e.preventDefault(); this.handleClick(this.tiles[idx]!.tileId); }
 		};
-		this.keyup = (e: KeyboardEvent) => { if (e.key === 'Alt') { this.stageEl?.toggleClass('alt-on', false); this.tiles.forEach((t) => t.setBadge(null)); } };
+		this.keyup = (e: KeyboardEvent) => { if (e.key === 'Alt') { this.stageEl?.toggleClass('alt-on', false); this.tiles.forEach((t) => t.setBadge(null)); this.treeStage?.setBadges(false); } };
 		document.addEventListener('keydown', this.keydown, true);
 		document.addEventListener('keyup', this.keyup, true);
 		// Re-derive the spotlight from live output ~1x/s so the layout stays honest when a tile
@@ -588,6 +600,27 @@ export class TerminalsGrid {
 		// so terminals keep bubbling while you're working elsewhere.
 		this.onWinBlur = () => { this.q.composingLen = 0; };
 		window.addEventListener('blur', this.onWinBlur);
+	}
+
+	/** The key map with the tree stage on (design §10). Alt+K, Alt+J and Alt+↑/↓ are unchanged:
+	 *  K and J run the very same lines as the grid's map, and ↑/↓ are never touched here, so they
+	 *  still reach the app's workspace switcher (app.ts). Re-pointed: Alt+←/→ move the selection
+	 *  between sibling nodes, the F-key and letter badges jump to a node, Alt+L pins the focused
+	 *  slot. New: Alt+[ / Alt+] focus slot A / B, Alt+Backspace closes the focused slot — and those
+	 *  three also stop propagation, so the keystroke (ESC [ is a CSI prefix) never reaches a TUI. */
+	private treeKeydown(e: KeyboardEvent, tree: TreeStage): void {
+		if (e.key === 'Alt') { this.stageEl?.toggleClass('alt-on', true); tree.setBadges(true); return; }
+		if (!e.altKey) return;
+		if (e.key === 'ArrowRight') { e.preventDefault(); tree.stepSelection(1); return; }
+		if (e.key === 'ArrowLeft') { e.preventDefault(); tree.stepSelection(-1); return; }
+		if (e.code === 'KeyL') { e.preventDefault(); tree.pinFocused(); return; }
+		if (e.code === 'KeyK') { e.preventDefault(); this.openKane(); return; }
+		if (e.code === 'KeyJ') { e.preventDefault(); if (!e.repeat) this.spawnJournal(); return; }
+		if (e.code === 'BracketLeft') { e.preventDefault(); e.stopPropagation(); tree.focusSlotKey('A'); return; }
+		if (e.code === 'BracketRight') { e.preventDefault(); e.stopPropagation(); tree.focusSlotKey('B'); return; }
+		if (e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); tree.closeFocused(); return; }
+		const idx = keyToIndex(physicalKeyLabel(e));
+		if (idx !== null && tree.jumpTo(idx)) e.preventDefault();
 	}
 
 	private refreshBadges(): void {
@@ -774,7 +807,8 @@ export class TerminalsGrid {
 		});
 		if (this.stageEl) tile.render(this.stageEl);
 		this.tiles.push(tile);
-		this.doCenter(tile.tileId);
+		// With the tree stage on, Alt+J is unchanged but the entry opens in a slot (§10).
+		if (this.treeStage) this.treeStage.openExplicit(tile.tileId); else this.doCenter(tile.tileId);
 		void this.persist();
 	}
 
@@ -900,6 +934,7 @@ export class TerminalsGrid {
 		}
 		this.lastActivityAt = Date.now();
 		this.touchTile(id);
+		if (this.treeStage) { this.treeStage.tileClicked(id); return; }
 		// Pin the clicked tile; a clicked-away ready center gives up its turn (→ back of queue).
 		this.q = rqClick(this.q, id, this.centeredId).state;
 		this.q.composingLen = 0;
@@ -1146,6 +1181,7 @@ export class TerminalsGrid {
 	/** Jump to a terminal by id: un-hide it if hidden, else center + focus it. */
 	revealTile(id: number): void {
 		this.touchTile(id);
+		if (this.treeStage) { this.treeStage.reveal(id); return; }
 		if (this.hidden.some((t) => t.tileId === id)) { this.showTile(id); return; }
 		if (this.tiles.some((t) => t.tileId === id)) { this.doCenter(id); this.focusCentered(); }
 	}
@@ -1347,7 +1383,7 @@ export class TerminalsGrid {
 		if (!this.godConsole) {
 			const godHomeDir = path.join(this.coordDir, '..', '.god', this.deps.group);
 			const kane: GodConsole = new GodConsole(
-				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionId: sessionId ?? newIdentity().sessionId, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, roleLibraryPath: this.deps.roleLibrary?.path, resume: true, onTranscriptOff: () => this.warnTranscriptOff(this.overseerName), onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); } },
+				{ repos: this.repos.map((r) => ({ name: r.name, path: r.path, folder: r.folder })), coordDir: this.coordDir, sidecarPath: this.sidecarPath, godHomeDir, sessionId: sessionId ?? newIdentity().sessionId, sessionEnv: this.deps.sessionEnv, instanceName: this.overseerName, selfImprove: this.deps.godSelfImprove, roleLibraryPath: this.deps.roleLibrary?.path, resume: true, onTranscriptOff: () => this.warnTranscriptOff(this.overseerName), onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); if (f) this.treeStage?.blurPanel(); } },
 				() => this.hideGod(),
 			);
 			this.godConsole = kane;
@@ -1395,7 +1431,7 @@ export class TerminalsGrid {
 				// Same as the primary: --continue picks this duplicate's own conversation back up,
 				// falling back to a fresh session when there is nothing to resume yet.
 				resume: true,
-				onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); },
+				onFocusChange: (f) => { this.focusedKane = f ? kane : (this.focusedKane === kane ? null : this.focusedKane); if (f) this.treeStage?.blurPanel(); },
 				instanceName: `${this.overseerName} ${n}`,
 				onTranscriptOff: () => this.warnTranscriptOff(`${this.overseerName} ${n}`),
 				terminalId: String(-n),
@@ -2024,6 +2060,7 @@ export class TerminalsGrid {
 
 	/** Center a tile AND give its terminal keyboard focus (so typing goes there). */
 	private doCenter(id: number): void {
+		if (this.treeStage) { this.treeStage.reveal(id); return; }
 		// Navigating to a DIFFERENT tile breaks an individual lock (the only way out of it).
 		if (this.lockedTileId !== null && this.lockedTileId !== id) { this.lockedTileId = null; this.refreshLockVisuals(); }
 		this.centeredId = id;
@@ -2033,6 +2070,7 @@ export class TerminalsGrid {
 
 	/** Toggle the individual lock for a tile: pin it to center until you switch terminals. */
 	private toggleLockById(id: number): void {
+		if (this.treeStage) { this.treeStage.pinTile(id); return; } // a tile's 🔒 pins its slot
 		if (!this.tiles.some((t) => t.tileId === id)) return; // only real terminal tiles
 		if (this.lockedTileId === id) { this.lockedTileId = null; this.refreshLockVisuals(); return; }
 		this.lockedTileId = id;
@@ -2057,6 +2095,7 @@ export class TerminalsGrid {
 	/** Focus the centered tile and blur every other one, so a stray keystroke can never
 	 *  land on a stale terminal (the root cause of "I typed but the previous one got it"). */
 	private focusCentered(): void {
+		if (this.treeStage) { this.treeStage.refocus(); return; }
 		if (this.centeredId === null) return;
 		if (this.chatTile && this.chatTile.tileId === this.centeredId) {
 			for (const t of this.tiles) t.blur();
@@ -2083,6 +2122,7 @@ export class TerminalsGrid {
 	}
 
 	private applyLayout(): void {
+		if (this.treeStage) { this.treeStage.layout(); return; }
 		if (!this.stageEl || (this.tiles.length === 0 && !this.chatTile)) return;
 		const W = this.stageEl.clientWidth || 800;
 		const H = this.stageEl.clientHeight || 500;
@@ -2161,6 +2201,9 @@ export class TerminalsGrid {
 	 *  size (no spotlight). Manual clicks/cycles still set the center directly. */
 	private autoCenter(): void {
 		this.updateAttention(); // markers + notifications refresh every tick, regardless of centering
+		// The tree stage replaces auto-centring with the attention rule (§10): a badge and the queue
+		// always, opening by itself only into a free slot. It never moves the spotlight or focus.
+		if (this.treeStage) { this.treeStage.tick(); return; }
 		if (Date.now() < this.holdUntil) return; // manual-switch hold — the user chose a tile, let it be
 		const want = decideCenter({
 			tiles: this.tiles.map((t) => ({ id: t.tileId, state: this.spotlightState(t) })),
@@ -2269,6 +2312,7 @@ export class TerminalsGrid {
 		if (this.hidden.includes(t)) return; // a hidden, background session never steals the center
 		if (this.chatRoom) { this.chatRoom.noteIdle(t.name); return; } // chat owns idle while open
 		if (wasAlreadyIdle) return; // re-fire: no queue change, no steal, no re-derive
+		if (this.treeStage) { this.autoCenter(); return; } // no steal: attention decides (§10)
 		const r = rqReady(this.q, t.tileId); // joins the BACK of the FIFO queue
 		this.q = r.state;
 		// Steal (event-driven, less obtrusive): a FRESH finisher may take the center, but only
@@ -2307,7 +2351,8 @@ export class TerminalsGrid {
 	/** Hide a tile: pull it off the stage but keep its session + worktree alive.
 	 *  Resurface later with showTile() from the Coordination panel. */
 	private hideTile(tile: StageTile): void {
-		if (!this.tiles.includes(tile)) return;
+		// Already hidden — but with the tree stage on a hidden session can still be open in a slot.
+		if (!this.tiles.includes(tile)) { this.treeStage?.vacate(tile.tileId); return; }
 		if (this.lockedTileId === tile.tileId) { this.lockedTileId = null; tile.setLocked(false); }
 		const wasCentered = this.centeredId === tile.tileId;
 		this.tiles = this.tiles.filter((x) => x !== tile);
@@ -2317,6 +2362,7 @@ export class TerminalsGrid {
 		this.updateChatBtn();
 		this.q = rqClose(this.q, tile.tileId).state; // drop from the ready-queue
 		if (wasCentered) this.centeredId = null;
+		this.treeStage?.vacate(tile.tileId); // hidden by its own –: it leaves its slot too
 		this.applyLayout();
 		this.autoCenter(); // serve the queue front (or drop to the equal grid)
 		void this.persist();
@@ -2332,6 +2378,7 @@ export class TerminalsGrid {
 		tile.setHidden(false);
 		this.idleTiles.delete(tile.tileId); // resurfaced → you're acting on it, not "done waiting"
 		if (!tile.isJournal) (tile as TerminalTile).touch();
+		if (this.treeStage) { this.treeStage.reveal(tile.tileId); void this.persist(); this.board?.refresh(); return; }
 		this.centeredId = tile.tileId;
 		this.applyLayout();
 		this.focusCentered();
@@ -2405,7 +2452,7 @@ export class TerminalsGrid {
 			// Reset the typing-hold on ANY focus change: gaining focus starts a fresh box,
 			// and leaving a terminal means you're no longer typing — so finished terminals
 			// should resume shifting instead of being held forever.
-			onFocusChange: () => { this.q.composingLen = 0; },
+			onFocusChange: (t, focused) => { this.q.composingLen = 0; if (focused) this.treeStage?.tileFocused(t.tileId); },
 		});
 	}
 
@@ -2584,6 +2631,91 @@ export class TerminalsGrid {
 			if (rec.hidden) { tile.setHidden(true); this.hidden.push(tile); }
 			else this.tiles.push(tile);
 		}
+	}
+
+	// ---- Tree Stage P4b (`v2.treeStage`). Everything the tree stage needs from the grid is below; the
+	// grid's own layout, spotlight and key map are left exactly as they were and simply not called
+	// while `this.treeStage` is set.
+
+	/** Settings changed `v2.treeStage`: apply it now, no restart. */
+	treeStageChanged(): void { this.applyTreeStage(); }
+
+	private applyTreeStage(): void {
+		const want = this.deps.treeStage?.() === true;
+		if (want && !this.treeStage && this.stageEl) {
+			this.treeStage = new TreeStage(this.treeStageHost(this.stageEl));
+			this.treeStage.mount();
+		} else if (!want && this.treeStage) {
+			this.treeStage.unmount();
+			this.treeStage = null;
+			// Give back the grid whole: every tile on the stage visible again, the hidden ones hidden,
+			// and the grid's own layout and spotlight — the same state it would be in had the setting
+			// never been on.
+			for (const t of this.tiles) { t.setHidden(false); t.setCentered(false); }
+			for (const t of this.hidden) t.setHidden(true);
+			this.chatTile?.setHidden(false);
+			this.applyLayout();
+			this.focusCentered();
+		}
+		// The five tile arrangements arrange tiles that are no longer on the stage (§5).
+		if (this.layoutSel) this.layoutSel.style.display = this.treeStage ? 'none' : '';
+	}
+
+	/** Each node's classified state, reading each screen once — floorState() reads twice, since it
+	 *  also cuts the phone's output excerpt, and the tree asks every second. Same classifier
+	 *  (tileState), same overseer rule, so a node's dot is the sidebar row's dot. */
+	private treeStates(): Map<number, { state: string; branch: string }> {
+		const out = new Map<number, { state: string; branch: string }>();
+		for (const t of this.allSessions()) if (!t.isJournal) out.set(t.tileId, { state: this.tileState(t), branch: t.branch });
+		if (this.godConsole) {
+			const ko = this.godConsole.recentOutput();
+			out.set(-1, { state: looksLikePrompt(ko) ? 'prompt' : looksLikeMenu(ko) ? 'menu' : 'running', branch: '—' });
+		}
+		return out;
+	}
+
+	/** Every tile the Side Panel can hold, as one shape. Out of a slot means hidden (suspended). */
+	private placeables(): Placeable[] {
+		const out: Placeable[] = [...this.tiles, ...this.hidden].map((t) => ({
+			key: t.tileId, name: t.name, branch: t.branch,
+			kind: t.isJournal ? 'journal' as const : 'terminal' as const,
+			setRect: (r) => t.setRect(r), setCentered: (on) => t.setCentered(on), setVisible: (on) => t.setHidden(!on), focus: () => t.focus(),
+		}));
+		const chat = this.chatTile;
+		if (chat) out.push({ key: chat.tileId, name: 'Chat room', branch: '', kind: 'chat', setRect: (r) => chat.setRect(r), setCentered: (on) => chat.setCentered(on), setVisible: (on) => chat.setHidden(!on), focus: () => chat.focus() });
+		return out;
+	}
+
+	private treeStageHost(stage: HTMLElement): import('./tree-stage').TreeStageHost {
+		return {
+			stage,
+			placeables: () => this.placeables(),
+			sessions: () => this.floorSessions(),
+			states: () => this.treeStates(),
+			isolationChip: (key) => {
+				const t = this.allSessions().find((x) => x.tileId === key && !x.isJournal) as TerminalTile | undefined;
+				const mode = t ? sessionMode(t.isolation, t.isFolder) : undefined;
+				return mode ? modeChip(mode).text : null;
+			},
+			delegation: () => (this.deps.managers?.() ? this.delegationRoles() : undefined),
+			proposals: (live) => (this.deps.managers?.() ? openProposalCounts(this.spawnProposals(), live) : undefined),
+			facts: (key) => {
+				const t = this.allSessions().find((x) => x.tileId === key);
+				if (!t || t.isJournal) return { draft: t ? (t as JournalTile).hasUnsavedText : false, queued: false, idle: true };
+				const tt = t as TerminalTile;
+				return { draft: tt.isDrafting, queued: tt.queuedMessages > 0, idle: this.idleTiles.has(key) && !looksBusy(tt.recentOutput()) };
+			},
+			metrics: () => this.cellMetrics(),
+			row: () => {
+				const stageW = this.stageEl?.clientWidth || 800;
+				const rowW = this.stageWrapEl?.clientWidth || stageW;
+				// The dock is whatever of the stage row is not the stage: stageSplit is handed both, so
+				// its floor is stated with the dock in it, and the dock is never resized by it.
+				return { stageW: rowW, dockW: Math.max(0, rowW - stageW), stageH: this.stageEl?.clientHeight || 500 };
+			},
+			focusOverseer: () => this.openKane(),
+			now: () => Date.now(),
+		};
 	}
 
 	/** Full teardown (view close): unmount + kill all sessions. */

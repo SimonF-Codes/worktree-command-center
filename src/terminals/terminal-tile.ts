@@ -27,6 +27,7 @@ import { NoticeGate } from './notice-gate';
 import { identityFields, type SessionIdentity } from './lineage';
 import { isolationInstruction, modeChip, sessionMode, writeGateEnv, canEscalate, DEFAULT_POLICY, type Mode, type TaskClass, type RungCeiling, type IsolationPolicy } from '../core/isolation';
 import { claimsDirOf } from '../../pty-sidecar/claims-store.cjs';
+import { loadWebglRenderer, type RendererFallback } from './webgl-renderer';
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -235,13 +236,11 @@ export class TerminalTile implements StageTile {
 		this.term.loadAddon(this.fit);
 		this.term.open(body);
 		// GPU-accelerated rendering: the DOM renderer chokes with many tiles. Must load after
-		// open(); on WebGL context loss (too many contexts / driver reset) dispose the addon —
-		// xterm then falls back to the DOM renderer for this tile only.
-		try {
-			const gl = new WebglAddon();
-			gl.onContextLoss(() => gl.dispose());
-			this.term.loadAddon(gl);
-		} catch { /* no GPU/context available — DOM renderer remains */ }
+		// open(); on WebGL context loss (too many contexts / driver reset) the addon is disposed —
+		// xterm then falls back to the DOM renderer for this tile only — and the tile redraws and
+		// says so (webgl-renderer.ts), rather than sitting blank.
+		const term = this.term;
+		loadWebglRenderer(() => new WebglAddon(), (gl) => term.loadAddon(gl), (why) => this.noteDomRenderer(why));
 		// Ctrl/Cmd+click a URL (e.g. http://localhost:5173) to open it in the real browser —
 		// unless the TUI owns the mouse (it opens clicked links itself; see tuiOwnsMouse).
 		this.term.loadAddon(new WebLinksAddon(ctrlClickActivator(openExternalUrl, () => this.tuiOwnsMouse())));
@@ -364,6 +363,16 @@ export class TerminalTile implements StageTile {
 
 		// Tiles render uncentered: start on the satellite cadence until setCentered says otherwise.
 		this.updateSuspension();
+	}
+
+	/** The WebGL renderer is not drawing this tile (webgl-renderer.ts): redraw with the DOM one and
+	 *  mark the header, so a fallback is something you can see rather than a blank well. */
+	private noteDomRenderer(why: RendererFallback): void {
+		this.el?.toggleClass('cos-term-dom-renderer', true);
+		this.el?.setAttribute('data-renderer', `dom (${why === 'context-lost' ? 'WebGL context lost' : 'WebGL unavailable'})`);
+		console.warn(`[tile] ${this.name}: WebGL ${why} — drawing with the DOM renderer`);
+		const t = this.term;
+		if (t) { try { t.refresh(0, t.rows - 1); } catch { /* disposed terminal */ } }
 	}
 
 	/** Position/size the tile (absolute, in stage coords). Refits the terminal after the move. */
@@ -514,6 +523,8 @@ export class TerminalTile implements StageTile {
 	/** True while this terminal's input box appears to hold unsubmitted typing. deliverLine uses
 	 *  it to refuse rather than type over someone. */
 	get isDrafting(): boolean { return this.gate.drafting; }
+	/** Messages waiting for the box to empty before they are typed in (notice-gate.ts). */
+	get queuedMessages(): number { return this.gate.queued; }
 
 	/** Show/hide the "N waiting" badge in this tile's header. */
 	private renderQueueBadge(n: number): void {
